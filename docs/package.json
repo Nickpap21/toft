@@ -8,10 +8,10 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.42.7",
-    "astro": "7.4.2",
+    "@astrojs/starlight": "0.42.10",
+    "astro": "7.4.8",
     "starlight-links-validator": "0.27.0",
-    "starlight-openapi": "0.27.0"
+    "starlight-openapi": "0.27.1"
   },
   "overrides": {
     "form-data": "4.0.6"
