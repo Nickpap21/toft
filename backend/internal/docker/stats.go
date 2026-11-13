@@ -21,6 +21,8 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/Nickpap21/toft/backend/pkg/agentproto"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -74,11 +76,12 @@ type hostSample struct {
 
 // CollectServiceStats samples the targets' containers on the local Docker
 // daemon: one listing, then one-shot stats for the containers that belong to
-// a target, at most localStatsConcurrency at a time. The control-plane
-// server's cgroup counters and memory kills are not read (the backend runs
-// in a container and does not see the host's cgroups), so since is unused.
-func (o *LocalOrchestrator) CollectServiceStats(ctx context.Context, targets []service.MetricsTarget, _ int64) (service.HostSample, error) {
-	s, err := collectLocalStats(ctx, o.dockerClient, targets)
+// a target, at most localStatsConcurrency at a time, and their memory kills
+// since since (localKills). The control-plane server's cgroup counters are
+// not read: the backend runs in a container and does not see the host's
+// cgroups.
+func (o *LocalOrchestrator) CollectServiceStats(ctx context.Context, targets []service.MetricsTarget, since int64) (service.HostSample, error) {
+	s, err := collectLocalStats(ctx, o.dockerClient, targets, since)
 	if err != nil || o.latencyURL == "" {
 		return s, err
 	}
@@ -146,7 +149,40 @@ func (o *RemoteOrchestrator) AgentServiceStats(ctx context.Context, targets []se
 	return out, nil
 }
 
-func collectLocalStats(ctx context.Context, dc *client.Client, targets []service.MetricsTarget) (service.HostSample, error) {
+// localKills reads the memory kills (Docker's oom events) from since to now
+// from the daemon, as hoststats.Cmd's fourth section does on a remote
+// server: since 0, or one ahead of the clock, reads the last minute, and a
+// window that has ended makes Docker answer at once. A kill carries the
+// name, labels and image from the event because a container killed for
+// memory that did not restart is gone from the listing. until is 0 when
+// the events could not be read, so the next sample reads the window again.
+func localKills(ctx context.Context, dc *client.Client, since int64) (kills []hostKill, until int64) {
+	now := time.Now().Unix()
+	if since <= 0 || since > now {
+		since = now - 60
+	}
+	msgs, errs := dc.Events(ctx, events.ListOptions{
+		Since: strconv.FormatInt(since, 10), Until: strconv.FormatInt(now, 10),
+		Filters: filters.NewArgs(filters.Arg("type", string(events.ContainerEventType)), filters.Arg("event", string(events.ActionOOM))),
+	})
+	for {
+		select {
+		case m := <-msgs:
+			a := m.Actor.Attributes
+			kills = append(kills, hostKill{At: time.Unix(m.Time, 0).UTC(), hostContainer: hostContainer{
+				ID: m.Actor.ID, Name: a["name"], ServiceID: a[rollout.LabelServiceID],
+				ComposeProject: a[rollout.LabelComposeProject], ComposeService: a[rollout.LabelComposeService], Image: a["image"],
+			}})
+		case err := <-errs:
+			if errors.Is(err, io.EOF) { // the window's end
+				return kills, now
+			}
+			return nil, 0
+		}
+	}
+}
+
+func collectLocalStats(ctx context.Context, dc *client.Client, targets []service.MetricsTarget, since int64) (service.HostSample, error) {
 	list, err := dc.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
 		return service.HostSample{}, fmt.Errorf("ContainerList: %w", err)
@@ -206,7 +242,11 @@ func collectLocalStats(ctx context.Context, dc *client.Client, targets []service
 	if sampled > 0 && len(rows) == 0 {
 		return service.HostSample{}, firstErr // every sample failed: the daemon, not a container
 	}
-	return attributeSample(hostSample{rows: rows}, targets), nil
+	kills, until := localKills(ctx, dc, since)
+	if err := ctx.Err(); err != nil {
+		return service.HostSample{}, err
+	}
+	return attributeSample(hostSample{rows: rows, kills: kills, until: until}, targets), nil
 }
 
 // startedAt parses Docker's State.StartedAt; nil when the container never
