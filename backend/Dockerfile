@@ -43,7 +43,7 @@ FROM scratch AS agent-bins
 COPY --from=agent-build /agent/ /
 
 # alpine 3.24 for git 2.54, the oldest toft-git runs on (D-71).
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # docker-cli-compose: deploys to the control-plane server run `docker compose`.
 RUN apk add --no-cache ca-certificates tzdata git docker-cli docker-cli-compose
 # The paas-git container runs this image as git (uid 10001): the
