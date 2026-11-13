@@ -258,7 +258,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
+          # A cold page load gzips some 40 files at once; at half a CPU that
+          # throttles and the page waits for it.
+          cpus: "1.0"
           memory: 256M
 
 volumes:

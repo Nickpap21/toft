@@ -102,6 +102,13 @@ func (r *PostgresRepository) ListCopies(ctx context.Context, id string) ([]strin
 	return out, nil
 }
 
+func (r *PostgresRepository) AddPreviewAddress(ctx context.Context, id, hostname string) error {
+	if err := r.queries.InsertPreviewDomain(ctx, sqlcdb.InsertPreviewDomainParams{ServiceID: uuidOf(id), Hostname: hostname}); err != nil {
+		return fmt.Errorf("InsertPreviewDomain: %w", err)
+	}
+	return nil
+}
+
 func (r *PostgresRepository) IsPreviewCopy(ctx context.Context, id string) (bool, error) {
 	ok, err := r.queries.IsPreviewCopy(ctx, uuidOf(id))
 	if err != nil {

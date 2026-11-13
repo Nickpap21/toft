@@ -50,6 +50,12 @@ func (s *ServiceManager) CopyForPreview(ctx context.Context, in PreviewCopy) (st
 	return s.repo.CopyForPreview(ctx, in, memory)
 }
 
+// AddPreviewAddress gives a preview's copy an address it didn't start
+// with: its original got a domain after the preview started.
+func (s *ServiceManager) AddPreviewAddress(ctx context.Context, id, hostname string) error {
+	return s.repo.AddPreviewAddress(ctx, id, hostname)
+}
+
 // untrustedIsolation is an untrusted copy's isolation (D-115): Sandboxed
 // with a strict network where its server runs it or the original already
 // does, else Sandboxed.

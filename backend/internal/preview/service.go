@@ -109,6 +109,8 @@ type CopyInput struct {
 // Services makes, stops and removes a preview's services (service module).
 type Services interface {
 	CopyForPreview(ctx context.Context, in CopyInput) (string, error)
+	// AddPreviewAddress gives a copy an address it didn't start with.
+	AddPreviewAddress(ctx context.Context, serviceID, hostname string) error
 	Delete(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error
 }
@@ -699,6 +701,43 @@ func (s *Service) deployAll(ctx context.Context, pr Pull, set Settings, pv *Prev
 	for _, src := range sources {
 		bySource[src.ID] = src
 	}
+	skip := func(cp CopyService) bool {
+		if c.kind != causeRedeploy && c.kind != causeStart && cp.DeploymentSHA == target && cp.RuntimeStatus != "stopped" &&
+			(cp.DeploymentStatus == "running" || cp.DeploymentStatus == "building" || cp.DeploymentStatus == "pending") {
+			return true
+		}
+		// At a start, only what a restart cut is retried; a head that moved
+		// while the backend was down (or an older release ran) deploys.
+		return c.kind == causeRestart && cp.DeploymentSHA == target && !interrupted(cp)
+	}
+	// A copy made before its original had a domain gets its address with
+	// the deploy that routes it.
+	// ponytail: start's certificate count (D-97) doesn't see a name given
+	// here. Without a wildcard, a preview that already had names orders a
+	// new certificate nothing counts; count it with an event if that nears
+	// the 10 a week the guard leaves spare.
+	late := []SourceService{}
+	for _, cp := range copies {
+		if src, ok := bySource[cp.PreviewOf]; ok && len(cp.Hostnames) == 0 && len(src.Hostnames) > 0 && !skip(cp) {
+			late = append(late, src)
+		}
+	}
+	if len(late) > 0 {
+		given, _ := s.addresses(ctx, pr, set, late)
+		for _, cp := range copies {
+			if len(cp.Hostnames) > 0 {
+				continue
+			}
+			for _, h := range given[cp.PreviewOf] {
+				if err := s.services.AddPreviewAddress(ctx, cp.ID, h); err != nil {
+					return false, fmt.Errorf("give %s its address: %w", cp.Name, err)
+				}
+			}
+		}
+		if copies, err = s.store.Copies(ctx, pv.EnvID); err != nil {
+			return false, err
+		}
+	}
 	names := []string{}
 	for _, cp := range copies {
 		names = append(names, cp.Hostnames...)
@@ -709,20 +748,15 @@ func (s *Service) deployAll(ctx context.Context, pr Pull, set Settings, pv *Prev
 		}
 	}
 	certNames, resolver := names, ""
-	if set.Domain != "" && len(copies) > 0 && len(names) > 0 && strings.HasSuffix(names[0], "."+set.Domain) {
+	outside := func(n string) bool { return !strings.HasSuffix(n, "."+set.Domain) }
+	if set.Domain != "" && len(copies) > 0 && len(names) > 0 && !slices.ContainsFunc(names, outside) {
 		if ok, err := s.hosts.HasDNSProvider(ctx, copies[0].ServerID); err == nil && ok {
 			certNames, resolver = []string{"*." + set.Domain}, "letsencrypt-dns"
 		}
 	}
 	deployed := false
 	for _, cp := range copies {
-		if c.kind != causeRedeploy && c.kind != causeStart && cp.DeploymentSHA == target && cp.RuntimeStatus != "stopped" &&
-			(cp.DeploymentStatus == "running" || cp.DeploymentStatus == "building" || cp.DeploymentStatus == "pending") {
-			continue
-		}
-		// At a start, only what a restart cut is retried; a head that moved
-		// while the backend was down (or an older release ran) deploys.
-		if c.kind == causeRestart && cp.DeploymentSHA == target && !interrupted(cp) {
+		if skip(cp) {
 			continue
 		}
 		if pv.Untrusted {

@@ -6,6 +6,28 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.0.1 (2026-11-14)
+
+Two fixes to pull-request previews, and a whole CPU for the panel's
+frontend, from benchmarking 1.0.0. No migration: a failed upgrade starts
+1.0.0 again without restoring the database. Upgrade from 1.0.0.
+
+### Previews
+
+- **A service that gets its first domain after a preview was created
+  gets a preview address.** Its copy kept no address at every later
+  push. It now gets one at its next deploy (a push, Start, Redeploy or an
+  approval), and `TOFT_PREVIEW_URL` with it.
+- A preview uses the preview domain's wildcard certificate only when
+  every one of its addresses is under that domain. With an sslip address
+  beside them, that address was served the default certificate.
+
+### Panel
+
+- The panel's frontend container may use one CPU, up from half. A cold
+  page load asks for some 40 compressed files at once, and at half a CPU
+  the container was throttled while the page waited.
+
 ## 1.0.0 (2026-11-13)
 
 Toft is public. Deploys, git hosting with pull requests, issues, docs and

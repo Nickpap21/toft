@@ -71,6 +71,8 @@ type Repository interface {
 	// CopyForPreview writes a preview's copy of a service (D-97) with
 	// memoryLimit, and what goes with it, in one transaction.
 	CopyForPreview(ctx context.Context, in PreviewCopy, memoryLimit string) (string, error)
+	// AddPreviewAddress adds a hostname to a preview's copy.
+	AddPreviewAddress(ctx context.Context, id, hostname string) error
 	ListCopies(ctx context.Context, id string) ([]string, error)
 	IsPreviewCopy(ctx context.Context, id string) (bool, error)
 	IsPreviewEnvironment(ctx context.Context, environmentID string) (bool, error)
