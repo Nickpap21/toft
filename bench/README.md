@@ -40,8 +40,12 @@ API token. Neither documents a way to do it without a browser. Coolify's
 installer can make the account, but it checks the address's domain for mail,
 and `example.com` takes none: the account is made on Coolify's first page,
 which only allows it within 10 minutes of Coolify starting
-(`docker restart coolify` reopens it). The token needs root. Toft's are
-made by the script, and it finishes Toft's setup as a new owner would. The
+(`docker restart coolify` reopens it). The token needs root, and Coolify
+4.5.3 starts with its API turned off: turn it on in its settings (or set
+`instance_settings.is_api_enabled` in its database). Dokploy's key needs
+its organisation and its rate limit turned off; with the default, it allows
+10 requests a day. Toft's account and key
+are made by the script, and it finishes Toft's setup as a new owner would. The
 hand step ends with signing out and closing the tab, so no open dashboard
 counts in the idle readings. If Coolify's proxy has to be started by hand,
 that is outside its install time, and the results say so.
@@ -84,7 +88,9 @@ bench/run.sh coolify root@COOLIFY_IP 1    # COOLIFY_VERSION, default 4.5.3
 bench/run.sh dokploy root@DOKPLOY_IP 1    # DOKPLOY_VERSION, default v0.30.10
 ```
 
-Coolify and Dokploy stop once for the hand step. Each run then prints its
+Coolify and Dokploy stop once for the hand step and read the token from the
+terminal; `BENCH_TTY=FILE` reads it from that file (a FIFO) instead. Each
+run then prints its
 dashboard line. Run that line on the dashboard server:
 
 ```sh
@@ -107,7 +113,9 @@ v0.30, after its git builds stopped putting `.git` in the build context
 install's wait for the database). Its servers were slower that day: the
 install and the first build took about 20 % longer, and the dashboard,
 unchanged since v0.29.0, loaded more slowly. That folder's dashboard files
-are kept for the record and are not compared.
+are kept for the record and are not compared. `bench/results/2026-11-13-v1.0.0/`
+holds all three platforms' rounds of 2026-11-13 (Toft v1.0.0, Coolify
+4.5.3, Dokploy v0.30.10), the numbers in the README.
 
 Each run writes the following to `bench/results/`:
 

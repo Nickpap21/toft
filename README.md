@@ -40,12 +40,22 @@ issue tracker and a wiki. Toft is one install that does all four, with the
 a preview, the issue moves when the pull request opens, the deploy links back
 to all of it, and the runbook sits next to the service it's for.
 
+<img alt="An issue moves from Todo to Shipped: a branch is pushed, a pull request opens, its preview runs, and the merge deploys" src=".github/assets/issue-to-live.gif" width="100%">
+
 **No lock-in, no single point of failure.** Every server runs its own Traefik
 and keeps serving its apps when the panel is down. Your apps are plain Docker
 containers on servers you control, one server or many.
 
 Toft isn't Kubernetes, and doesn't run on it
 ([why](https://nickpap21.github.io/toft/decisions/docker-not-kubernetes/)).
+
+Toft is new, and its founders run their own production apps on it.
+
+On a fresh Linux server ([requirements](#install)):
+
+```sh
+curl -fsSL https://github.com/Nickpap21/toft/releases/latest/download/install.sh | sudo sh
+```
 
 ## Proof
 
@@ -56,28 +66,28 @@ Toft, Coolify and Dokploy, each on its own fresh Hetzner Cloud `cx23`
 from its source. Median of three rounds, range in brackets. The method, the
 scripts to rerun it and every reading are in [`bench/`](bench/).
 
-| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v0.29.0 |
+| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.0 |
 |---|---|---|---|
-| Install (s) | 139.8 (136.5–141) | 225.8 (217.9–232.8) | 105.5 (96.8–110.2) |
-| Idle memory (MiB) | 682 (670–686) | 1038 (1027–1043) | 398 (385–400) |
-| Idle CPU (% of 2 vCPU) | 12 (11.1–12.3) | 1.2 (1–1.6) | 1.8 (1.8–1.9) |
-| Disk (MiB) | 3195 (3195–3195) | 5031 (5031–5033) | 2271 (2271–2380) |
-| First deploy, image (s) | 10.4 (10.3–12.2) | 5.8 (5.8–6) | 5.8 (5.8–6.6) |
-| First deploy, build (s) | 75.8 (74–78.1) | 63 (62.8–67.2) | 78.7 (73.2–82.9) |
-| Redeploy, image (s) | 11.5 (8.7–15.3) | 6.4 (5.8–6.7) | 4.9 (4.1–7.7) |
-| Redeploy, build (s) | 12.6 (9.9–24) | 57 (55.2–98.2) | 6.4 (4.4–13.4)¹ |
-| Seconds with failed requests per redeploy | 3 (3–4) | 0 | 0 |
-| Dashboard load (ms) | 803.5 (717–1026) | 339 (315–533) | 282 (205–615) |
-| Dashboard largest paint (ms) | 828 (744–1044) | 444 (416–636) | 436 (332–764) |
-| Dashboard transfer (KiB) | 3361 (3359–3361) | 1519 (1518–1568) | 446 (443–449) |
-| Dashboard requests | 18 (17–18) | 118 (118–118) | 40 (37–44) |
+| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 142.9 (141.5–143) |
+| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 403 (381–406) |
+| Idle CPU (% of 2 vCPU) | 5.9 (5.8–6.3) | 1.5 (1.3–2.6) | 3.5 (3.4–3.6) |
+| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2296 (2296–2296) |
+| First deploy, image (s) | 7.8 (7–8.4) | 5.7 (5.3–6) | 6.1 (5.8–6.6) |
+| First deploy, build (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 105.3 (105–108.5) |
+| Redeploy, image (s) | 6.9 (4.8–8.3) | 6.4 (5.6–6.6) | 5.2 (4.2–9.7) |
+| Redeploy, build (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 5.1 (4.3–9) |
+| Seconds with failed requests per redeploy, image | 3 (0–3) | 0 (0–0) | 0 (0–0) |
+| Seconds with failed requests per redeploy, build | 3 (0–3) | 0 (0–0) | 0 (0–3) |
+| Dashboard load (ms) | 573.5 (501–630) | 346.5 (296–435) | 517.5 (362–855) |
+| Dashboard largest paint (ms) | 602 (516–652) | 458 (396–552) | 676 (524–1036) |
+| Dashboard transfer (KiB) | 3811 (3811–3925) | 1533 (1530–1578) | 476 (475–480) |
+| Dashboard requests | 18 (18–18) | 119 (119–119) | 41 (39–46) |
 
-¹ Toft v0.30, measured 2026-10-30, after git builds stopped putting `.git`
-in the build context; v0.29.0 rebuilt the same commit in 63 s. The servers
-were slower that day (install and first build took about 20 % longer), so
-the other rows stay v0.29.0's, measured 2026-10-29 and 30 alongside Coolify
-and Dokploy. A redeploy is the same commit again; failed seconds are
-counted over 15 image and 15 build redeploys per platform.
+Measured 2026-11-13, all three platforms on the same day. A redeploy is the
+same commit again; failed seconds are counted over 15 image and 15 build
+redeploys per platform. Toft is the slowest of the three to build an app
+the first time and to paint its dashboard. Earlier runs are in
+[`bench/results/`](bench/results/).
 
 ### Security
 
@@ -232,8 +242,8 @@ Toft and prints a one-time **setup code**.
    **Recovery kit**.
 2. On **Home**, under **Deploy your first app**, choose **An image**. It goes in
    a new project named after it.
-3. Set **Image** to `traefik/whoami` and **Port** to `80`, then choose **Create
-   and deploy**. Toft pulls the image, starts it and switches traffic. It
+3. Set **Name** to `whoami`, **Image** to `traefik/whoami` and **Port** to
+   `80`, then choose **Create and deploy**. Toft pulls the image, starts it and switches traffic. It
    answers at once on a temporary address under `sslip.io`.
 4. To give it your own domain, open the service's **Settings**, choose **Add
    domain** under **Domains** and enter a name you own, such as

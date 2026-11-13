@@ -27,10 +27,10 @@ panel_up() { curl -skf -o /dev/null --max-time 5 "$PANEL/api/v1/health"; }
 
 account() {
 	code=$(on "sed -n 's/^TOFT_SETUP_TOKEN=//p' /etc/toft/secrets.env | tail -n1")
-	TOKEN=$(PW=$PASSWORD CODE=$code jq -n --arg e "$EMAIL" \
+	reg=$(PW=$PASSWORD CODE=$code jq -n --arg e "$EMAIL" \
 		'{email: $e, name: "Bench", password: env.PW, setup_token: env.CODE}' |
-		curl -sk --fail-with-body -H 'Content-Type: application/json' --data @- "$PANEL/api/v1/auth/register" |
-		jq -er .data.token)
+		curl -sk --fail-with-body -H 'Content-Type: application/json' --data @- "$PANEL/api/v1/auth/register")
+	TOKEN=$(echo "$reg" | jq -er .data.token)
 	# Setup as a new owner finishes it on one server: apps on this server
 	# (refused below 3.5 GiB, D-132), the recovery kit acknowledged. Until then
 	# the dashboard sends an operator to /setup.
@@ -38,7 +38,11 @@ account() {
 		-H 'Content-Type: application/json' --data '{"role":"apps"}' "$PANEL/api/v1/instance/setup/role")
 	put role_apps_http "$role"
 	[ "$role" = 200 ] || { log "Toft refused the apps role on this server (HTTP $role)"; exit 1; }
-	api PATCH /instance/setup '{"kit_acknowledged":true}' >/dev/null
+	# The kit is acknowledged by the fingerprint of the one read (D-163).
+	fp=$(curl -sk --fail-with-body -H "Authorization: Bearer $TOKEN" \
+		-H "X-Toft-Reauth: $(echo "$reg" | jq -er .data.reauth.token)" \
+		"$PANEL/api/v1/instance/recovery-kit" | jq -er .data.fingerprint)
+	api PATCH /instance/setup "{\"kit_acknowledged\":true,\"fingerprint\":\"$fp\"}" >/dev/null
 	api PATCH /instance/setup '{"finished":true}' >/dev/null
 	TOKEN=$(api POST /user/api-keys '{"name":"bench"}' | jq -er .data.key)
 }
