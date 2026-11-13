@@ -33,6 +33,9 @@ func (p previewServices) CopyForPreview(ctx context.Context, in preview.CopyInpu
 	return p.svc.CopyForPreview(ctx, service.PreviewCopy{OriginalID: in.OriginalID, EnvironmentID: in.EnvironmentID,
 		Branch: in.Branch, ExtraMemoryMB: in.ExtraMemoryMB, Untrusted: in.Untrusted, Hostnames: in.Hostnames})
 }
+func (p previewServices) AddPreviewAddress(ctx context.Context, id, hostname string) error {
+	return p.svc.AddPreviewAddress(ctx, id, hostname)
+}
 func (p previewServices) Delete(ctx context.Context, id string) error { return p.svc.Delete(ctx, id) }
 func (p previewServices) Stop(ctx context.Context, id string) error   { return p.svc.Stop(ctx, id) }
 

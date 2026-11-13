@@ -17,6 +17,7 @@ import (
 // doesn't.
 type fake struct {
 	set       Settings
+	dns       bool
 	pulls     map[string]*Pull
 	previews  map[string]*Preview // by pull
 	sources   []SourceService
@@ -240,7 +241,7 @@ func (f *fake) Plain(_ context.Context, id string) ([]string, error) {
 
 // Hosts.
 func (f *fake) Address(context.Context, string) (string, error)      { return "203.0.113.10", nil }
-func (f *fake) HasDNSProvider(context.Context, string) (bool, error) { return false, nil }
+func (f *fake) HasDNSProvider(context.Context, string) (bool, error) { return f.dns, nil }
 func (f *fake) UntrustedReady(context.Context, string) string        { return f.ready }
 
 type envs struct{ f *fake }
@@ -254,6 +255,16 @@ type svcs struct{ f *fake }
 
 func (s svcs) CopyForPreview(ctx context.Context, in CopyInput) (string, error) {
 	return s.f.CopyForPreview(ctx, in)
+}
+func (s svcs) AddPreviewAddress(_ context.Context, id, host string) error {
+	for env, cs := range s.f.copies {
+		for i := range cs {
+			if cs[i].ID == id {
+				s.f.copies[env][i].Hostnames = append(s.f.copies[env][i].Hostnames, host)
+			}
+		}
+	}
+	return nil
 }
 func (s svcs) Delete(context.Context, string) error      { return nil }
 func (s svcs) Stop(ctx context.Context, id string) error { return s.f.Stop(ctx, id) }
@@ -328,6 +339,89 @@ func TestWriterPreviewLifecycle(t *testing.T) {
 	s.ApplyEvents(ctx)
 	if f.previews["p1"] != nil || len(f.envs) != 0 || !slices.Contains(f.events, "preview_removed") {
 		t.Fatalf("after merge: previews %v envs %v events %v", f.previews, f.envs, f.events)
+	}
+}
+
+// A copy made while its original had no domain gets its address at the next
+// deploy after the original gets one. A copy that isn't deployed is left
+// alone: an address nothing routes would be shown as its own.
+func TestLateDomainNamesTheCopy(t *testing.T) {
+	f := newFake()
+	s := newSvc(f)
+	ctx := context.Background()
+	f.sources[0].Hostnames = nil
+	f.open("p1", 42, false)
+	f.emit("p1")
+	s.ApplyEvents(ctx)
+	web := func() CopyService {
+		for _, c := range f.copies["env-pr-42"] {
+			if c.PreviewOf == "web" {
+				return c
+			}
+		}
+		t.Fatal("no copy of web")
+		return CopyService{}
+	}
+	if got := web().Hostnames; len(got) != 0 {
+		t.Fatalf("a copy of a service with no domain has addresses: %v", got)
+	}
+
+	f.sources[0].Hostnames = []string{"web.staging.example.com"}
+	f.emit("p1")
+	s.ApplyEvents(ctx)
+	if got := web().Hostnames; len(got) != 0 {
+		t.Fatalf("a copy that wasn't deployed got addresses: %v", got)
+	}
+
+	before := len(f.deploys)
+	if err := s.reconcile(ctx, "p1", Actor{}, cause{kind: causeRedeploy}); err != nil {
+		t.Fatal(err)
+	}
+	want := "web-pr42-storefront.203-0-113-10.sslip.io"
+	if got := web().Hostnames; !slices.Equal(got, []string{want}) {
+		t.Fatalf("addresses after a redeploy = %v, want %s", got, want)
+	}
+	vars := ""
+	for _, d := range f.deploys[before:] {
+		if d.ServiceID == web().ID {
+			vars = strings.Join(d.EnvVars, " ")
+		}
+	}
+	if !strings.Contains(vars, "TOFT_PREVIEW_URL=https://"+want) {
+		t.Fatalf("web's redeploy doesn't know its address: %q", vars)
+	}
+}
+
+// A late name that falls outside the preview domain (its check failed that
+// day) isn't under the wildcard: the certificate names every address.
+func TestLateNameOutsideTheWildcard(t *testing.T) {
+	f := newFake()
+	s := newSvc(f)
+	ctx := context.Background()
+	f.set.Domain, f.dns = "preview.example.com", true
+	s.lookup = func(context.Context, string) ([]string, error) { return []string{"203.0.113.10"}, nil }
+	f.sources[1].Hostnames = nil
+	f.open("p1", 42, false)
+	f.emit("p1")
+	s.ApplyEvents(ctx)
+	if got := f.deploys[0].CertDomains; !slices.Equal(got, []string{"*.preview.example.com"}) {
+		t.Fatalf("certificate names at the start = %v", got)
+	}
+
+	f.sources[1].Hostnames = []string{"api.staging.example.com"}
+	s.lookup = func(context.Context, string) ([]string, error) { return nil, nil }
+	before := len(f.deploys)
+	if err := s.reconcile(ctx, "p1", Actor{}, cause{kind: causeRedeploy}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"pr-42-web.preview.example.com", "api-pr42-storefront.203-0-113-10.sslip.io"}
+	for _, d := range f.deploys[before:] {
+		if !slices.Equal(d.CertDomains, want) || d.CertResolver != "" {
+			t.Fatalf("certificate = %v by %q, want %v", d.CertDomains, d.CertResolver, want)
+		}
+	}
+	if len(f.deploys) == before {
+		t.Fatal("the redeploy deployed nothing")
 	}
 }
 
