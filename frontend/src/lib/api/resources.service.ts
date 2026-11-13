@@ -95,10 +95,14 @@ export const resourcesService = {
     server: (serverId: string) => fetchAPI<ServerResources>(`/api/v1/servers/${serverId}/resources`),
 };
 
-/** MiB of a limit as the API writes it ("512m", "1g"); 0 for "". */
+/** MiB of a limit, read as the backend reads it (resources.ParseMB):
+ *  "512m", "1G", "1.5g", "2gb", "524288k", plain bytes; 0 for "" or
+ *  anything else. */
 export function limitMB(limit: string): number {
-    const n = parseInt(limit, 10) || 0;
-    return limit.endsWith("g") ? n * 1024 : n;
+    const m = /^(\d+(?:\.\d+)?)(?:([gmk])b?)?$/.exec(limit.trim().toLowerCase());
+    if (!m) return 0;
+    const mib = m[2] === "g" ? 1024 : m[2] === "m" ? 1 : m[2] === "k" ? 1 / 1024 : 1 / 1024 ** 2;
+    return Math.ceil(parseFloat(m[1]) * mib);
 }
 
 /** "704 MiB" under 1 GiB, "2.1 GiB" from there. */
