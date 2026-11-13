@@ -1,0 +1,13 @@
+# Runs /usr/local/lib/toft/backup.sh (D-43), started by toft-backup.timer.
+# The script does nothing without a destination, and backs up once a day
+# from the time the panel set. Installed by the provisioner and toft upgrade.
+[Unit]
+Description=Toft: back up this server's volumes and databases
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/toft/backup.sh
+Nice=10
+IOSchedulingClass=idle

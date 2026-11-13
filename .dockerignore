@@ -1,0 +1,9 @@
+# The repository root is a build context only as the backend image's
+# "bundle" (docker-compose.yml's additional_contexts, D-61): the files the
+# release bundle carries besides those under backend/. Everything else stays
+# out, so the context is a few kilobytes.
+*
+!docker-compose.yml
+!traefik/dynamic/dynamic.yml
+!install.sh
+!docker-compose.git.yml

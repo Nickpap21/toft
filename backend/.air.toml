@@ -1,0 +1,35 @@
+# Air — live reload for Go
+# Docs: https://github.com/air-verse/air
+
+root = "."
+tmp_dir = ".air-tmp"
+
+[build]
+  # Entry point
+  cmd = "go build -o .air-tmp/server ./cmd/server/main.go"
+  bin = ".air-tmp/server"
+  # Watch these directories for changes
+  include_dir = ["cmd", "internal", "pkg", "db"]
+  # Rebuild when these file types change
+  include_ext = ["go", "sql"]
+  # Ignore generated files
+  exclude_dir  = ["db/sqlcdb"]
+  exclude_file = ["db/sqlcdb/*.go"]
+  # Delay before rebuild (ms) — prevents thrashing on rapid saves
+  delay = 500
+  # Kill the running process before starting the new one
+  send_interrupt = true
+  kill_delay     = "1s"
+
+[log]
+  time      = false
+  main_only = true
+
+[color]
+  main    = "cyan"
+  watcher = "blue"
+  build   = "yellow"
+  runner  = "green"
+
+[misc]
+  clean_on_exit = true

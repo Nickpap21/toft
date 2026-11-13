@@ -1,0 +1,212 @@
+# A release (D-61): a vX.Y.Z tag runs the checks, builds and signs the node
+# agent (D-106), builds paas-backend (carrying the signed agents) and
+# paas-frontend on native amd64 and arm64 runners, pushes each to GHCR as
+# one multi-arch tag, signs the two tags' digests (the image manifest), and
+# publishes install.sh with the release as its default, beside the agents,
+# the image manifest and their signatures. Plain docker, openssl, jq and gh,
+# which the runners carry, and GitHub's own artifact actions.
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  # The node agent (D-106): built by the Dockerfile's agent-bins stage and
+  # signed with the release key, whose private half is the
+  # TOFT_AGENT_SIGNING_KEY secret and nowhere else. Installed agents check
+  # every upgrade against the public half they were built with
+  # (backend/cmd/toft-agent/release.pub). No secret, no release.
+  agent:
+    needs: checks
+    environment: release
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build both agents
+        run: docker buildx build --target agent-bins --build-arg "TOFT_VERSION=$TAG" --output type=local,dest=dist ./backend
+      # The linker ignores an -X path that names nothing: an agent that
+      # doesn't report its tag would break every upgrade's version check.
+      - name: the agent reports its version
+        run: test "$(dist/toft-agent-linux-amd64 version)" = "$TAG"
+      - name: sign them
+        env:
+          SIGNING_KEY: ${{ secrets.TOFT_AGENT_SIGNING_KEY }}
+        run: |
+          test -n "$SIGNING_KEY" || { echo "TOFT_AGENT_SIGNING_KEY is not set: no unsigned agent ships (D-106)"; exit 1; }
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          # The key must be the one the agents trust.
+          openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout | diff - backend/cmd/toft-agent/release.pub
+          # Two signatures per agent: .sig over the binary, which agents
+          # before v0.24.0 check, and .manifest.sig over its manifest line,
+          # which signs the version with it (D-123; the agent rebuilds the
+          # line, agentproto.UpgradeHeader).
+          sign() {
+            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in "$1" -out "$1.sigbin"
+            openssl pkeyutl -verify -pubin -inkey backend/cmd/toft-agent/release.pub -rawin -in "$1" -sigfile "$1.sigbin"
+            base64 -w0 "$1.sigbin" > "$2"
+            rm "$1.sigbin"
+          }
+          for arch in amd64 arm64; do
+            f=dist/toft-agent-linux-$arch
+            sign "$f" "$f.sig"
+            sum=$(sha256sum "$f" | cut -d' ' -f1)
+            test ${#sum} = 64
+            printf 'toft-agent %s linux %s %s\n' "$TAG" "$arch" "$sum" > "$RUNNER_TEMP/manifest"
+            sign "$RUNNER_TEMP/manifest" "$f.manifest.sig"
+          done
+          rm -f "$RUNNER_TEMP/key.pem"
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent
+          path: dist/
+
+  image:
+    needs: [checks, agent]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [backend, frontend]
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/paas-${{ matrix.component }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: matrix.component == 'backend'
+        with:
+          name: agent
+          path: backend/agent-dist
+      - name: build and push ${{ matrix.component }} for ${{ matrix.arch }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE=${IMAGE,,} # GHCR wants lowercase; the owner, Nickpap21, isn't
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          set -- --build-arg "TOFT_VERSION=$TAG"
+          # The backend image carries the release bundle (.dockerignore).
+          [ "${{ matrix.component }}" = backend ] && set -- "$@" --build-context bundle=.
+          docker buildx build --push --platform "linux/${{ matrix.arch }}" "$@" \
+            -t "$IMAGE:$TAG-${{ matrix.arch }}" "./${{ matrix.component }}"
+
+  manifest:
+    needs: image
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/paas-${{ matrix.component }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: one tag for both architectures
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE=${IMAGE,,} # GHCR wants lowercase; the owner, Nickpap21, isn't
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker buildx imagetools create -t "$IMAGE:$TAG" "$IMAGE:$TAG-amd64" "$IMAGE:$TAG-arm64"
+          docker buildx imagetools inspect "$IMAGE:$TAG"
+
+  # The image manifest: each panel image's multi-arch digest for this
+  # release, signed with the release key as the agents are. toft upgrade
+  # and install.sh pull the images by these digests and refuse anything
+  # else, so a tag moved in the registry runs nowhere. Read-only here; the
+  # publish job pushes it.
+  images-sign:
+    needs: manifest
+    environment: release
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-24.04
+    env:
+      OWNER: ${{ github.repository_owner }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: the images' digests, signed
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNING_KEY: ${{ secrets.TOFT_AGENT_SIGNING_KEY }}
+        run: |
+          test -n "$SIGNING_KEY" || { echo "TOFT_AGENT_SIGNING_KEY is not set: no unsigned images ship"; exit 1; }
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          mkdir images
+          for c in backend frontend; do
+            d=$(docker buildx imagetools inspect "ghcr.io/${OWNER,,}/paas-$c:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+            echo "$d" | grep -Eqx 'sha256:[0-9a-f]{64}'
+            printf 'toft-image %s %s %s\n' "$TAG" "$c" "$d" >> images/toft-images
+          done
+          cat images/toft-images
+          (umask 077; printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/key.pem")
+          # The key must be the one toft and install.sh trust.
+          openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout | diff - backend/cmd/toft-agent/release.pub
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in images/toft-images -out "$RUNNER_TEMP/sig"
+          rm -f "$RUNNER_TEMP/key.pem"
+          openssl pkeyutl -verify -pubin -inkey backend/cmd/toft-agent/release.pub -rawin -in images/toft-images -sigfile "$RUNNER_TEMP/sig"
+          base64 -w0 "$RUNNER_TEMP/sig" > images/toft-images.sig
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: images
+          path: images/
+
+  publish:
+    needs: [manifest, images-sign]
+    permissions:
+      contents: write
+      packages: write
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: images
+          path: images
+      # Where every panel reads it with the registry login it has: the
+      # <tag>-release image in the backend repository, two files in an
+      # amd64 image that is never run.
+      - name: the image manifest, beside the images
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/paas-backend
+          echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          printf 'FROM scratch\nCOPY toft-images toft-images.sig /\n' |
+            docker build --platform linux/amd64 -t "$IMAGE:$TAG-release" -f - images
+          docker push "$IMAGE:$TAG-release"
+      - name: the release, with install.sh defaulting to it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sed "s/^RELEASE=\"\${TOFT_VERSION:-}\"/RELEASE=\"\${TOFT_VERSION:-$TAG}\"/" install.sh > dist/install.sh
+          grep -q "TOFT_VERSION:-$TAG" dist/install.sh
+          # The notes are the version's CHANGELOG.md entry; GitHub's own
+          # (pull requests since the last tag) when it has none.
+          awk -v h="## ${TAG#v} (" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
+          notes=(--generate-notes)
+          if grep -q '[^[:space:]]' notes.md; then notes=(--notes-file notes.md); fi
+          gh release create "$TAG" dist/install.sh dist/toft-agent-linux-* images/toft-images images/toft-images.sig --title "Toft $TAG" "${notes[@]}"

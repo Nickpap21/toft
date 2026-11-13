@@ -1,0 +1,17 @@
+-- Contract steps (D-63): run by `toft upgrade` after premigrate.sql and
+-- Atlas, so each statement is explicit and idempotent. A release that ships
+-- a step here says so in its release note, and an upgrade that fails its
+-- health check after running one rolls back by restoring the pre-upgrade
+-- dump (cmd/toft/upgrade.go).
+--
+-- Only statements count: while this file holds nothing but comments and
+-- blank lines, an upgrade has no contract step, says "nothing dropped", and
+-- a failed one starts the previous release again without restoring the dump
+-- (hasStatements). Put the next contract step here, under a line naming its
+-- release, with `SET lock_timeout = '5s';` and each DROP/ADD pair in one
+-- transaction, as v0.35.0's did.
+--
+-- None in this release. v0.35.0's step (0071: environments_color_check
+-- without red, services_preview_no_migrate) ran on its upgrade; the same
+-- constraints are in schema.sql, which Atlas keeps applying (the founders,
+-- 2026-11-04: v0.36.0 empties this file).

@@ -1,0 +1,10 @@
+# Installed by toft upgrade on the panel's server (D-68): asks the image
+# registry for the newest release, for the panel's Instance page.
+[Unit]
+Description=Toft: check for a new release
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/toft release-check

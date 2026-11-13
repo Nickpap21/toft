@@ -1,0 +1,288 @@
+/*
+ * Theme tokens (DESIGN.md → Themes, D-03/D-04). One block per theme on
+ * [data-theme], so a nested element can render another theme (the previews
+ * in Settings → Appearance do). The raw values are the DESIGN.md table
+ * verbatim; src/lib/theme/contrast.test.ts keeps the two in sync and checks
+ * every pairing below meets WCAG 2.1 AA.
+ *
+ * Components use the Tailwind names mapped in globals.css (bg-surface,
+ * text-muted, border-subtle, bg-status-failed-soft, …), never raw hex.
+ */
+
+/* On the selected tint a chip's soft fill stands on the surface, as on any
+   other row: through to --selected, its text drops under 4.5:1 on Paper,
+   Daylight and Mono. */
+.bg-selected {
+  --status-running-soft: color-mix(in oklab, var(--status-running) var(--chip-alpha), var(--surface));
+  --status-building-soft: color-mix(in oklab, var(--status-building) var(--chip-alpha), var(--surface));
+  --status-pending-soft: color-mix(in oklab, var(--status-pending) var(--chip-alpha), var(--surface));
+  --status-failed-soft: color-mix(in oklab, var(--status-failed) var(--chip-alpha), var(--surface));
+}
+
+/* Derived tokens. Declared on every [data-theme] (not only :root) so they
+   recompute inside a nested theme. */
+:root,
+[data-theme] {
+  /* Inputs and other boundaries that must reach 3:1 (WCAG 1.4.11). */
+  --border-strong: color-mix(in oklab, var(--muted) 70%, var(--border));
+  /* The one selected tint (DESIGN.md → State): the active nav item, the
+     index's current section, selected and current rows. Opaque, so sticky
+     cells over a scrolling chart stay solid. */
+  --selected: color-mix(in oklab, var(--accent) 20%, var(--surface));
+  /* Muted text on the selected tint: --muted drops under 4.5:1 there on
+     Paper, Daylight and Mono, so it steps up to 75% of the text colour. */
+  --selected-muted: color-mix(in oklab, var(--text) 75%, var(--selected));
+  /* Soft accent fills: chips, chosen options, menu highlights. */
+  --accent-soft: color-mix(in oklab, var(--accent) var(--accent-soft-alpha), var(--surface));
+  /* The focus ring uses the link colour: Graphite's accent fill is only
+     2.93:1 on its surface, so accent alone never marks focus or selection. */
+  --focus-ring: var(--link);
+  --focus-width: 2px;
+
+  /* Status chips: soft background, readable text, a solid dot. */
+  --status-running-soft: color-mix(in oklab, var(--status-running) var(--chip-alpha), transparent);
+  --status-building-soft: color-mix(in oklab, var(--status-building) var(--chip-alpha), transparent);
+  --status-pending-soft: color-mix(in oklab, var(--status-pending) var(--chip-alpha), transparent);
+  --status-failed-soft: color-mix(in oklab, var(--status-failed) var(--chip-alpha), transparent);
+  --status-running-fg: color-mix(in oklab, var(--status-running) var(--status-fg-mix), var(--text));
+  --status-building-fg: color-mix(in oklab, var(--status-building) var(--status-fg-mix), var(--text));
+  --status-pending-fg: color-mix(in oklab, var(--status-pending) var(--status-fg-mix), var(--text));
+  --status-failed-fg: color-mix(in oklab, var(--status-failed) var(--status-fg-mix), var(--text));
+
+  --danger: var(--status-failed);
+
+  /* Behind dialogs (at 50%) and drawers (at 20%). Light themes lighten it below. */
+  --scrim: #000000;
+
+  /* Environment chips (D-55): mono name, square corners, no dot, so they
+     never read as status. Amber and blue reuse the status hues; gray is the
+     muted text; violet and teal are each theme's own below. Red is not one:
+     it means failing (D-142). A protected environment draws neutral with
+     the lock, whatever its colour: text on a faint fill with a faint ring,
+     and its line under the project bar halfway from muted to text. */
+  --env-amber: var(--status-pending);
+  --env-blue: var(--status-building);
+  --env-gray: var(--muted);
+  --env-amber-soft: color-mix(in oklab, var(--env-amber) var(--chip-alpha), transparent);
+  --env-violet-soft: color-mix(in oklab, var(--env-violet) var(--chip-alpha), transparent);
+  --env-blue-soft: color-mix(in oklab, var(--env-blue) var(--chip-alpha), transparent);
+  --env-teal-soft: color-mix(in oklab, var(--env-teal) var(--chip-alpha), transparent);
+  --env-gray-soft: color-mix(in oklab, var(--env-gray) var(--chip-alpha), transparent);
+  --env-amber-fg: color-mix(in oklab, var(--env-amber) var(--status-fg-mix), var(--text));
+  --env-violet-fg: color-mix(in oklab, var(--env-violet) var(--status-fg-mix), var(--text));
+  --env-blue-fg: color-mix(in oklab, var(--env-blue) var(--status-fg-mix), var(--text));
+  --env-teal-fg: color-mix(in oklab, var(--env-teal) var(--status-fg-mix), var(--text));
+  /* Muted alone is 4.4:1 on a dark raised surface; lean it toward text. */
+  --env-gray-fg: color-mix(in oklab, var(--env-gray) 60%, var(--text));
+  --env-protected: color-mix(in oklab, var(--muted) 50%, var(--text));
+  --env-protected-soft: color-mix(in oklab, var(--text) 9%, transparent);
+  --env-protected-fg: var(--text);
+  --env-protected-ring: color-mix(in oklab, var(--text) 16%, transparent);
+
+  /* Issue types' tiles: their own colours, so a change to the environment
+     colours never blanks one (D-142 took red, and Bug's tile went empty).
+     The status hues, the muted text, and each theme's violet and teal; the
+     glyph on them is the ground's colour. */
+  --type-gray: var(--muted);
+  --type-blue: var(--status-building);
+  --type-red: var(--status-failed);
+  --type-green: var(--status-running);
+  --type-amber: var(--status-pending);
+  --type-violet: var(--env-violet);
+  --type-teal: var(--env-teal);
+}
+
+/* Per-mode knobs. Chips are 14% on dark themes and 10% on light ones
+   (DESIGN.md); light-theme chip text is 85% status colour + 15% text so it
+   reaches 4.5:1 (D-32). Never white text on a status colour in a dark
+   theme: it measures 1.4–2.9:1, so destructive buttons there use dark text. */
+[data-theme="graphite"],
+[data-theme="mono"],
+[data-theme="ink"],
+[data-theme="contrast"] {
+  color-scheme: dark;
+  --chip-alpha: 14%;
+  --accent-soft-alpha: 16%;
+  --status-fg-mix: 100%;
+  --on-danger: var(--ground);
+  /* Elevation (DESIGN.md → Space, shape, density): only what floats. */
+  --elevation-dialog: 0 24px 64px rgb(0 0 0 / 0.55);
+  --elevation-menu: 0 12px 32px rgb(0 0 0 / 0.45);
+}
+
+[data-theme="paper"],
+[data-theme="daylight"] {
+  color-scheme: light;
+  --chip-alpha: 10%;
+  --accent-soft-alpha: 10%;
+  --status-fg-mix: 85%;
+  --on-danger: #FFFFFF;
+  /* Light grounds: small stacked shadows; a single dark drop reads as a smudge. */
+  --elevation-dialog: 0 2px 4px rgb(0 0 0 / 0.04), 0 24px 48px -12px rgb(0 0 0 / 0.18);
+  --elevation-menu: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.16);
+  /* Full black at 50% turns a light page muddy: 30% behind dialogs, 12% behind drawers. */
+  --scrim: rgb(0 0 0 / 0.6);
+}
+
+[data-theme="graphite"] {
+  --ground: #0C0D10;
+  --surface: #131418;
+  --raised: #1A1C21;
+  --border: #2A2D33;
+  --text: #EDEEF0;
+  --muted: #868A93;
+  --accent: #4F46E5;
+  --on-accent: #FFFFFF;
+  --link: #A9A6F2;
+  --status-running: #4CC38A;
+  --status-building: #6CB2F7;
+  --status-pending: #E8B04B;
+  --status-failed: #F2727F;
+  --env-violet: #B193F5;
+  --env-teal: #4DD0C4;
+}
+
+[data-theme="mono"] {
+  --ground: #0A0A0A;
+  --surface: #111111;
+  --raised: #1A1A1A;
+  --border: #2B2B2B;
+  --text: #EDEDED;
+  --muted: #8F8F8F;
+  --accent: #EDEDED;
+  --on-accent: #000000;
+  --link: #FFFFFF;
+  --status-running: #3DD68C;
+  --status-building: #52A8FF;
+  --status-pending: #F5B83D;
+  --status-failed: #FF6166;
+  --env-violet: #B9A3FF;
+  --env-teal: #5CE0D2;
+}
+
+[data-theme="ink"] {
+  --ground: #0B0E14;
+  --surface: #10141C;
+  --raised: #171C26;
+  --border: #252C3A;
+  --text: #E6EAF2;
+  --muted: #8892A6;
+  --accent: #6E56CF;
+  --on-accent: #FFFFFF;
+  --link: #B7A8F7;
+  --status-running: #3FCF8E;
+  --status-building: #5EB1FF;
+  --status-pending: #F2B53F;
+  --status-failed: #F47174;
+  --env-violet: #C0A6FF;
+  --env-teal: #52D6C8;
+}
+
+[data-theme="paper"] {
+  --ground: #F6F5F1;
+  --surface: #FFFFFF;
+  --raised: #EFEDE7;
+  --border: #E0DDD5;
+  --text: #1C1B19;
+  --muted: #67645E;
+  --accent: #4338CA;
+  --on-accent: #FFFFFF;
+  --link: #4338CA;
+  --status-running: #15803D;
+  --status-building: #1D4ED8;
+  --status-pending: #B45309;
+  --status-failed: #B91C1C;
+  --env-violet: #6D28D9;
+  --env-teal: #0F766E;
+}
+
+[data-theme="daylight"] {
+  --ground: #F4F5F7;
+  --surface: #FFFFFF;
+  --raised: #ECEEF2;
+  --border: #DADDE3;
+  --text: #111318;
+  --muted: #5C6370;
+  --accent: #111318;
+  --on-accent: #FFFFFF;
+  --link: #111318;
+  --status-running: #0F7B4B;
+  --status-building: #1F5FD6;
+  --status-pending: #A15C07;
+  --status-failed: #C2262E;
+  --env-violet: #6B21A8;
+  --env-teal: #0E7490;
+}
+
+[data-theme="contrast"] {
+  --ground: #000000;
+  --surface: #0A0A0A;
+  --raised: #161616;
+  --border: #6B6B6B;
+  --text: #FFFFFF;
+  --muted: #CFCFCF;
+  --accent: #A5A6FF;
+  --on-accent: #000000;
+  --link: #C3C4FF;
+  --status-running: #5EF2A0;
+  --status-building: #8CCBFF;
+  --status-pending: #FFD166;
+  --status-failed: #FF9494;
+  --env-violet: #C8B5FF;
+  --env-teal: #7CE8DC;
+  --focus-ring: #FFD60A;
+}
+
+/* Without JavaScript the head script never sets data-theme: fall back to
+   Paper, or Graphite when the OS is dark. */
+:root:not([data-theme]) {
+  color-scheme: light;
+  --chip-alpha: 10%;
+  --accent-soft-alpha: 10%;
+  --status-fg-mix: 85%;
+  --on-danger: #FFFFFF;
+  --elevation-dialog: 0 2px 4px rgb(0 0 0 / 0.04), 0 24px 48px -12px rgb(0 0 0 / 0.18);
+  --elevation-menu: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.16);
+  --scrim: rgb(0 0 0 / 0.6);
+  --ground: #F6F5F1;
+  --surface: #FFFFFF;
+  --raised: #EFEDE7;
+  --border: #E0DDD5;
+  --text: #1C1B19;
+  --muted: #67645E;
+  --accent: #4338CA;
+  --on-accent: #FFFFFF;
+  --link: #4338CA;
+  --status-running: #15803D;
+  --status-building: #1D4ED8;
+  --status-pending: #B45309;
+  --status-failed: #B91C1C;
+  --env-violet: #B193F5;
+  --env-teal: #4DD0C4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --chip-alpha: 14%;
+    --accent-soft-alpha: 16%;
+    --status-fg-mix: 100%;
+    --on-danger: var(--ground);
+    --elevation-dialog: 0 24px 64px rgb(0 0 0 / 0.55);
+    --elevation-menu: 0 12px 32px rgb(0 0 0 / 0.45);
+    --scrim: #000000;
+    --ground: #0C0D10;
+    --surface: #131418;
+    --raised: #1A1C21;
+    --border: #2A2D33;
+    --text: #EDEEF0;
+    --muted: #868A93;
+    --accent: #4F46E5;
+    --on-accent: #FFFFFF;
+    --link: #A9A6F2;
+    --status-running: #4CC38A;
+    --status-building: #6CB2F7;
+    --status-pending: #E8B04B;
+    --status-failed: #F2727F;
+  }
+}

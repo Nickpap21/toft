@@ -1,0 +1,122 @@
+# Plausible Community Edition (Toft catalog, D-147), after
+# github.com/plausible/community-edition v3.2.1's compose.yml: ClickHouse's
+# config files are inline configs instead of files beside it.
+services:
+  plausible_db:
+    image: postgres:17.11-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    restart: unless-stopped
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      start_period: 1m
+    mem_limit: 256m
+
+  plausible_events_db:
+    image: clickhouse/clickhouse-server:24.12.6.70-alpine@sha256:cd450891db46cc6ffe313ca2b0fb7dbfb897a6873ca74a724cbe050a2cf62621
+    restart: unless-stopped
+    volumes:
+      - event-data:/var/lib/clickhouse
+      - event-logs:/var/log/clickhouse-server
+    configs:
+      - source: clickhouse-logs
+        target: /etc/clickhouse-server/config.d/logs.xml
+      - source: clickhouse-ipv4-only
+        target: /etc/clickhouse-server/config.d/ipv4-only.xml
+      - source: clickhouse-low-resources
+        target: /etc/clickhouse-server/config.d/low-resources.xml
+      - source: clickhouse-profile-low-resources
+        target: /etc/clickhouse-server/users.d/default-profile-low-resources-overrides.xml
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O - http://127.0.0.1:8123/ping || exit 1"]
+      start_period: 1m
+    mem_limit: 2g
+
+  plausible:
+    image: ghcr.io/plausible/community-edition:v3.2.1@sha256:33e60bfb40f2df5da00f8753b76fad04f67dba3abe6d73eb516e440e3fb62985
+    restart: unless-stopped
+    command: sh -c "/entrypoint.sh db createdb && /entrypoint.sh db migrate && /entrypoint.sh run"
+    depends_on:
+      plausible_db:
+        condition: service_healthy
+      plausible_events_db:
+        condition: service_healthy
+    volumes:
+      - plausible-data:/var/lib/plausible
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      TMPDIR: /var/lib/plausible/tmp
+      BASE_URL: "${TOFT_URL:?Plausible needs the service’s address, so add a domain}"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@plausible_db:5432/plausible_db
+      CLICKHOUSE_DATABASE_URL: http://plausible_events_db:8123/plausible_events_db
+    mem_limit: 1g
+
+volumes:
+  db-data:
+  event-data:
+  event-logs:
+  plausible-data:
+
+configs:
+  clickhouse-logs:
+    content: |
+      <clickhouse>
+          <logger>
+              <level>warning</level>
+              <console>true</console>
+          </logger>
+          <query_log replace="1">
+              <database>system</database>
+              <table>query_log</table>
+              <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+              <engine>
+                  ENGINE = MergeTree
+                  PARTITION BY event_date
+                  ORDER BY (event_time)
+                  TTL event_date + interval 30 day
+                  SETTINGS ttl_only_drop_parts=1
+              </engine>
+          </query_log>
+          <metric_log remove="remove" />
+          <asynchronous_metric_log remove="remove" />
+          <query_thread_log remove="remove" />
+          <text_log remove="remove" />
+          <trace_log remove="remove" />
+          <session_log remove="remove" />
+          <part_log remove="remove" />
+      </clickhouse>
+  clickhouse-ipv4-only:
+    content: |
+      <clickhouse>
+          <listen_host>0.0.0.0</listen_host>
+      </clickhouse>
+  clickhouse-low-resources:
+    content: |
+      <clickhouse>
+          <mark_cache_size>524288000</mark_cache_size>
+      </clickhouse>
+  clickhouse-profile-low-resources:
+    content: |
+      <clickhouse>
+          <profiles>
+              <default>
+                  <max_threads>1</max_threads>
+                  <max_block_size>8192</max_block_size>
+                  <max_download_threads>1</max_download_threads>
+                  <input_format_parallel_parsing>0</input_format_parallel_parsing>
+                  <output_format_parallel_formatting>0</output_format_parallel_formatting>
+              </default>
+          </profiles>
+      </clickhouse>

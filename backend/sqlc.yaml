@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "db/queries"
+    schema: "db/migrations/schema.sql"
+    gen:
+      go:
+        package: "sqlcdb"
+        out: "db/sqlcdb"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        # Keep the historical model name: sqlc >= 1.30 would otherwise
+        # generate ApiKey and break db/sqlcdb/api_keys.sql.go and internal/apikey.
+        rename:
+          api_key: "APIKey"

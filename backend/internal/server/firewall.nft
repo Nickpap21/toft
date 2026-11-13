@@ -1,0 +1,40 @@
+# Toft: what app containers may reach on the host they run on (D-37,
+# private/specs/2026-10-12-host-firewall-design.md).
+#
+# Traffic arriving on any bridge (every Docker network) may open connections
+# to the host's own addresses only on TCP 80 and 443 (Traefik) and on DNS, and
+# may reach nothing in 169.254.0.0/16 (cloud metadata) but DNS. Replies to
+# connections the host opened, the internet, and other containers on the same
+# network are not affected. A drop here is final, whatever another table
+# accepts.
+#
+# An untrusted preview's own network (D-97; its bridge is named toft-u…) may
+# also not open connections to private addresses outside it, nor to SMTP.
+#
+# Loaded at boot by toft-firewall.service, before Docker. Loading it again
+# replaces the table in one transaction. To remove:
+#   systemctl disable --now toft-firewall && nft delete table ip toft
+table ip toft
+delete table ip toft
+table ip toft {
+	chain prerouting {
+		type filter hook prerouting priority mangle; policy accept;
+		meta iifkind "bridge" jump from_container
+	}
+	chain from_container {
+		fib daddr type local ct state new jump to_host
+		meta l4proto { tcp, udp } th dport 53 return
+		ip daddr 169.254.0.0/16 counter drop
+		iifname "toft-u*" ct state new jump from_untrusted
+	}
+	chain from_untrusted {
+		fib daddr oifname "toft-u*" return
+		tcp dport 25 counter drop
+		ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } counter drop
+	}
+	chain to_host {
+		tcp dport { 80, 443 } return
+		meta l4proto { tcp, udp } th dport 53 return
+		counter drop
+	}
+}

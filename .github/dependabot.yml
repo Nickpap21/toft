@@ -1,0 +1,59 @@
+# Monthly version updates, minor and patch grouped per ecosystem (D-127).
+# Majors are taken by hand, when their breaking changes have been read:
+# ignoring semver-major holds back version updates only, never security
+# updates, which come as soon as an advisory is published.
+# docker-compose.yml's images are pinned by digest and updated by hand.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      go: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+      # From v2.16 a pre_start hook takes a whole container specification,
+      # which composespec.Check doesn't look at (only v2.15's schema keeps
+      # mounts, host networking and capabilities out of hooks). Lift this
+      # when Check covers hooks; TestValidate_PreStartHookCantEscapeThePolicy
+      # fails until it does. An advisory still raises a Dependabot alert.
+      - dependency-name: github.com/compose-spec/compose-go/v2
+        versions: [">=2.16.0"]
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      npm: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+  - package-ecosystem: npm
+    directory: /docs
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      docs: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      actions: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+  - package-ecosystem: docker
+    directories: [/backend, /frontend]
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 5
+    groups:
+      docker: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]

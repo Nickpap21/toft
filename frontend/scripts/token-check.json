@@ -1,0 +1,10 @@
+{
+  "include": ["src"],
+  "allow": [
+    "src/styles/tokens.css",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/components/ui/pty-terminal.tsx"
+  ],
+  "forbidTailwindPalette": true
+}

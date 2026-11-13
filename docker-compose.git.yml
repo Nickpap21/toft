@@ -1,0 +1,62 @@
+# Git hosting (D-71), on top of docker-compose.yml. toft upgrade adds this
+# file unless /etc/toft/secrets.env says TOFT_GIT=off (install.sh --no-git);
+# without it there is no git container, no repositories' volume and no
+# port 2222. The Makefile always adds it.
+#
+# git runs only in paas-git: the backend's image as an unprivileged user,
+# with no network, no env file and nothing mounted but the repositories and
+# the socket the backend calls it on. The backend never mounts the
+# repositories; git never sees the Docker socket, the database or a secret.
+
+services:
+  backend:
+    ports:
+      # git over SSH (D-28): the backend's listener on 2222, published on
+      # TOFT_GIT_SSH_PORT, which the clone URLs follow.
+      - "${TOFT_GIT_SSH_PORT:-2222}:2222"
+    volumes:
+      - "git-socket:/run/toft-git"
+
+  git:
+    image: ghcr.io/${GHCR_USER:-local}/paas-backend:${IMAGE_TAG:-latest}
+    # The backend's image, built or pulled for the backend service.
+    pull_policy: never
+    container_name: paas-git
+    # Capped as the panel's other containers are (docker-compose.yml).
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
+    restart: unless-stopped
+    command: ["toft-git", "serve"]
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=64m
+    volumes:
+      - "git:/var/lib/toft/git"
+      - "git-socket:/run/toft-git"
+    healthcheck:
+      test: ["CMD", "toft-git", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+          pids: 512
+
+volumes:
+  # The repositories. Named paas-git, so the nightly backup takes it with
+  # the platform's other volumes (a copy of the files; consistent bundles
+  # come with repository backups, stage 3 session 5).
+  git:
+    name: paas-git
+  git-socket:

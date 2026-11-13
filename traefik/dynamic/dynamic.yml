@@ -1,0 +1,23 @@
+http:
+  middlewares:
+    # ── Security headers (HSTS, X-Frame, nosniff) ─────────────────────────────
+    # Referenced in docker-compose.yml as: secure-headers@file
+    # No HSTS preload (a commitment for the whole registered domain) and no
+    # Referrer-Policy (it would override an app's stricter one). No
+    # X-XSS-Protection: browsers dropped the filter, and where it remains it
+    # can be used to blank parts of a page. Keep in sync
+    # with the copy in backend/internal/server/provisioner.go.
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+
+    # ── HTTP → HTTPS permanent redirect ───────────────────────────────────────
+    # Referenced in docker-compose.yml as: redirect-to-https@file
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true

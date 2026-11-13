@@ -1,0 +1,9 @@
+# Advisories govulncheck reports as reached by the backend's code that the
+# gate (scripts/govulncheck.sh) lets through. One id per line; say why, and
+# when the line can go. Audit of 2026-10-15, plan S3.
+
+# docker/docker v28.5.2: no fixed release exists. Both are in the daemon's
+# plugin and AuthZ code, which the panel does not run; the SDK only imports
+# the packages. Remove when a fixed release is published and adopted.
+GO-2026-4887
+GO-2026-4883

@@ -1,0 +1,29 @@
+-- 0060: red leaves the environment colours (D-142). Red means failing, and a
+-- protected environment's chip is drawn neutral with the lock, so a new
+-- production is gray and protected, and the API refuses red with a 400 that
+-- names the colours left.
+--
+-- No schema change in this release (D-63: a CHECK only widens). The data
+-- step is in premigrate.sql: red environments become gray, keeping their
+-- protection. environments.color's CHECK still allows red, because the
+-- previous release (v0.33.x) writes red for every new production; after a
+-- rollback it keeps working, and the next upgrade turns those rows gray.
+--
+-- Next release, the contract step (the release note says it has one). An
+-- upgrade runs premigrate.sql, then Atlas, then contract.sql
+-- (cmd/toft/upgrade.go), so:
+--   - schema.sql's CHECK drops red, and Atlas tightens it;
+--   - premigrate.sql's red-to-gray step stays, since it runs before Atlas: a
+--     red row written while the upgrade ran (this release's predecessor
+--     still serving, or after a rollback) would otherwise fail the apply;
+--   - contract.sql records the step explicitly and idempotently:
+--       ALTER TABLE environments DROP CONSTRAINT IF EXISTS environments_color_check;
+--       ALTER TABLE environments ADD CONSTRAINT environments_color_check
+--           CHECK (color IN ('amber', 'violet', 'blue', 'teal', 'gray'));
+--     which finds Atlas's constraint already in place;
+--   - TestPremigrateTurnsRedEnvironmentsGray inserts red, so it inserts
+--     through a dropped CHECK or goes with the step.
+--
+-- Rollback: nothing to run; the previous release works on this data. Which
+-- environments were red is not kept: they stay gray (irreversible by design,
+-- red is no longer offered).

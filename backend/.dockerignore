@@ -1,0 +1,23 @@
+# ── Development artefacts ─────────────────────────────────────────
+tmp/
+.air-tmp/
+bin/
+server
+toft
+toft-agent
+
+# ── Tests & tooling ───────────────────────────────────────────────
+**/*_test.go
+.golangci.yml
+
+# ── Secrets ───────────────────────────────────────────────────────
+.env
+.env.*
+SECRETS.md
+.env.production
+
+# ── OS / editor ───────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.log

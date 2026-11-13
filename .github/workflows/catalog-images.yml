@@ -1,0 +1,26 @@
+# The catalog's images can vanish from their registries with no change here
+# (minio/minio did): ci.yml checks them on a push that can change them, this every day.
+name: catalog-images
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: catalog images (one a server can't pull anonymously, or without amd64 and arm64, fails)
+        run: ../scripts/check-catalog-images.sh

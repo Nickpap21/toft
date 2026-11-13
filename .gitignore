@@ -1,0 +1,91 @@
+# ── Secrets & env ─────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.production
+SECRETS.md
+secrets.md
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa
+id_ed25519
+*.asc
+
+# ── OS / editor ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+*.code-workspace
+
+# ── Go ────────────────────────────────────────────────────────────
+backend/vendor/
+backend/bin/
+backend/tmp/
+backend/.air-tmp/
+backend/server
+backend/toft-agent
+backend/toft
+
+# Local data dir (TOFT_DATA_DIR on macOS, see Makefile)
+.toft-data/
+
+# ── Node / Next.js ────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/tsconfig.tsbuildinfo
+
+# The docs site (Astro, docs/)
+docs/node_modules/
+docs/dist/
+docs/.astro/
+
+# ── Docker / infra ────────────────────────────────────────────────
+traefik/acme.json
+# toft upgrade's files, mounted into the backend on a checkout (D-68)
+.toft-upgrade/
+# Written by the backend from the panel's domain (D-62)
+traefik/dynamic/panel.yml
+traefik/logs/access.log
+docker-compose.override.yml
+
+# ── Deploy artefacts ──────────────────────────────────────────────
+backup.sql
+*.sql.bak
+
+# ── AI / tooling (local only) ─────────────────────────────────────
+.agent/
+.claude/
+traefikconfig
+# A maintainer's local agent notes (it imports AGENTS.md).
+CLAUDE.md
+/PRODUCT.md
+/.worktreeinclude
+
+# Ruflo / claude-flow local runtime state (session data, memory, logs, daemon pid)
+.claude-flow/
+.swarm/
+ruvector.db
+
+# Graphify local knowledge-graph cache (regenerable)
+graphify-out/
+backend/cmd/specgen/
+bin/
+
+# The release job's signed agents (D-106)
+backend/agent-dist/*
+!backend/agent-dist/README.md
+docs/HANDOFF.md
+
+# The founders' working notes: Nickpap21/toft-private, cloned here (D-127)
+private/

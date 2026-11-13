@@ -1,0 +1,42 @@
+---
+title: Toft
+description: Deploys, code, issues and docs, on servers you own.
+template: splash
+hero:
+  tagline: Deploys, code, issues and docs, on servers you own. One open-source install, built around your project.
+  actions:
+    - text: Install
+      link: /toft/install/
+      icon: right-arrow
+    - text: How it fits together
+      link: /toft/architecture/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/Nickpap21/toft
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+	<Card title="Deploy" icon="rocket">
+		From git, a Docker image or a Compose file. Blue/green switches after the
+		health check, previews for every pull request, and custom domains with
+		Let's Encrypt. [Deploys](/toft/guide/deploys/)
+	</Card>
+	<Card title="Servers" icon="laptop">
+		Add a server over SSH or with a small outbound agent. Each server runs its
+		own Traefik and keeps serving when the panel is down.
+		[Servers](/toft/guide/servers/)
+	</Card>
+	<Card title="Code, issues and docs" icon="document">
+		Git hosting with pull requests and checks, issues that move with your work,
+		and runbooks next to the service they're for.
+	</Card>
+	<Card title="Agents" icon="puzzle">
+		A built-in MCP server, so coding agents can deploy, read logs and open pull
+		requests, within a policy you set per project.
+		[MCP and agents](/toft/reference/mcp/)
+	</Card>
+</CardGrid>

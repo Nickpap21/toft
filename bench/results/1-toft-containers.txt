@@ -1,0 +1,10 @@
+paas-frontend 56.58MiB / 256MiB 0.00%
+paas-backend 18.52MiB / 1GiB 0.66%
+paas-traefik 16.63MiB / 256MiB 0.11%
+paas-git 3.035MiB / 1GiB 0.00%
+paas-postgres 91.18MiB / 512MiB 0.01%
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          6         4         1.369GB   64.44MB (4%)
+Containers      5         5         106.5kB   0B (0%)
+Local Volumes   5         5         78.36MB   0B (0%)
+Build Cache     0         0         0B        0B

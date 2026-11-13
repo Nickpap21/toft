@@ -1,0 +1,26 @@
+-- 0073: Add a server's join command loop (QA major #8). Loading
+-- /servers/new without ?server= made a join command on every re-render until
+-- the URL caught up: hundreds a visit, each with its own
+-- server.agent_token_created audit row. The page now makes one a visit, and
+-- a new join token deletes the server's unused older ones (no rows for
+-- commands that can never join).
+--
+-- No schema change. The data step is in premigrate.sql and runs only on a
+-- database from before v0.36.0 (while services.compose_network_service,
+-- 0075, is missing; never on a fresh install): it collapses each burst of
+-- server.agent_token_created rows to its first. A row goes when an earlier
+-- one has the same workspace, actor, server and action within the 60
+-- seconds before it; the rows are compared as they were before the step, so
+-- a burst of any length keeps only its first row, and visits more than a
+-- minute apart keep theirs. A rejoin command (metadata rejoin: true,
+-- password-confirmed, it replaces the pinned agent key) is never deleted and
+-- never counts as the earlier row. No other action is touched. The same step deletes the join tokens a loop left: each server
+-- keeps every used token (the waiting-server queries and
+-- LastJoinTokenCreator read them) and its newest unused one (the sweep's
+-- "last command expired" and token_expires_at read its expiry, the latest
+-- of the unused ones); older unused, expired ones can never join.
+--
+-- Rollback: nothing to run; the previous release works on this data. The
+-- deleted rows are not kept (irreversible by design: the audit rows record
+-- the same person making the same server's command again within a second,
+-- which the page did, not the person; the tokens could never join).

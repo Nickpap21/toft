@@ -1,0 +1,70 @@
+name: Bug report
+description: Something in Toft doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For a security vulnerability, stop here and [report it privately](https://github.com/Nickpap21/toft/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a service's Settings
+        2. Change …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Toft version
+      description: Instance → Overview in the panel shows it.
+      placeholder: v0.28.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Toft is installed
+      options:
+        - install.sh
+        - From source (make up)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Server OS and architecture
+      placeholder: Ubuntu 24.04, amd64
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How the affected server connects
+      options:
+        - The panel's own server
+        - SSH
+        - The agent
+        - Not server-related
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The deploy log, or `docker logs paas-backend`. Remove secrets and addresses first.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues and found none for this.
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Nickpap21/toft/security/advisories/new
+    about: Report it privately. Never open a public issue for a vulnerability.
+  - name: Ask a question
+    url: https://github.com/Nickpap21/toft/discussions/categories/q-a
+    about: Questions about installing or using Toft go to Discussions.

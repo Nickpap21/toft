@@ -1,0 +1,129 @@
+# The gate (private/plans/2026-10-15-security-performance-audit.md,
+# Plan S3): cheapest first, every step on every push and pull request.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # release.yml runs these first: a release is gated like every merge.
+  workflow_call:
+  # Daily, for the accessibility check's slowest pass (the frontend job).
+  schedule:
+    - cron: "41 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # The Postgres-backed tests (internal/testdb) run against make test-db's
+    # server; set here, they fail rather than skip when it doesn't answer.
+    env:
+      TOFT_TEST_DATABASE_URL: postgres://postgres:toft@127.0.0.1:55432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: pinned images (install.sh pulls no floating tag)
+        run: ../scripts/check-pinned-images-test.sh
+      - name: truncation-safe installers (a cut-off curl | sh runs nothing)
+        run: ../scripts/check-truncation-safe-test.sh
+      - name: gofmt
+        run: test -z "$(gofmt -l ./cmd ./internal ./pkg)"
+      - name: vet
+        run: go vet ./...
+      - name: start the test database (the image docker-compose.yml pins)
+        run: make -C .. test-db
+      - name: test
+        run: go test -race ./...
+      - name: govulncheck (reachable advisories not in backend/.govulnignore fail)
+        run: ../scripts/govulncheck.sh
+      - name: Docker advisories (one moby published that backend/internal/advisory/known.go lacks fails)
+        run: ../scripts/docker-advisories.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # Only when the change can alter what it checks: the anonymous manifest
+      # reads count against Docker Hub's pull limit. With no base to compare
+      # (a new tag, a release, a force push) it runs.
+      - name: catalog images (one a server can't pull anonymously, or without amd64 and arm64, fails; catalog-images.yml runs it daily)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$BASE" ] && git fetch -q --depth=1 origin "$BASE" 2>/dev/null &&
+            ! git diff --name-only "$BASE" HEAD -- internal/catalog internal/composespec cmd/catalog-images go.mod \
+              ../scripts/check-catalog-images.sh ../.github/workflows/ci.yml | grep -q .; then
+            echo "no change to the catalog or its check: skipped (catalog-images.yml checks it daily)"
+            exit 0
+          fi
+          ../scripts/check-catalog-images.sh
+      - name: build
+        run: CGO_ENABLED=0 go build ./cmd/...
+      # The node agent (D-106) runs on servers, amd64 and arm64: it must
+      # build for both and stay small (the panel streams it to each server).
+      - name: build the agent for servers
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "/tmp/toft-agent-$arch" ./cmd/toft-agent
+            size=$(stat -c %s "/tmp/toft-agent-$arch")
+            echo "toft-agent linux/$arch: $size bytes"
+            test "$size" -lt 25000000
+          done
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run lint:tokens
+      - run: npm run typecheck
+      - run: npm run api:types:check
+      - run: npm test
+      - name: npm audit (production dependencies, high and above)
+        run: npm audit --omit=dev --audit-level=high
+      # As the release image: the API on the panel's own origin (D-62).
+      - run: npm run build
+      # A page that fails axe, in Graphite or Paper, fails the build; so does a
+      # failed read drawn as empty (scripts/a11y-check). Failing each read alone
+      # is most of the step's time: a release and the daily run only.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run a11y -- ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/')) && '--each-read' || '' }}
+
+  # Every commit of a pull request is signed off (DCO, CONTRIBUTING.md).
+  # Dependabot signs its commits off too.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          commits=$(git rev-list --no-merges "$BASE..$HEAD") || exit 1
+          fail=0
+          for c in $commits; do
+            git show -s --format=%B "$c" | grep -Eq '^Signed-off-by: .+ <.+>$' && continue
+            echo "::error::$(git show -s --format='%h %s' "$c") is not signed off: git rebase --signoff $BASE"
+            fail=1
+          done
+          exit $fail

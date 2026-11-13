@@ -1,0 +1,62 @@
+{
+  "platform": "coolify",
+  "round": "3",
+  "os": [
+    24.04
+  ],
+  "cpus": [
+    2
+  ],
+  "mem_total_kib": [
+    3911564
+  ],
+  "version": [
+    "4.5.3"
+  ],
+  "install_s": [
+    141.0
+  ],
+  "idle_mem_mib": [
+    670
+  ],
+  "idle_cpu_pct": [
+    12.00
+  ],
+  "disk_mib": [
+    3195
+  ],
+  "first_image_s": [
+    10.4
+  ],
+  "redeploy_image_s": [
+    15.0,
+    14.2,
+    15.0,
+    11.9,
+    10.4
+  ],
+  "redeploy_image_down_s": [
+    3,
+    3,
+    3,
+    3,
+    3
+  ],
+  "first_git_s": [
+    75.8
+  ],
+  "redeploy_git_s": [
+    13.3,
+    14.7,
+    12.6,
+    24.0,
+    11.1
+  ],
+  "redeploy_git_down_s": [
+    3,
+    3,
+    3,
+    3,
+    3
+  ]
+}

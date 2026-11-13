@@ -1,0 +1,11 @@
+package: apiclient
+generate:
+  models: true
+  client: false
+output: client.gen.go
+output-options:
+  skip-prune: true
+  # A webhook delivery's payload is one of three (oneOf), which needs
+  # oapi-codegen's runtime package; the CLI never reads a delivery.
+  exclude-schemas:
+    - WebhookDeliveryDetail

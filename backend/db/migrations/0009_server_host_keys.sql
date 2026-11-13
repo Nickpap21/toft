@@ -1,0 +1,28 @@
+-- SSH host-key pinning, trust on first use (D-19, work package D).
+--
+-- 0007 is instance operators (package A) and 0008 the deploy policy (package
+-- B), so this is 0009. As with the other numbered files, schema.sql is the
+-- source of truth and Atlas applies the diff; this file documents the change.
+--
+-- Additive only: two nullable columns and no backfill. NULL means "not pinned
+-- yet": the next successful SSH connection to the server, by any path (test
+-- connection, provision, deploy, metrics, the 5-minute health poll), stores
+-- the host key the server presented, and every later connection must present
+-- that key or fails before any credential is sent. Existing servers are
+-- pinned within minutes of the upgrade. Rolling the binary back is safe:
+-- older code ignores both columns.
+--
+-- host_key is the public key in authorized_keys form ("ssh-ed25519 AAAA...").
+-- It is not secret, so it is not encrypted; the API returns only its type and
+-- SHA256 fingerprint. Only an instance operator replaces it, through
+-- Servers -> <server> -> SSH host key (PUT /api/v1/servers/:serverID/host-key),
+-- which re-checks the fingerprint the operator confirmed.
+--
+-- Break-glass, when the UI cannot be used: clearing the pin re-arms trust on
+-- first use, so the next connection trusts whatever key answers. Prefer the
+-- operator reset, which checks the fingerprint.
+--   UPDATE servers SET host_key = NULL, host_key_pinned_at = NULL WHERE id = '<server id>';
+--
+-- Reversible: ALTER TABLE servers DROP COLUMN host_key, DROP COLUMN host_key_pinned_at;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS host_key           TEXT,
+                    ADD COLUMN IF NOT EXISTS host_key_pinned_at TIMESTAMPTZ;

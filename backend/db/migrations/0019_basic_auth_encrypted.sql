@@ -1,0 +1,18 @@
+-- Basic auth passwords encrypted at rest (README §7).
+--
+-- As with the other numbered files, schema.sql is the source of truth and
+-- Atlas applies the diff; this file documents the change.
+--
+-- No schema change: services.basic_auth_password keeps its type and default,
+-- and now holds the password encrypted with ENCRYPTION_KEY, as
+-- registry_password and git_token do. The data change is made by the backend,
+-- not by SQL (AES-GCM, pkg/crypto): at every start it encrypts the values
+-- still in plain text, and reads accept both, so a value saved by an older
+-- backend after a rollback is encrypted at the next start.
+--
+-- Rollback: before starting a backend from before 0019, store them in plain
+-- text again with the backend being replaced, then swap the images at once:
+--   docker exec paas-backend ./server basic-auth-plaintext
+-- An older backend that reads an encrypted value uses it as the password: the
+-- service's next deploy sets it, and the real password gets 401 until an owner
+-- enters it again and deploys.

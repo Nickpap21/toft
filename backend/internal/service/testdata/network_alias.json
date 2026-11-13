@@ -1,0 +1,9 @@
+[
+  { "name": "whoami", "environment": "qa", "alias": "whoami-qa" },
+  { "name": "web", "environment": "production", "alias": "web-production" },
+  { "name": "My API", "environment": "Staging EU", "alias": "my-api-staging-eu" },
+  { "name": "api", "environment": "", "alias": "api" },
+  { "name": "--Web__App--", "environment": "", "alias": "web-app" },
+  { "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "environment": "qa", "alias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  { "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "environment": "qa", "alias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+]

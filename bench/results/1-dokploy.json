@@ -1,0 +1,62 @@
+{
+  "platform": "dokploy",
+  "round": "1",
+  "os": [
+    24.04
+  ],
+  "cpus": [
+    2
+  ],
+  "mem_total_kib": [
+    3911572
+  ],
+  "version": [
+    "v0.30.10"
+  ],
+  "install_s": [
+    225.8
+  ],
+  "idle_mem_mib": [
+    1027
+  ],
+  "idle_cpu_pct": [
+    0.96
+  ],
+  "disk_mib": [
+    5031
+  ],
+  "first_image_s": [
+    5.8
+  ],
+  "redeploy_image_s": [
+    5.8,
+    6.3,
+    6.3,
+    6.4,
+    6.7
+  ],
+  "redeploy_image_down_s": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "first_git_s": [
+    63.0
+  ],
+  "redeploy_git_s": [
+    57.3,
+    55.9,
+    55.9,
+    57.5,
+    57.0
+  ],
+  "redeploy_git_down_s": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

@@ -1,0 +1,68 @@
+# Umami 3 with PostgreSQL (Toft catalog, D-147), after umami-software/umami
+# v3.4.1's docker-compose.yml.
+services:
+  db:
+    image: postgres:17.11-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: umami
+      POSTGRES_USER: umami
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U umami -d umami"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+
+  umami:
+    image: ghcr.io/umami-software/umami:3.4.1@sha256:e69d1a7932e9dab0fc523edc7be1f3a53f3c261f57856fc2167ae74a8fc022e8
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://umami:${POSTGRES_PASSWORD}@db:5432/umami
+      APP_SECRET: ${APP_SECRET}
+      TWO_FACTOR_ENCRYPTION_KEY: ${TWO_FACTOR_ENCRYPTION_KEY}
+    mem_limit: 512m
+
+  # Umami creates admin/umami at its first start and reads no variable for
+  # it. This waits for that account and sets UMAMI_ADMIN_PASSWORD on it, only
+  # while its password is still umami: one changed in Umami stays on a
+  # redeploy. Umami's hash is $2b$, which pgcrypto reads as $2a$. Exits 0;
+  # exits 1 (an alert) when the account never appears or the password is
+  # empty, before any statement could carry it into the database's log.
+  admin-password:
+    image: postgres:17.11-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    restart: "no"
+    depends_on:
+      umami:
+        condition: service_started
+    environment:
+      PGHOST: db
+      PGUSER: umami
+      PGDATABASE: umami
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      # A failing statement isn't logged: it would hold the password.
+      PGOPTIONS: -c log_min_error_statement=panic
+      UMAMI_ADMIN_PASSWORD: ${UMAMI_ADMIN_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        [ -n "$$UMAMI_ADMIN_PASSWORD" ] || exit 1
+        seen=
+        for i in $$(seq 150); do psql -tAc "SELECT 1 FROM \"user\" WHERE username = 'admin'" 2>/dev/null | grep -q 1 && seen=1 && break; sleep 2; done
+        [ -n "$$seen" ] || exit 1
+        psql -v ON_ERROR_STOP=1 -v pw="$$UMAMI_ADMIN_PASSWORD" <<'SQL'
+        CREATE EXTENSION IF NOT EXISTS pgcrypto;
+        UPDATE "user" SET password = crypt(:'pw', gen_salt('bf', 10)) WHERE username = 'admin' AND crypt('umami', '$$2a$$' || substr(password, 5)) = '$$2a$$' || substr(password, 5);
+        SQL
+    mem_limit: 64m
+
+volumes:
+  db-data:

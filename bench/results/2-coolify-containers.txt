@@ -1,0 +1,11 @@
+coolify-proxy-error-pages 348KiB / 3.73GiB 0.00%
+coolify-proxy 40MiB / 3.73GiB 5.55%
+coolify-sentinel 4.758MiB / 3.73GiB 0.12%
+coolify 402.9MiB / 3.73GiB 0.77%
+coolify-db 37.18MiB / 3.73GiB 0.00%
+coolify-redis 5.312MiB / 3.73GiB 1.24%
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          7         6         2.395GB   689.2MB (28%)
+Containers      6         6         15.07MB   0B (0%)
+Local Volumes   2         2         72.29MB   0B (0%)
+Build Cache     0         0         0B        0B

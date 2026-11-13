@@ -1,0 +1,16 @@
+# Loads /etc/toft/firewall.nft at boot (D-37). Docker does not depend on
+# it: if loading fails, Docker still starts (fail-open), and the provision
+# log and scripts/host-firewall-check.sh show it. There is no ExecStop, so a
+# restart replaces the table without a gap.
+[Unit]
+Description=Toft: what app containers may reach on this host
+After=nftables.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/toft/firewall.nft
+
+[Install]
+WantedBy=multi-user.target

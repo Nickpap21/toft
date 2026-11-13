@@ -1,0 +1,26 @@
+# ── Build cache / output ──────────────────────────────────────────
+.next/
+out/
+.turbo/
+
+# ── Dependencies (installed fresh in Docker) ──────────────────────
+node_modules/
+
+# ── Secrets ───────────────────────────────────────────────────────
+.env
+.env.*
+SECRETS.md
+.env.production
+
+# ── Dev tooling ───────────────────────────────────────────────────
+tsconfig.tsbuildinfo
+*.log
+
+# ── OS / editor ───────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+README.md
+AGENTS.md
+.shots/
+scripts/a11y-check/

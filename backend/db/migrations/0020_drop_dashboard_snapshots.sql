@@ -1,0 +1,29 @@
+-- Drop dashboard_snapshots (added in 0004).
+--
+-- As with the other numbered files, schema.sql is the source of truth and
+-- Atlas applies the diff; this file documents the change.
+--
+-- An hourly job wrote each workspace's counts here (services running and
+-- failed, servers online) so the old dashboard could show changes against a
+-- day before. Home, rebuilt to the Main board on 2026-10-13, has no such
+-- deltas, so nothing reads it; the job is removed with it.
+--
+-- Irreversible for the data: the hourly counts are deleted. Nothing uses
+-- them; incident history comes from the alerts table. A backend from before
+-- this release writes a row every hour and logs "insert failed" while the
+-- table is gone, which is harmless; Atlas with an older schema.sql
+-- recreates it, empty.
+--
+-- Rollback (the table, empty):
+--   CREATE TABLE IF NOT EXISTS dashboard_snapshots (
+--       id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+--       org_id           UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+--       services_running INT         NOT NULL,
+--       services_failed  INT         NOT NULL,
+--       servers_online   INT         NOT NULL,
+--       servers_total    INT         NOT NULL,
+--       captured_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+--   );
+--   CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_org_captured ON dashboard_snapshots(org_id, captured_at DESC);
+
+DROP TABLE IF EXISTS dashboard_snapshots;

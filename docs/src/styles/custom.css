@@ -1,0 +1,19 @@
+/* Toft's default theme pair (DESIGN.md: Graphite dark, Paper light). */
+:root {
+	--sl-color-accent-low: #23215a;
+	--sl-color-accent: #4f46e5;
+	--sl-color-accent-high: #a9a6f2;
+	--sl-color-black: #0c0d10;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #e3e1f7;
+	--sl-color-accent: #4338ca;
+	--sl-color-accent-high: #312a96;
+	--sl-color-black: #f6f5f1;
+}
+
+/* CHANGELOG.md and ROADMAP.md carry their own h1 for GitHub; the page title replaces it. */
+.from-root > h1:first-child {
+	display: none;
+}

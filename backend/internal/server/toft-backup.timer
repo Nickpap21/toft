@@ -1,0 +1,12 @@
+# Checks every 15 minutes whether today's backup is due (toft-backup.service).
+# The time itself lives in the backup's env file, which the panel writes, so
+# a new time needs no systemctl.
+[Unit]
+Description=Toft: start the daily backup when it is due
+
+[Timer]
+OnCalendar=*:0/15
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

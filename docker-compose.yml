@@ -1,0 +1,267 @@
+
+networks:
+  # The control plane's network: Traefik, the backend and the frontend.
+  # Under TOFT_APP_NETWORKS=isolated apps never join it; each environment
+  # gets its own network, which Traefik is connected to (D-19, D-26).
+  paas-network:
+    external: true
+  # Postgres's network, shared only with the backend and the Atlas runs
+  # (make migrate, toft upgrade). Internal: no route out, and Traefik, which
+  # joins every app network, is not on it (D-31).
+  paas-internal:
+    name: paas-internal
+    internal: true
+
+# Every panel container's log is capped as every app's is
+# (rollout.LocalLogConfig): Docker's default json-file driver keeps all of it.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  traefik:
+    image: traefik:v3.6.10@sha256:c549d482c55d7a797398562064f35428cc53e748d84d7190997930e7b31bcc32
+    container_name: paas-traefik
+    restart: unless-stopped
+    environment:
+      # Pin Docker API version for compatibility — matches Docker CE 24+
+      DOCKER_API_VERSION: "1.44"
+    command:
+      # ── API / Dashboard ───────────────────────────────────────────────────────
+      - "--api.dashboard=true"
+      # api.insecure omitted: it would serve the API to every network Traefik
+      # sits on. The dashboard is routed on traefik.<domain> with basic auth,
+      # and on this entrypoint for the loopback port, control plane only.
+      - "--entrypoints.dashboard.address=:8080"
+
+      # ── Docker provider ───────────────────────────────────────────────────────
+      - "--providers.docker=true"
+      - "--providers.docker.network=paas-network"
+      - "--providers.docker.exposedByDefault=false"
+
+      # ── Entrypoints ───────────────────────────────────────────────────────────
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      # The catch-all redirect at the lowest priority: a service's own HTTP
+      # router wins, which redirects too, except a temporary sslip.io name's
+      # while its certificate is pending (D-150).
+      - "--entrypoints.web.http.redirections.entrypoint.priority=1"
+      - "--entrypoints.websecure.address=:443"
+      # A request body may take 30 minutes to arrive, not Traefik's 60 s, so
+      # a large git push over HTTPS isn't cut (D-71). Apps on this server
+      # get the same; remote servers' Traefik keeps 60 s.
+      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=30m"
+      # Metrics on a dedicated loopback-only port (scraped by Prometheus or viewed via SSH tunnel)
+      - "--entrypoints.metrics.address=:9100"
+      # Ping on its own entrypoint, bound to the container's loopback: only the
+      # health check inside the container reaches it, never an app network
+      # (Traefik sits on every app network, D-31).
+      - "--entrypoints.ping.address=127.0.0.1:8082"
+
+      # ── TLS / ACME ────────────────────────────────────────────────────────────
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+
+      # ── Ping (the health check's endpoint) ────────────────────────────────────
+      # Not routed by a label: Traefik ignores the labels of a container that
+      # is not healthy, its own included, so a ping router on this container
+      # could never load and the container stayed unhealthy (and with it the
+      # metrics and dashboard routers below).
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+
+      # ── Logging ───────────────────────────────────────────────────────────────
+      - "--log.level=INFO"
+      - "--log.format=json"
+
+      # ── Access logs ───────────────────────────────────────────────────────────
+      # To the container's log, capped by `logging` below.
+      # View live on the server: docker logs -f paas-traefik
+      - "--accesslog=true"
+      - "--accesslog.bufferingsize=100"
+
+      # ── File provider: shared middlewares and the panel's own routes ─────────
+      # traefik/dynamic: dynamic.yml holds the middlewares every router uses
+      # as `name@file`; panel.yml, written by the backend from the panel's
+      # domain, routes the web app and /api (D-62). A directory, so the
+      # backend's write-then-rename reaches Traefik without a restart.
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+
+      # ── Prometheus metrics ────────────────────────────────────────────────────
+      # Scraped at http://localhost:9100/metrics (loopback only — see ports below).
+      # Dashboard → HTTP Metrics panel reads these automatically.
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entryPoint=metrics"
+      # hoststats.LatencyBounds, as every remote Traefik's: the backend reads
+      # each service's p95 from them (D-156; cmd/toft/panelcompose_test.go).
+      - "--metrics.prometheus.buckets=0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10"
+      - "--metrics.prometheus.addEntryPointsLabels=true"
+      - "--metrics.prometheus.addRoutersLabels=true"
+      - "--metrics.prometheus.addServicesLabels=true"
+      # Routed by the toft-metrics router below, restricted to the control
+      # plane: app networks cannot scrape router and service names (D-31).
+      - "--metrics.prometheus.manualrouting=true"
+
+    ports:
+      - "80:80"
+      - "443:443"
+      # Dashboard raw port — loopback only. SSH tunnel: ssh -L 8081:localhost:8081 root@<server>
+      - "127.0.0.1:8081:8080"
+      # Prometheus metrics — loopback only. SSH tunnel: ssh -L 9100:localhost:9100 root@<server>
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "traefik-certs:/letsencrypt"
+      # TOFT_TRAEFIK_DIR: on an installed panel /var/lib/toft/traefik, outside
+      # the releases, which a container would bind by their real path (D-65).
+      - "${TOFT_TRAEFIK_DIR:-./traefik}/dynamic:/etc/traefik/dynamic:ro"
+    # The access log and Traefik's own.
+    logging: *logging
+    networks:
+      - paas-network
+    healthcheck:
+      # The same ping entrypoint as in command (the healthcheck subcommand
+      # does not read the container's flags).
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=ping", "--entrypoints.ping.address=127.0.0.1:8082"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    labels:
+      - "traefik.enable=true"
+      # The dashboard's router (traefik.<the panel's domain>) is in the panel's
+      # routes file, written by the backend only while the panel has a domain
+      # and TRAEFIK_DASHBOARD_USERS is set (D-62).
+      # ── Basic-auth middleware (scoped to this container — fine as docker label) ─
+      # Generate the hash:  htpasswd -nB admin. In the env file, single-quote
+      # the value: compose reads an unquoted $ there as a variable.
+      - "traefik.http.middlewares.dashboard-auth.basicauth.users=${TRAEFIK_DASHBOARD_USERS}"
+      # secure-headers and redirect-to-https are defined in traefik/dynamic/dynamic.yml (file provider)
+      # and referenced below as @file — avoids cross-container Docker label resolution issues.
+      # ── Metrics, control plane only (D-31) ────────────────────────────────────
+      # Loopback, and the control plane's network (TOFT_CONTROL_PLANE_SUBNET,
+      # set by `make up`, install.sh and toft upgrade from paas-network's subnet; requests
+      # through the loopback-published ports arrive from its gateway). App
+      # networks get 403.
+      - "traefik.http.middlewares.toft-control-plane-only.ipallowlist.sourcerange=127.0.0.1/32,::1/128,${TOFT_CONTROL_PLANE_SUBNET:-127.0.0.1/32}"
+      - "traefik.http.routers.toft-metrics.rule=PathPrefix(`/metrics`)"
+      - "traefik.http.routers.toft-metrics.entrypoints=metrics"
+      - "traefik.http.routers.toft-metrics.service=prometheus@internal"
+      - "traefik.http.routers.toft-metrics.middlewares=toft-control-plane-only"
+      # The dashboard on the loopback port (127.0.0.1:8081), control plane only.
+      - "traefik.http.routers.toft-dashboard-local.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.toft-dashboard-local.entrypoints=dashboard"
+      - "traefik.http.routers.toft-dashboard-local.service=api@internal"
+      - "traefik.http.routers.toft-dashboard-local.middlewares=toft-control-plane-only"
+
+  postgres:
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+    container_name: paas-postgres
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # -h: over TCP, which the image's setup server doesn't listen on.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not on paas-network: only the backend and Atlas reach it (D-31).
+    networks:
+      - paas-internal
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  backend:
+    image: ghcr.io/${GHCR_USER:-local}/paas-backend:${IMAGE_TAG:-latest}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      # The release bundle's files outside backend/ (.dockerignore, D-61).
+      additional_contexts:
+        bundle: .
+    container_name: paas-backend
+    logging: *logging
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TOFT_DATA_DIR: ${TOFT_DATA_DIR:-/var/paas}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      # Files apps on this server bind-mount (config files, compose releases).
+      # Same path inside and out: Docker reads bind-mount sources on the host.
+      - "${TOFT_DATA_DIR:-/var/paas}:${TOFT_DATA_DIR:-/var/paas}"
+      # Clones and build contexts (paas-build-*, paas-infra-*) go here, not
+      # into the container's writable layer.
+      - "backend-tmp:/tmp"
+      # The panel's routes (panel.yml), which Traefik reads (D-62). Traefik
+      # routes the panel by them, so neither container carries router labels.
+      - "${TOFT_TRAEFIK_DIR:-./traefik}/dynamic:/etc/toft/traefik"
+      # toft upgrade's files (D-68), read-only: the panel follows an upgrade
+      # and the daily release check, which run on the host. Empty on a
+      # deploy.sh install, which upgrades with deploy.sh.
+      - "${TOFT_UPGRADE_DIR:-./.toft-upgrade}:/var/lib/toft/upgrade:ro"
+    # In production Traefik handles ingress — no host port needed.
+    # For local dev the port is still reachable via localhost:8080.
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    networks:
+      - paas-network
+      - paas-internal
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G # TOFT_MAX_CONCURRENT_BUILDS (default 2) clones and builds run in here
+
+  frontend:
+    image: ghcr.io/${GHCR_USER:-local}/paas-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: paas-frontend
+    logging: *logging
+    restart: unless-stopped
+    # No env_file: .env holds the backend's secrets (JWT_SECRET,
+    # ENCRYPTION_KEY, the database's password) and the frontend reads none of
+    # them; NEXT_PUBLIC_API_URL is inlined at build time.
+    environment:
+      - PORT=3000
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - paas-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+volumes:
+  postgres-data:
+  traefik-certs:
+  backend-tmp:

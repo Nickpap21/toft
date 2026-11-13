@@ -1,0 +1,135 @@
+/* The repository browser (D-73): Shiki's css-variables theme on the theme's
+   tokens, so every one of the six themes colours code, and markdown from a
+   repository, rendered and sanitised on the server. */
+
+:root {
+  --shiki-foreground: var(--text);
+  --shiki-background: transparent;
+  --shiki-token-keyword: var(--link);
+  --shiki-token-string: var(--status-running);
+  --shiki-token-string-expression: var(--status-running);
+  --shiki-token-constant: var(--status-pending);
+  --shiki-token-function: var(--status-building);
+  --shiki-token-comment: var(--muted);
+  --shiki-token-parameter: var(--text);
+  --shiki-token-punctuation: color-mix(in oklab, var(--text) 75%, var(--muted));
+  --shiki-token-link: var(--link);
+  --shiki-token-inserted: var(--status-running);
+  --shiki-token-deleted: var(--status-failed);
+  --shiki-token-changed: var(--status-pending);
+}
+
+.toft-md {
+  overflow-x: auto;
+  font-size: 15px;
+  line-height: 24px;
+  color: color-mix(in oklab, var(--text) 85%, var(--muted));
+  overflow-wrap: anywhere;
+}
+.toft-md > * + * { margin-top: 14px; }
+.toft-md h1, .toft-md h2, .toft-md h3, .toft-md h4, .toft-md h5, .toft-md h6 {
+  color: var(--text);
+  font-weight: 600;
+  scroll-margin-top: 16px;
+}
+.toft-md h1 { font-size: 24px; line-height: 32px; letter-spacing: -0.015em; }
+.toft-md h2 { font-size: 17px; line-height: 26px; }
+.toft-md h3 { font-size: 15px; line-height: 22px; }
+.toft-md h4, .toft-md h5, .toft-md h6 { font-size: 14px; line-height: 20px; }
+.toft-md * + h1, .toft-md * + h2, .toft-md * + h3 { margin-top: 20px; }
+.toft-md a { @apply inline-link; }
+.toft-md strong { color: var(--text); font-weight: 600; }
+.toft-md ul { list-style: disc; padding-left: 24px; }
+.toft-md ol { list-style: decimal; padding-left: 24px; }
+.toft-md li + li { margin-top: 4px; }
+.toft-md li > ul, .toft-md li > ol { margin-top: 4px; }
+.toft-md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
+.toft-md input[type="checkbox"] { margin-right: 6px; vertical-align: -1px; }
+.toft-md code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.toft-md pre {
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 21px;
+}
+.toft-md pre code { padding: 0; background: none; font-size: inherit; }
+.toft-md blockquote { padding-left: 14px; border-left: 3px solid var(--border); color: var(--muted); }
+.toft-md hr { border: 0; border-top: 1px solid var(--border); }
+.toft-md table {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+}
+.toft-md th, .toft-md td { padding: 8px 12px; text-align: left; overflow-wrap: normal; }
+.toft-md td { border-top: 1px solid var(--border); }
+.toft-md th { color: var(--muted); font-size: 12px; font-weight: 500; }
+.toft-md img { max-width: 100%; display: inline; }
+.toft-md del { color: var(--muted); }
+
+/* A doc page (D-86, board: Docs): its reading size, notes and checklists.
+   The page's blocks sit between these pieces, 18px apart. */
+.toft-doc { overflow-x: visible; color: color-mix(in oklab, var(--text) 80%, var(--muted)); }
+.toft-doc > * + * { margin-top: 18px; }
+.toft-doc h2 { font-size: 19px; line-height: 28px; scroll-margin-top: 24px; }
+.toft-doc * + h2 { margin-top: 30px; }
+.toft-doc > h2:first-child { margin-top: 12px; }
+.toft-doc h3 { font-size: 16px; line-height: 24px; }
+.toft-doc ul:has(> li > .toft-task) { padding-left: 0; display: flex; flex-direction: column; gap: 4px; }
+.toft-doc li:has(> .toft-task) { position: relative; min-height: 36px; margin: 0; padding: 6px 0 6px 26px; list-style: none; }
+.toft-doc li + li:has(> .toft-task) { margin-top: 0; }
+.toft-doc li > .toft-task > input[type="checkbox"] { position: absolute; left: 0; top: 10px; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.toft-doc blockquote[data-toft-note] {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: color-mix(in oklab, var(--text) 80%, var(--muted));
+  font-size: 14px;
+  line-height: 22px;
+}
+.toft-doc blockquote[data-toft-note]::before {
+  content: "";
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  background: var(--status-building);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0M12 16v-4M12 8h.01'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.toft-doc blockquote[data-toft-note="warning"]::before,
+.toft-doc blockquote[data-toft-note="caution"]::before { background: var(--status-pending); }
+.toft-doc blockquote[data-toft-note="caution"]::before { background: var(--status-failed); }
+.toft-doc blockquote[data-toft-note="tip"]::before { background: var(--status-running); }
+.toft-doc blockquote[data-toft-note] > * { grid-column: 2; }
+.toft-doc blockquote[data-toft-note] > * + * { margin-top: 8px; }
+.toft-doc blockquote[data-toft-note] code { font-size: 13px; }
+
+/* The editor's checklists (TipTap's task list) and notes. */
+.toft-editor ul[data-type="taskList"] { list-style: none; padding-left: 0; display: flex; flex-direction: column; gap: 4px; }
+.toft-editor ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 10px; min-height: 36px; padding: 6px 0; margin: 0; }
+.toft-editor ul[data-type="taskList"] li > label { flex: none; margin-top: 4px; }
+.toft-editor ul[data-type="taskList"] li > div { flex: 1; min-width: 0; }
+.toft-editor ul[data-type="taskList"] input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.toft-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--muted); pointer-events: none; }
+.toft-editor:focus { outline: none; }
+
+/* A mention (D-88): the person, not a link anywhere. */
+.toft-md a[data-toft-user] { color: var(--link); text-decoration: none; font-weight: 500; pointer-events: none; }

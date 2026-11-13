@@ -1,0 +1,228 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+@import "../styles/tokens.css";
+@import "../styles/code.css";
+
+/* The desktop sidebar rail when collapsed: as chosen, and by default from
+   768 to 1199 px, where it is icons only unless expanded (D-136). Scoped to
+   [data-rail] so the mobile navigation sheet always renders expanded. */
+@custom-variant rail-collapsed {
+  &:where([data-sidebar="collapsed"] [data-rail], [data-sidebar="collapsed"] [data-rail] *) {
+    @slot;
+  }
+  @media (width < 1200px) {
+    &:where(:root:not([data-sidebar="expanded"]) [data-rail], :root:not([data-sidebar="expanded"]) [data-rail] *) {
+      @slot;
+    }
+  }
+}
+@custom-variant theme-contrast (&:where([data-theme="contrast"], [data-theme="contrast"] *));
+
+/* 44 px touch targets on touch screens (DESIGN.md → Layout): the shared
+   buttons and inputs carry it (settings-frame, components/ui), so pages
+   don't. min-height, so the desktop height stays as each style sets it. */
+@utility touch-target {
+  @media (pointer: coarse) {
+    min-height: 44px;
+  }
+}
+
+/* iOS Safari zooms the page when a field under 16 px takes focus. The one
+   size off the type scale (DESIGN.md → Typography), at phone width only. */
+@utility phone-input {
+  @media (width < 48rem) {
+    font-size: 16px;
+  }
+}
+
+/* A link inside a sentence: colour alone can't tell it from the words around
+   it, red error text included (WCAG 1.4.1), so it is underlined at rest. A
+   link standing alone, a row's title or a button doesn't use this. */
+@utility inline-link {
+  color: var(--link);
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+  @variant hover {
+    color: var(--text);
+  }
+}
+
+/* inline: the values are runtime variables that change per theme. */
+@theme inline {
+    --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --color-ground: var(--ground);
+    --color-surface: var(--surface);
+    --color-raised: var(--raised);
+    --color-subtle: var(--border);
+    --color-strong: var(--border-strong);
+    --color-fg: var(--text);
+    --color-muted: var(--muted);
+    --color-accent: var(--accent);
+    --color-on-accent: var(--on-accent);
+    --color-accent-soft: var(--accent-soft);
+    --color-selected: var(--selected);
+    --color-link: var(--link);
+    --color-focus: var(--focus-ring);
+    --color-danger: var(--danger);
+    --color-on-danger: var(--on-danger);
+    --color-scrim: var(--scrim);
+    --shadow-dialog: var(--elevation-dialog);
+    --shadow-menu: var(--elevation-menu);
+
+    --color-status-running: var(--status-running);
+    --color-status-building: var(--status-building);
+    --color-status-pending: var(--status-pending);
+    --color-status-failed: var(--status-failed);
+    --color-status-running-soft: var(--status-running-soft);
+    --color-status-building-soft: var(--status-building-soft);
+    --color-status-pending-soft: var(--status-pending-soft);
+    --color-status-failed-soft: var(--status-failed-soft);
+    --color-status-running-fg: var(--status-running-fg);
+    --color-status-building-fg: var(--status-building-fg);
+    --color-status-pending-fg: var(--status-pending-fg);
+    --color-status-failed-fg: var(--status-failed-fg);
+    --color-env-amber: var(--env-amber);
+    --color-env-violet: var(--env-violet);
+    --color-env-blue: var(--env-blue);
+    --color-env-teal: var(--env-teal);
+    --color-env-gray: var(--env-gray);
+    --color-env-amber-soft: var(--env-amber-soft);
+    --color-env-violet-soft: var(--env-violet-soft);
+    --color-env-blue-soft: var(--env-blue-soft);
+    --color-env-teal-soft: var(--env-teal-soft);
+    --color-env-gray-soft: var(--env-gray-soft);
+    --color-env-amber-fg: var(--env-amber-fg);
+    --color-env-violet-fg: var(--env-violet-fg);
+    --color-env-blue-fg: var(--env-blue-fg);
+    --color-env-teal-fg: var(--env-teal-fg);
+    --color-env-gray-fg: var(--env-gray-fg);
+    --color-env-protected: var(--env-protected);
+    --color-env-protected-soft: var(--env-protected-soft);
+    --color-env-protected-fg: var(--env-protected-fg);
+    --color-env-protected-ring: var(--env-protected-ring);
+    --color-type-gray: var(--type-gray);
+    --color-type-blue: var(--type-blue);
+    --color-type-red: var(--type-red);
+    --color-type-green: var(--type-green);
+    --color-type-amber: var(--type-amber);
+    --color-type-violet: var(--type-violet);
+    --color-type-teal: var(--type-teal);
+}
+
+@layer base {
+
+    *,
+    ::after,
+    ::before,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: var(--border, currentColor);
+    }
+
+    /* A visually hidden header is absolutely positioned. Without a containing
+       block here it escapes a table's overflow-x-auto wrapper and stretches
+       <main> sideways. In base, so utilities such as sticky still win. */
+    th {
+        position: relative;
+    }
+
+    html {
+        background-color: var(--ground);
+        color: var(--text);
+        /* Native checked controls must reach 3:1: Graphite's accent doesn't. */
+        accent-color: var(--link);
+        font-family: var(--font-sans);
+        /* Only <main> scrolls; a trackpad swipe over the rail or top bar
+           lands on the root, which Safari rubber-bands even with nothing to
+           scroll. Vertical only: x keeps swipe-to-go-back. */
+        overscroll-behavior-y: none;
+    }
+
+    /* Where every in-page anchor lands: 24 px under <main>'s top, and clear
+       of the sticky Jump to bar on pages that have one (below 1200 px; the
+       bar is 53 px, 61 on touch). The one offset, so anchors carry none. */
+    #main {
+        scroll-padding-top: 1.5rem;
+    }
+    @media (width < 1200px) {
+        #main:has([data-jump-bar]) {
+            scroll-padding-top: 5rem;
+        }
+    }
+
+    ::selection {
+        background-color: color-mix(in oklab, var(--accent) 35%, transparent);
+    }
+
+    /* One visible focus indicator everywhere (WCAG 2.4.7). */
+    :focus-visible {
+        outline: var(--focus-width) solid var(--focus-ring);
+        outline-offset: 2px;
+    }
+
+    /* Contrast's yellow ring wins over legacy `focus-visible:outline-none`. */
+    [data-theme="contrast"] :focus-visible {
+        outline: 2px solid var(--focus-ring) !important;
+        outline-offset: 2px !important;
+    }
+
+    /* A block flush inside a parent that clips draws its ring inside itself. */
+    .focus-inset:focus-visible {
+        outline-offset: calc(var(--focus-width) * -1) !important;
+    }
+
+    /* Set for a moment while switching themes, so colours don't animate. */
+    [data-theme-switching] *,
+    [data-theme-switching] *::before,
+    [data-theme-switching] *::after {
+        transition: none !important;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+        }
+    }
+}
+
+/* Muted text inside a selected item keeps 4.5:1 on the selected tint
+   (DESIGN.md → State). Unlayered, so it wins over the utilities. */
+.bg-selected :is(.text-muted, .text-fg\/70),
+.bg-selected:is(.text-muted, .text-fg\/70) {
+    color: var(--selected-muted);
+}
+
+/* Motion (D-50): only what opens and closes over the page. Radix marks open
+   and closed with data-state and waits for the closing animation before it
+   unmounts. Translate centres dialogs, so they scale; menus and the phone
+   navigation move with translate. Reduced motion stops all of it (above). */
+@keyframes toft-fade-in { from { opacity: 0; } }
+@keyframes toft-fade-out { to { opacity: 0; } }
+@keyframes toft-pop-in { from { opacity: 0; scale: 0.97; } }
+@keyframes toft-pop-out { to { opacity: 0; scale: 0.97; } }
+@keyframes toft-menu-in { from { opacity: 0; translate: var(--toft-menu-x, 0) var(--toft-menu-y, 0); } }
+@keyframes toft-sheet-in { from { translate: -100% 0; } }
+@keyframes toft-sheet-out { to { translate: -100% 0; } }
+/* An import's indeterminate progress bar (D-79), only with motion allowed. */
+@keyframes toft-slide { from { translate: -100% 0; } to { translate: 250% 0; } }
+
+.toft-overlay[data-state="open"] { animation: toft-fade-in 150ms cubic-bezier(0.16, 1, 0.3, 1); }
+.toft-overlay[data-state="closed"] { animation: toft-fade-out 120ms ease-in; }
+.toft-pop[data-state="open"] { animation: toft-pop-in 160ms cubic-bezier(0.16, 1, 0.3, 1); }
+.toft-pop[data-state="closed"] { animation: toft-pop-out 120ms ease-in; }
+.toft-menu[data-state="open"] { animation: toft-menu-in 120ms cubic-bezier(0.16, 1, 0.3, 1); }
+.toft-menu[data-state="closed"] { animation: toft-fade-out 100ms ease-in; }
+/* From the trigger's side. */
+.toft-menu[data-side="bottom"] { --toft-menu-y: -4px; }
+.toft-menu[data-side="top"] { --toft-menu-y: 4px; }
+.toft-menu[data-side="left"] { --toft-menu-x: 4px; }
+.toft-menu[data-side="right"] { --toft-menu-x: -4px; }
+.toft-sheet[data-state="open"] { animation: toft-sheet-in 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+.toft-sheet[data-state="closed"] { animation: toft-sheet-out 160ms ease-in; }

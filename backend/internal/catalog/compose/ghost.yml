@@ -1,0 +1,43 @@
+# Ghost 6 with MySQL 8.4 (Toft catalog, D-147). Ghost emails a code to
+# confirm a staff sign-in from a new device; with no mail set up that code
+# never arrives, so the check is off until mail__* variables are added.
+services:
+  db:
+    image: mysql:8.4.13@sha256:a0225d1ea6631c8bc2385dc4c2faba17bbf1834ecf369e1659a9a382bd8d5dd7
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ghost
+      MYSQL_USER: ghost
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    mem_limit: 1g
+
+  ghost:
+    image: ghost:6.73.0-alpine@sha256:4195f6c405e40230cd10c0770425cf500c1f542a96e9f6584c11649c150e5a89
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      url: "${TOFT_URL:?Ghost needs the service’s address, so add a domain}"
+      database__client: mysql
+      database__connection__host: db
+      database__connection__user: ghost
+      database__connection__password: ${MYSQL_PASSWORD}
+      database__connection__database: ghost
+      security__staffDeviceVerification: "false"
+    volumes:
+      - content:/var/lib/ghost/content
+    mem_limit: 512m
+
+volumes:
+  db-data:
+  content:
