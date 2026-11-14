@@ -402,6 +402,10 @@ func (h *Handler) handleCreate(c *gin.Context) {
 			respond.Error(c, http.StatusConflict, err.Error())
 			return
 		}
+		if errors.Is(err, ErrAliasTaken) {
+			respond.ErrorData(c, http.StatusConflict, err.Error(), gin.H{"code": "alias_taken"})
+			return
+		}
 		if errors.Is(err, envvar.ErrInvalidKey) || errors.Is(err, envvar.ErrKeyIsSecret) {
 			respond.Error(c, http.StatusBadRequest, err.Error())
 			return
@@ -545,6 +549,10 @@ func (h *Handler) handleUpdateConfig(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, ErrDuplicateName) {
 			respond.Error(c, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, ErrAliasTaken) {
+			respond.ErrorData(c, http.StatusConflict, err.Error(), gin.H{"code": "alias_taken"})
 			return
 		}
 		if writePolicyError(c, err) || writeConfigError(c, err) {
