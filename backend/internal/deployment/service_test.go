@@ -32,7 +32,8 @@ import (
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 type mockRepo struct {
-	fingerprint   string // SetSettingsFingerprint's last
+	fingerprint   string   // SetSettingsFingerprint's last
+	reserved      *float64 // SetReservedMemory's last
 	mu            sync.Mutex
 	createdID     string
 	statusHistory []deployment.Status
@@ -110,6 +111,13 @@ func (m *mockRepo) CountAgentLogLines(_ context.Context, _, prefix string) (int,
 
 func (m *mockRepo) ListPulls(context.Context, []string) (map[string]deployment.PullRef, error) {
 	return map[string]deployment.PullRef{}, nil
+}
+
+func (m *mockRepo) SetReservedMemory(_ context.Context, _ string, memoryMB float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reserved = &memoryMB
+	return nil
 }
 
 func (m *mockRepo) SetSettingsFingerprint(_ context.Context, _, fingerprint string) error {

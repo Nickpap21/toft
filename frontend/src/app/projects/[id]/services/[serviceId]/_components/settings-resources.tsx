@@ -13,6 +13,7 @@ import {
   type ResourceRow,
   type ResourceSuggestion,
 } from "@/lib/api/resources.service";
+import { panelHostQuery, panelRoom } from "@/lib/api/instance.service";
 import { serverService, type Server } from "@/lib/api/server.service";
 import type { Service } from "@/lib/api/service.service";
 import { ApiError, changedSinceRead } from "@/lib/api/client";
@@ -74,12 +75,46 @@ export function ReservedBars({
     enabled: !!service.server_id,
     staleTime: 30_000,
   });
+  const { data: panelHost } = useQuery({
+    ...panelHostQuery,
+    enabled: !service.server_id,
+    meta: { quietFailure: "Without the panel host's room the bars are left out; the limits below still read and save." },
+  });
   if (!service.server_id) {
+    // The panel's server: every workspace's services share what it leaves
+    // its apps, in memory; CPU isn't counted there.
+    const host = panelRoom(panelHost);
+    if (!host) return null;
     return (
-      <p className="text-xs leading-[17px] text-muted">
-        {service.name} runs on the panel host, where limits reserve nothing:
-        capacity is counted on added servers.
-      </p>
+      <div className="flex flex-col gap-2.5">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex justify-between gap-2 text-xs text-muted">
+            <span>Memory reserved on the panel’s server</span>
+            <span className="font-mono text-fg/85">
+              {mib(host.reserved)} of {mib(host.total)}
+            </span>
+          </div>
+          <span aria-hidden="true" className="block h-1 rounded-sm bg-subtle">
+            <span
+              className={cn("block h-1 rounded-sm", host.over ? "bg-status-pending" : "bg-muted")}
+              style={{ width: `${Math.min(100, (host.reserved / host.total) * 100)}%` }}
+            />
+          </span>
+        </div>
+        {host.over ? (
+          <p className="flex items-start gap-2 text-xs leading-[17px] text-status-pending-fg">
+            <AlertTriangle role="img" aria-label="Warning" className="mt-0.5 h-3.5 w-3.5 flex-none text-status-pending" />
+            The services on the panel’s server reserve more than the {mib(host.total)} it leaves its apps, so one can be
+            killed for memory before it reaches its own limit. Lower their limits, move a service to another server or
+            give this one more memory.
+          </p>
+        ) : (
+          <p className="text-xs leading-[17px] text-muted">
+            Free for apps: <span className="font-mono text-fg/85">{mib(host.left)}</span>, between every workspace’s
+            services here. The panel keeps the rest of its server; CPU isn’t counted here.
+          </p>
+        )}
+      </div>
     );
   }
   if (!capacity?.capacity_discovered) return null;

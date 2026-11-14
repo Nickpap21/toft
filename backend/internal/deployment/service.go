@@ -637,6 +637,10 @@ type TriggerInput struct {
 	Settings *service.Service
 	// settings is Trigger's read of what the deploy ships (shipped).
 	settings *shipped
+	// reservedMB is Trigger's read of the memory the service's limits
+	// reserve (requestedLimits): what its success records (D-166); nil when
+	// the service couldn't be read.
+	reservedMB *float64
 }
 
 // Service contains the business logic for triggering and managing deployments.
@@ -1355,9 +1359,10 @@ func (s *Service) checkCapacity(
 // there, the ledger previews are counted in (room). The apps share one
 // memory cap, so past it a service is killed for memory before it reaches
 // its own limit. CPU is not counted: the ledger is memory only. A running
-// service deployed again within what it already holds is never refused: it
-// takes no new room, and servers were filled past the ledger before this
-// gate existed. Only an instance operator deploys past it, since the server
+// service deployed again with no more than its live deployment reserved
+// (heldLive) is never refused: it takes no new room, and servers were
+// filled past the ledger before this gate existed. A raised limit, or a
+// service that never went live, is new room. Only an instance operator deploys past it, since the server
 // is every workspace's. A ledger that can't say refuses nothing.
 func (s *Service) checkPanelCapacity(ctx context.Context, currentServiceID, userID string, requestedMemMB float64) *server.CapacityExceededError {
 	if s.panelCapacity == nil || requestedMemMB == 0 {
@@ -1373,7 +1378,7 @@ func (s *Service) checkPanelCapacity(ctx context.Context, currentServiceID, user
 	}
 	_, own := s.ownAllocation(ctx, currentServiceID)
 	allocated = max(allocated-own, 0)
-	if requestedMemMB <= own || allocated+requestedMemMB <= apps {
+	if allocated+requestedMemMB <= apps || requestedMemMB <= s.heldLive(ctx, currentServiceID) {
 		return nil
 	}
 	canBypass := false
@@ -1381,9 +1386,50 @@ func (s *Service) checkPanelCapacity(ctx context.Context, currentServiceID, user
 		canBypass, _ = s.operators.IsOperator(ctx, userID)
 	}
 	return &server.CapacityExceededError{
-		Code: "capacity_exceeded", Server: "the panel's server", CanBypass: canBypass,
+		Code: "capacity_exceeded", Server: "the panel's server", PanelHost: true, CanBypass: canBypass,
 		EffectiveMemoryMB: apps, AllocatedMemoryMB: allocated, RequestedMemoryMB: requestedMemMB,
 	}
+}
+
+// heldLive is the memory serviceID holds on its server through its live
+// deployment: what that deploy reserved, or the service's limits as they
+// are when it went live before deploys recorded it (0082). 0 for a service
+// that is stopped or never went live, and when it can't be read.
+func (s *Service) heldLive(ctx context.Context, serviceID string) float64 {
+	if s.serviceFetcher == nil || s.repo == nil || serviceID == "" {
+		return 0
+	}
+	svc, err := s.serviceFetcher.Get(ctx, serviceID)
+	if err != nil || svc == nil || svc.RuntimeStatus == "stopped" || svc.ActiveDeploymentID == "" {
+		return 0
+	}
+	live, err := s.repo.GetByID(ctx, svc.ActiveDeploymentID)
+	if err != nil || live == nil {
+		return 0
+	}
+	if live.ReservedMemoryMB == nil {
+		_, mem := s.requestedLimits(ctx, svc)
+		return mem
+	}
+	return *live.ReservedMemoryMB
+}
+
+// reservedBy is the memory input's service reserves with its limits as
+// they are, for its deployment to record once live; nil when the service
+// can't be read.
+func (s *Service) reservedBy(ctx context.Context, input TriggerInput) *float64 {
+	svc := input.Settings
+	if svc == nil {
+		if s.serviceFetcher == nil || input.ServiceID == "" {
+			return nil
+		}
+		var err error
+		if svc, err = s.serviceFetcher.Get(ctx, input.ServiceID); err != nil || svc == nil {
+			return nil
+		}
+	}
+	_, mem := s.requestedLimits(ctx, svc)
+	return &mem
 }
 
 // CheckNewCapacity is the capacity gate for svc, a service not created yet
@@ -1414,6 +1460,7 @@ func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*Deployment,
 	// Before TOFT_URL, which is routing (D-159). Unknown, the deployment
 	// records none, and Toft's redeploy for a certificate waits for a person.
 	input.settings = s.shippedSettings(ctx, input)
+	input.reservedMB = s.reservedBy(ctx, input)
 	if input.SourceType == "docker-compose" {
 		input.EnvVars = withServiceURL(input.EnvVars, input.Domains, input.AccessControl.Certified)
 	}
@@ -2819,6 +2866,11 @@ func (s *Service) succeedDeployment(ctx context.Context, deploymentID string, in
 	}
 	if _, err := s.repo.UpdateStatus(ctx, deploymentID, StatusRunning, imageTag, commitSHA, ""); err != nil {
 		s.log.Error("failed to update deployment status to running", zap.Error(err), zap.String("deployment_id", deploymentID))
+	}
+	if input.reservedMB != nil {
+		if err := s.repo.SetReservedMemory(ctx, deploymentID, *input.reservedMB); err != nil {
+			s.log.Warn("record the memory the deploy reserved", zap.String("deployment_id", deploymentID), zap.Error(err))
+		}
 	}
 	s.recordShipped(ctx, deploymentID, input)
 	s.reportDeploy(ctx, input, deploymentID, commitSHA, "success", "Live")

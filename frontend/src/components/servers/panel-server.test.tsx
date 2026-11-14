@@ -49,4 +49,21 @@ describe("the panel's server on Servers", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
     expect(screen.queryByText("Nothing of this workspace")).toBeNull();
   });
+
+  it("says what the services there reserve of what apps get, and warns past it", async () => {
+    const reserving = (bytes: number) => ({ ...host, reservation: { ...host.reservation, apps_allocated_memory_bytes: bytes } });
+    serve({ "/api/v1/instance/panel-host": ok(reserving(512 * 2 ** 20)) });
+    show();
+    const line = await screen.findByText(/512 MiB of 1\.0 GiB/);
+    expect(line.textContent).toBe("Reserved 512 MiB of 1.0 GiB");
+    expect(line.className).not.toContain("text-status-pending-fg");
+  });
+
+  it("warns when more is reserved there than apps get", async () => {
+    serve({ "/api/v1/instance/panel-host": ok({ ...host, reservation: { ...host.reservation, apps_allocated_memory_bytes: 2 * 2 ** 30 } }) });
+    show();
+    const line = await screen.findByText(/2\.0 GiB of 1\.0 GiB/);
+    expect(line.textContent).toBe("Reserved 2.0 GiB of 1.0 GiB: more than apps get, so a service can be killed for memory before it reaches its own limit.");
+    expect(line.className).toContain("text-status-pending-fg");
+  });
 });

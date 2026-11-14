@@ -49,6 +49,9 @@ vi.mock("@/lib/api/client", async (importOriginal) => {
         created.push({ path, body: JSON.parse(String(init.body)) });
         throw new orig.ApiError(refusal.error, 409, refusal);
       }
+      // The panel host leaves its apps 747 MiB; 512 MiB of it is reserved.
+      if (path === "/api/v1/instance/panel-host")
+        return { role: "apps", app_networks: "isolated", reservation: { apps_memory_bytes: 747 * 2 ** 20, apps_allocated_memory_bytes: 512 * 2 ** 20 } };
       if (path === "/api/v1/projects/p1") return { id: "p1", name: "shop", description: "" };
       if (path === "/api/v1/projects/p1/environments")
         return [{ id: "e1", project_id: "p1", name: "production", color: "gray", protected: false }];
@@ -118,5 +121,18 @@ describe("Create and deploy over capacity", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(deploy).toHaveFocus());
+  });
+
+  // The panel host has a ledger too: what it leaves its apps, less what
+  // every workspace's services reserve; only an instance operator passes it.
+  it("counts the panel host's room, and warns when the service won't fit there", async () => {
+    await fill();
+    fireEvent.click(await screen.findByRole("radio", { name: /panel host/ }));
+    expect(screen.getByText("235 MiB free").className).toContain("text-status-pending-fg");
+    expect(
+      await screen.findByText(
+        "It needs 512 MiB and the panel host has 235 MiB left of 747 MiB: Create and deploy won’t create it. Lower its memory or pick another server.",
+      ),
+    ).toBeInTheDocument();
   });
 });

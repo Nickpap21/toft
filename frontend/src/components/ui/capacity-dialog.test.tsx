@@ -76,3 +76,33 @@ describe("CapacityDialog", () => {
         expect(formatMemory(1536)).toBe("1.5 GiB");
     });
 });
+
+// The panel's own server: every workspace's room, counted in memory only.
+describe("CapacityDialog on the panel's server", () => {
+    const panel: CapacityWarning = {
+        code: "capacity_exceeded",
+        can_bypass: false,
+        panel_host: true,
+        effective_cpu_cores: 0,
+        effective_memory_mb: 747,
+        allocated_cpu_cores: 0,
+        allocated_memory_mb: 512,
+        requested_cpu_cores: 0,
+        requested_memory_mb: 512,
+    };
+
+    it("names the panel's server, shows no CPU it doesn't count, and sends to an operator", () => {
+        render(<CapacityDialog warning={panel} serviceName="worker" onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(screen.getByRole("dialog")).toHaveAccessibleDescription(
+            "This deploy needs more memory than the panel’s server has left for its apps. Nothing was deployed.",
+        );
+        expect(screen.getByText("needs 512 MiB, 235 MiB left of 747 MiB")).toBeTruthy();
+        expect(screen.queryByText("CPU")).toBeNull();
+        expect(screen.getByText(/ask an instance operator to deploy it/)).toBeTruthy();
+    });
+
+    it("lets an operator deploy anyway", () => {
+        render(<CapacityDialog warning={{ ...panel, can_bypass: true }} onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(screen.getByRole("button", { name: "Deploy anyway" })).toBeTruthy();
+    });
+});

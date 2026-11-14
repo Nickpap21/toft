@@ -97,11 +97,12 @@ func TestSettingsFingerprint(t *testing.T) {
 }
 
 // A deploy that goes live records what it shipped: the service its caller
-// built it from, before the deploy adds TOFT_URL, which is routing.
+// built it from, before the deploy adds TOFT_URL, which is routing. And the
+// memory its limit reserves, which the panel's server's room check reads.
 func TestTrigger_RecordsSettingsFingerprint(t *testing.T) {
 	repo := &mockRepo{createdID: "dep-1"}
 	svc := newTestService(repo, &mockFactory{orch: &mockOrchestrator{}}, &mockStatusUpdater{})
-	now := service.Service{ID: "svc-1", Name: "web", Port: 8080}
+	now := service.Service{ID: "svc-1", Name: "web", Port: 8080, MemoryLimit: "512m"}
 	svc.WithServiceReader(settingsOf{now})
 	svc.WithHashKey([]byte("k"))
 	_, err := svc.Trigger(context.Background(), deployment.TriggerInput{ServiceID: "svc-1", SourceType: "docker-image",
@@ -110,6 +111,11 @@ func TestTrigger_RecordsSettingsFingerprint(t *testing.T) {
 	want, err := svc.SettingsFingerprint(context.Background(), "svc-1", "", []string{"A=1"})
 	require.NoError(t, err)
 	assert.Equal(t, want, waitForFingerprint(t, repo))
+	repo.mu.Lock()
+	reserved := repo.reserved
+	repo.mu.Unlock()
+	require.NotNil(t, reserved)
+	assert.Equal(t, 512.0, *reserved)
 
 	// Built from settings older than the service's now: it records those.
 	repo = &mockRepo{createdID: "dep-2"}

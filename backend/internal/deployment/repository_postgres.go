@@ -69,6 +69,18 @@ func (r *PostgresRepository) SetSettingsFingerprint(ctx context.Context, id, fin
 	return nil
 }
 
+func (r *PostgresRepository) SetReservedMemory(ctx context.Context, id string, memoryMB float64) error {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid deployment id %q: %w", id, err)
+	}
+	if err := r.queries.SetDeploymentReservedMemory(ctx, sqlcdb.SetDeploymentReservedMemoryParams{
+		ID: pgtype.UUID{Bytes: parsed, Valid: true}, ReservedMemoryMb: memoryMB}); err != nil {
+		return fmt.Errorf("SetDeploymentReservedMemory: %w", err)
+	}
+	return nil
+}
+
 func (r *PostgresRepository) ListPulls(ctx context.Context, ids []string) (map[string]PullRef, error) {
 	out := map[string]PullRef{}
 	if len(ids) == 0 {
@@ -565,6 +577,7 @@ func mapDBDeploymentToDeployment(row sqlcdb.Deployment) Deployment {
 		CreatedAt:           row.CreatedAt.Time,
 		ImageRemoved:        row.ImageRemovedAt.Valid,
 		SettingsFingerprint: derefString(row.SettingsFingerprint),
+		ReservedMemoryMB:    row.ReservedMemoryMb,
 	}
 	if row.StartedAt.Valid {
 		t := row.StartedAt.Time

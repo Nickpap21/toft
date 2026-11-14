@@ -18270,12 +18270,15 @@ components:
           type: string
     CapacityExceededError:
       type: object
-      required: [code, can_bypass, effective_cpu_cores, effective_memory_mb, allocated_cpu_cores, allocated_memory_mb, requested_cpu_cores, requested_memory_mb]
+      required: [code, can_bypass, panel_host, effective_cpu_cores, effective_memory_mb, allocated_cpu_cores, allocated_memory_mb, requested_cpu_cores, requested_memory_mb]
       properties:
         code:
           type: string
         can_bypass:
           type: boolean
+        panel_host:
+          type: boolean
+          description: The server is the panel's own. Its room is every workspace's and is counted in memory only (the CPU figures are 0); only an instance operator may bypass.
         effective_cpu_cores:
           type: number
         effective_memory_mb:

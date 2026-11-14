@@ -32,6 +32,14 @@ func TestSettingsFingerprintRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fp, got.SettingsFingerprint)
 	assert.Error(t, repo.SetSettingsFingerprint(ctx, d.ID, "not-a-hash"), "the CHECK holds")
+
+	assert.Nil(t, got.ReservedMemoryMB, "none until it goes live")
+	require.NoError(t, repo.SetReservedMemory(ctx, d.ID, 512))
+	got, err = repo.GetByID(ctx, d.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.ReservedMemoryMB)
+	assert.Equal(t, 512.0, *got.ReservedMemoryMB)
+	assert.Error(t, repo.SetReservedMemory(ctx, d.ID, -1), "the CHECK holds")
 }
 
 // Recovery's newest deployment of a service doesn't count one that failed

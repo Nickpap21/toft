@@ -12,7 +12,7 @@ import {
   type ServiceResources,
 } from "@/lib/api/resources.service";
 import type { Service } from "@/lib/api/service.service";
-import { ComposeResources, SingleResources } from "./settings-resources";
+import { ComposeResources, ReservedBars, SingleResources } from "./settings-resources";
 import { initForm, type ConfigForm } from "./settings-form";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -490,5 +490,34 @@ describe("formatMiB", () => {
     expect(formatDay("2026-09-19T00:00:00Z")).toBe("19 Sep");
     expect(formatDay("2026-10-20T00:00:00Z")).toBe("20 Oct");
     expect(formatDay("2026-10-19")).toBe("19 Oct");
+  });
+});
+
+describe("ReservedBars on the panel's server", () => {
+  const worker = { id: "s1", name: "worker", server_id: "" } as unknown as Service;
+  function show(allocatedMiB: number) {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      data: { role: "apps", reservation: { apps_memory_bytes: 747 * 2 ** 20, apps_allocated_memory_bytes: allocatedMiB * 2 ** 20, enforced: true } },
+    }), { status: 200 })));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ReservedBars service={worker} />
+      </QueryClientProvider>,
+    );
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows what is reserved of what the panel's server leaves its apps, and what is free", async () => {
+    show(512);
+    expect(await screen.findByText("512 MiB of 747 MiB")).toBeTruthy();
+    expect(screen.getByText("235 MiB")).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "Warning" })).toBeNull();
+  });
+
+  it("warns when more is reserved than the apps get: a service can be killed below its own limit", async () => {
+    show(1946);
+    expect(await screen.findByText("1.9 GiB of 747 MiB")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Warning" })).toBeTruthy();
+    expect(screen.getByText(/so one can be\s+killed for memory before it reaches its own limit/)).toBeTruthy();
   });
 });

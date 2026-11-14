@@ -30,7 +30,7 @@ import {
   type PolicyViolation,
 } from "@/lib/api/deploypolicy.service";
 import { fetchAPI } from "@/lib/api/client";
-import { panelHostQuery } from "@/lib/api/instance.service";
+import { panelHostQuery, panelRoom } from "@/lib/api/instance.service";
 import { orgService } from "@/lib/api/org.service";
 import { projectService } from "@/lib/api/project.service";
 import { resourcesService } from "@/lib/api/resources.service";
@@ -711,11 +711,17 @@ export function NewServiceForm({ projectId, first = false }: { projectId: string
   const memory = memMB ?? limit?.memory_mb;
   // The deploy's capacity check, ahead of the click: what the server has left.
   const fit = server ? fits[(servers ?? []).findIndex((s) => s.id === server)]?.data : undefined;
-  const memLeft = fit?.capacity_known ? Math.max(fit.effective_memory_mb - fit.allocated_memory_mb, 0) : null;
+  // The panel host's room is what it leaves its apps, less what they reserve.
+  const hostRoom = panelRoom(panelHost);
+  const serverRoom = server
+    ? fit?.capacity_known ? { left: Math.max(fit.effective_memory_mb - fit.allocated_memory_mb, 0), total: fit.effective_memory_mb } : null
+    : hostRoom;
+  const memLeft = serverRoom ? serverRoom.left : null;
   const noRoom = !composeLike && !!memory && memLeft !== null && memory > memLeft;
   // ponytail: on a share only an owner of the server's workspace may bypass, which
   // this form can't see, so it reads as no; the refusal's can_bypass still decides.
-  const canBypass = !fit?.share && (role === "owner" || orgSettings?.resource_bypass_min_role === "developer");
+  // The panel host is every workspace's: only an instance operator may.
+  const canBypass = server ? !fit?.share && (role === "owner" || orgSettings?.resource_bypass_min_role === "developer") : operator;
   const memOptions = [...new Set([...MEMORY_MB, ...(limit ? [limit.memory_mb] : [])])].sort((a, b) => a - b);
   // One server for the environment: shown as the fact, with Change (D-154).
   const serverList = serverListOpen || new Set(envServers).size !== 1;
@@ -1672,6 +1678,18 @@ export function NewServiceForm({ projectId, first = false }: { projectId: string
                     ? ` Runs ${onServer("").join(" and ")}.`
                     : ""}
                 </span>
+                {hostRoom && (
+                  <span
+                    className={cn(
+                      mono,
+                      server === "" && noRoom
+                        ? "text-status-pending-fg"
+                        : "text-fg/80",
+                    )}
+                  >
+                    {formatMemory(hostRoom.left)} free
+                  </span>
+                )}
               </label>
               )}
               <span className="text-xs text-muted">
@@ -1863,10 +1881,10 @@ export function NewServiceForm({ projectId, first = false }: { projectId: string
                 <SumRow k="Server">{hostFailed || serversFailed ? "—" : hostPending ? "…" : noServer ? "none yet" : server ? serverLabel(server) : "panel host"}</SumRow>
                 <SumRow k="Memory">{composeLike ? "Set in its compose file" : memory ? mib(memory) : limitFailed ? "Its kind’s default" : "…"}</SumRow>
               </dl>
-              {noRoom && fit ? (
+              {noRoom && serverRoom ? (
                 <p className="flex items-start gap-2 text-xs leading-[18px] text-status-pending-fg">
                   <AlertTriangle role="img" aria-label="Warning" className="mt-0.5 h-3.5 w-3.5 flex-none text-status-pending" />
-                  {`It needs ${mib(memory)} and ${serverLabel(server)} has ${formatMemory(memLeft)} left of ${formatMemory(fit.effective_memory_mb)}: Create and deploy ${canBypass ? "asks before creating it" : "won’t create it"}. Lower its memory or pick another server.`}
+                  {`It needs ${mib(memory)} and ${serverLabel(server)} has ${formatMemory(memLeft)} left of ${formatMemory(serverRoom.total)}: Create and deploy ${canBypass ? "asks before creating it" : "won’t create it"}. Lower its memory or pick another server.`}
                 </p>
               ) : !noServer && !hostPending && !hostFailed && !serversFailed && <p className="text-xs leading-[18px] text-fg/70">
                 {isCatalog

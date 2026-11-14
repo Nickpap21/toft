@@ -78,7 +78,10 @@ type CapacityExceededError struct {
 	AllocatedMemoryMB float64 `json:"allocated_memory_mb"`
 	RequestedCPUCores float64 `json:"requested_cpu_cores"`
 	RequestedMemoryMB float64 `json:"requested_memory_mb"`
-	Server            string  `json:"-"`
+	// PanelHost is true for the panel's own server, whose room is every
+	// workspace's and is counted in memory only (the CPU fields are 0).
+	PanelHost bool   `json:"panel_host"`
+	Server    string `json:"-"`
 }
 
 // Error says what is short, as the panel's capacity dialog does: "Not

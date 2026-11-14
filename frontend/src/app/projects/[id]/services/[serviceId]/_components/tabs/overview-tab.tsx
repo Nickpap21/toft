@@ -15,10 +15,12 @@ import { serviceService, type Service } from "@/lib/api/service.service";
 import { connectTo } from "@/lib/network-alias";
 import { allDeploymentsQuery, deploymentService, type Deployment } from "@/lib/api/deployment.service";
 import { formatMiB, limitMB, resourcesService } from "@/lib/api/resources.service";
+import { panelHostQuery, panelRoom } from "@/lib/api/instance.service";
+import { formatMemory } from "@/components/ui/capacity-dialog";
 import { observabilityService, type ObservabilityConfig } from "@/lib/api/observability.service";
 import { useDeployLog } from "@/lib/hooks/useDeployLog";
 import { reachedIndex, stageDefs, type PipelineType } from "@/components/ui/deploy-stage-tracker";
-import { deploymentHref } from "@/components/home/home";
+import { deploymentHref, serviceHref } from "@/components/home/home";
 import { isServing, TONE_CLASSES } from "@/lib/status";
 import { formatDuration, timeAgo } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -370,6 +372,16 @@ function Usage({ service, serviceId, projectId, peers }: { service: Service; ser
   const routedCompose = isCompose ? service.compose_route_service || (rows.length === 1 ? rows[0].compose_service : "") : "";
   const latencyTitle = latency && [routedCompose && `Requests to ${routedCompose}, the compose service its domains route to`, latency.title].filter(Boolean).join(". ");
 
+  // Memory kills over 7 days, and on the panel's server whether its apps
+  // reserve more than they get: the reason a kill comes below the limit.
+  const kills = (picked ? [picked] : rows).reduce((n, x) => n + x.memory.oom_kills_7d, 0);
+  const { data: panelHost } = useQuery({
+    ...panelHostQuery,
+    enabled: !service.server_id && kills > 0,
+    meta: { quietFailure: "Only adds why to the memory kills line; the kills are said without it." },
+  });
+  const killsText = memoryKillsText(kills, panelRoom(panelHost));
+
   const check = service.last_health_check;
   const unmet =peers.filter((p) => (service.dependencies ?? []).includes(p.id) && p.runtime_status !== "running");
   const dd = "font-mono text-xs text-fg";
@@ -517,6 +529,17 @@ function Usage({ service, serviceId, projectId, peers }: { service: Service; ser
             </div>
           )}
         </dl>
+        {killsText && (
+          <p className="flex items-start gap-1.5 text-xs leading-[18px] text-status-failed-fg">
+            <AlertTriangle role="img" aria-label="Warning" className="mt-0.5 h-3.5 w-3.5 flex-none" />
+            <span>
+              {killsText}{" "}
+              <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-resources`} className="text-link hover:underline">
+                Its limits, in Resources
+              </Link>
+            </span>
+          </p>
+        )}
         {unmet.length > 0 && (
           <p className="flex items-center gap-1.5 text-xs text-status-pending-fg">
             <AlertTriangle className="h-3.5 w-3.5 flex-none" aria-hidden="true" />
@@ -526,6 +549,17 @@ function Usage({ service, serviceId, projectId, peers }: { service: Service; ser
       </div>
     </section>
   );
+}
+
+/** Usage's line on a service's memory kills over 7 days, "" for none; with
+ *  the panel's server's room when its apps reserve more than they get, which
+ *  is why a kill there comes below the service's own limit. */
+export function memoryKillsText(kills: number, room: ReturnType<typeof panelRoom>): string {
+  if (kills === 0) return "";
+  const said = `Killed for memory ${kills === 1 ? "once" : `${kills} times`} in 7 days.`;
+  return room?.over
+    ? `${said} The panel’s server leaves its apps ${formatMemory(room.total)} between them and their limits add up to ${formatMemory(room.reserved)}, so a service can be killed before it reaches its own limit.`
+    : said;
 }
 
 /** One Usage chart: the line against its scale, and on hover the sample

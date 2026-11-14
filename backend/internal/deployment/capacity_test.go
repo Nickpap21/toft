@@ -235,23 +235,42 @@ func (o isOperator) IsOperator(_ context.Context, userID string) (bool, error) {
 	return o[userID], nil
 }
 
-// panelServices: "worker" runs on the panel's server with 512 MiB; "idle"
-// is stopped there.
+// panelServices are services on the panel's server, each with a 512 MiB
+// limit: "worker" went live with it; "raised" went live with 256 MiB and
+// had its limit raised since; "old" went live before deploys recorded what
+// they reserve; "new" was never deployed; "stopped" is stopped.
 type panelServices struct{}
 
 func (panelServices) Get(_ context.Context, id string) (*service.Service, error) {
-	svc := &service.Service{ID: id, SourceType: "docker-image", MemoryLimit: "512m"}
-	if id == "idle" {
+	svc := &service.Service{ID: id, SourceType: "docker-image", MemoryLimit: "512m", RuntimeStatus: "running"}
+	switch id {
+	case "worker", "raised", "old":
+		svc.ActiveDeploymentID = "live-" + id
+	case "new":
+		svc.RuntimeStatus = "idle"
+	case "stopped":
 		svc.RuntimeStatus = "stopped"
 	}
 	return svc, nil
+}
+
+// liveDeployments is what the services' live deployments reserved.
+type liveDeployments struct{ Repository }
+
+func (liveDeployments) GetByID(_ context.Context, id string) (*Deployment, error) {
+	reserved := map[string]float64{"live-worker": 512, "live-raised": 256}
+	d := &Deployment{ID: id}
+	if mb, ok := reserved[id]; ok {
+		d.ReservedMemoryMB = &mb
+	}
+	return d, nil
 }
 
 // The panel's server has a ledger too: what it leaves its apps (D-62)
 // against what every workspace's services reserve there. Only an instance
 // operator deploys past it, since it is every workspace's server.
 func TestCheckCapacity_ThePanelsServer(t *testing.T) {
-	s := NewService(nil, nil, nil, zap.NewNop())
+	s := NewService(liveDeployments{}, nil, nil, zap.NewNop())
 	s.WithServiceReader(panelServices{})
 	s.WithControlPlaneStopgap(false, isOperator{"olga": true})
 	check := func(apps, alloc float64, serviceID, userID string, memMB float64) *server.CapacityExceededError {
@@ -268,13 +287,19 @@ func TestCheckCapacity_ThePanelsServer(t *testing.T) {
 	require.NotNil(t, capErr, "256 MiB more than the 235 MiB left")
 	assert.Equal(t, "Not enough room on the panel's server: needs 256 MiB of memory, 235 MiB left of 747 MiB.", capErr.Error())
 	assert.Equal(t, "capacity_exceeded", capErr.Code)
+	assert.True(t, capErr.PanelHost)
 	assert.False(t, capErr.CanBypass, "an owner of a workspace is not the server's operator")
 	assert.True(t, check(747, 512, "", "olga", 256).CanBypass, "an instance operator")
 
+	// Over-committed already. Each service's limit is in the 1024 MiB.
 	assert.Nil(t, check(747, 1024, "worker", "dave", 512),
-		"over-committed already: a running service deployed again within what it holds takes no new room")
-	assert.NotNil(t, check(747, 1024, "worker", "dave", 768), "the same service asking for more")
-	assert.NotNil(t, check(747, 1024, "idle", "dave", 512), "a stopped service holds nothing")
+		"a service deployed again with what its live deployment reserved takes no new room")
+	assert.NotNil(t, check(747, 1024, "raised", "dave", 512), "a limit raised since it went live is new room")
+	assert.Nil(t, check(747, 1024, "old", "dave", 512),
+		"live from before reservations were recorded: it holds its limit as it is")
+	assert.NotNil(t, check(747, 1024, "new", "dave", 512), "a service never deployed holds nothing")
+	assert.NotNil(t, check(747, 1024, "stopped", "dave", 512), "a stopped service holds nothing")
+	assert.Nil(t, check(747, 700, "raised", "dave", 512), "a raised limit that fits")
 
 	assert.Nil(t, check(0, 1024, "", "dave", 512), "a ledger that can't say refuses nothing")
 	s.WithPreviews(nil, nil, nil)

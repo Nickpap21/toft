@@ -6,6 +6,55 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.0.2 (2026-11-14)
+
+Memory on the panel's own server: a service killed for memory there is
+reported, a deploy that wouldn't fit is refused, and the panel says when
+the limits there add up to more than the server leaves its apps. And a
+limit written `1G` reads as 1 GiB. One migration (0082, a new nullable
+column): a failed upgrade starts 1.0.1 again without restoring the
+database. Upgrade from 1.0.1.
+
+### The panel's server
+
+- **A service killed for memory on the panel's server is reported.** Kills
+  there were never read: a service could be killed and restarted with no
+  alert, nothing on its page and `oom_kills_7d` at 0. They are now read
+  from Docker's events at every collection, counted on the service, and
+  raise the "Killed for memory" alert.
+- **A deploy to the panel's server is checked for room.** Its apps share
+  what the server keeps after the panel's and the system's share ("Apps
+  get" on Servers), whatever each service's own limit says. A deploy, or a
+  new service created to be deployed, whose memory limit takes the reserved
+  total past that is refused with `409 capacity_exceeded`, as on added
+  servers; an instance operator can deploy anyway. A service deployed
+  again with the limit it went live with is never refused, also on a
+  server already over; a limit raised since, or a service that never ran,
+  is new room. CPU isn't counted there, and a deploy from a push isn't
+  checked, as on added servers.
+- **The panel says when the limits there add up to more than apps get**,
+  which is when a service is killed before it reaches its own limit: in
+  the alert, on Servers, in the service's Resources and beside the kills
+  on its Overview. New service shows the memory the panel host has free.
+- After upgrading, an instance whose services on the panel's server
+  already reserve more than it leaves them sees that warning; nothing is
+  stopped, and what runs keeps deploying. Lower their limits, move a
+  service to an added server or give the server more memory.
+
+### Panel
+
+- A memory limit written `1G` read as 1 MiB ("117 MiB of 1 MiB limit" on
+  a service's Overview), and `1.5g` as 1 GiB. The panel now reads every
+  form the API accepts: either case, a decimal, `gb`, `mb`, `kb`, `k` and
+  plain bytes.
+
+### API
+
+- `GET /instance/panel-host`: `reservation.apps_allocated_memory_bytes`,
+  the memory the limits of the services on the panel's server add up to.
+- `capacity_exceeded`: `data.panel_host`, true when the server is the
+  panel's own.
+
 ## 1.0.1 (2026-11-14)
 
 Two fixes to pull-request previews, and a whole CPU for the panel's

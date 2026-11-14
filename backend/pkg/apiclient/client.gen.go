@@ -2030,6 +2030,9 @@ type CapacityExceededError struct {
 	Code              string  `json:"code"`
 	EffectiveCpuCores float32 `json:"effective_cpu_cores"`
 	EffectiveMemoryMb float32 `json:"effective_memory_mb"`
+
+	// PanelHost The server is the panel's own. Its room is every workspace's and is counted in memory only (the CPU figures are 0); only an instance operator may bypass.
+	PanelHost         bool    `json:"panel_host"`
 	RequestedCpuCores float32 `json:"requested_cpu_cores"`
 	RequestedMemoryMb float32 `json:"requested_memory_mb"`
 }

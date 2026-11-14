@@ -171,7 +171,7 @@ const createDeployment = `-- name: CreateDeployment :one
 
 INSERT INTO deployments (service_id, status, commit_sha, commit_message, triggered_by, queued_at, git_event_id)
 VALUES ($1, 'pending', $2, $3, $4, NOW(), $5)
-RETURNING id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint
+RETURNING id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb
 `
 
 type CreateDeploymentParams struct {
@@ -213,6 +213,7 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.HandedOffInput,
 		&i.ImageRemovedAt,
 		&i.SettingsFingerprint,
+		&i.ReservedMemoryMb,
 	)
 	return i, err
 }
@@ -813,7 +814,7 @@ func (q *Queries) FetchAllLogsForDeployment(ctx context.Context, deploymentID pg
 }
 
 const fetchDeploymentByID = `-- name: FetchDeploymentByID :one
-SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint FROM deployments WHERE id = $1 LIMIT 1
+SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb FROM deployments WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) FetchDeploymentByID(ctx context.Context, id pgtype.UUID) (Deployment, error) {
@@ -838,6 +839,7 @@ func (q *Queries) FetchDeploymentByID(ctx context.Context, id pgtype.UUID) (Depl
 		&i.HandedOffInput,
 		&i.ImageRemovedAt,
 		&i.SettingsFingerprint,
+		&i.ReservedMemoryMb,
 	)
 	return i, err
 }
@@ -2262,7 +2264,7 @@ func (q *Queries) ListEnvironmentVarsNotSetBy(ctx context.Context, arg ListEnvir
 }
 
 const listHandedOffDeployments = `-- name: ListHandedOffDeployments :many
-SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint FROM deployments
+SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb FROM deployments
 WHERE status IN ('pending', 'queued', 'building') AND handed_off_at IS NOT NULL
 ORDER BY created_at
 `
@@ -2296,6 +2298,7 @@ func (q *Queries) ListHandedOffDeployments(ctx context.Context) ([]Deployment, e
 			&i.HandedOffInput,
 			&i.ImageRemovedAt,
 			&i.SettingsFingerprint,
+			&i.ReservedMemoryMb,
 		); err != nil {
 			return nil, err
 		}
@@ -2798,7 +2801,7 @@ func (q *Queries) ListProjectEnvironments(ctx context.Context, projectID pgtype.
 }
 
 const listRecentDeploymentsForService = `-- name: ListRecentDeploymentsForService :many
-SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint FROM deployments
+SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb FROM deployments
 WHERE service_id = $1
 ORDER BY created_at DESC
 LIMIT 25
@@ -2832,6 +2835,7 @@ func (q *Queries) ListRecentDeploymentsForService(ctx context.Context, serviceID
 			&i.HandedOffInput,
 			&i.ImageRemovedAt,
 			&i.SettingsFingerprint,
+			&i.ReservedMemoryMb,
 		); err != nil {
 			return nil, err
 		}
@@ -3564,7 +3568,7 @@ func (q *Queries) ListSharedVolumes(ctx context.Context, orgID pgtype.UUID) ([]L
 }
 
 const listUnreconciledInterruptedDeployments = `-- name: ListUnreconciledInterruptedDeployments :many
-SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint FROM deployments d
+SELECT id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb FROM deployments d
 WHERE d.status = 'failed'
   AND d.error_summary = $1::text
   AND d.id = (
@@ -3609,6 +3613,7 @@ func (q *Queries) ListUnreconciledInterruptedDeployments(ctx context.Context, er
 			&i.HandedOffInput,
 			&i.ImageRemovedAt,
 			&i.SettingsFingerprint,
+			&i.ReservedMemoryMb,
 		); err != nil {
 			return nil, err
 		}
@@ -3809,7 +3814,7 @@ SET status        = 'failed',
 WHERE status IN ('pending', 'queued', 'building')
   AND handed_off_at IS NULL
   AND NOT (id = ANY(COALESCE($2::uuid[], '{}'::uuid[])))
-RETURNING id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint
+RETURNING id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb
 `
 
 type MarkInterruptedDeploymentsParams struct {
@@ -3849,6 +3854,7 @@ func (q *Queries) MarkInterruptedDeployments(ctx context.Context, arg MarkInterr
 			&i.HandedOffInput,
 			&i.ImageRemovedAt,
 			&i.SettingsFingerprint,
+			&i.ReservedMemoryMb,
 		); err != nil {
 			return nil, err
 		}
@@ -4297,6 +4303,21 @@ func (q *Queries) SetDeploymentComposeCommit(ctx context.Context, arg SetDeploym
 	return err
 }
 
+const setDeploymentReservedMemory = `-- name: SetDeploymentReservedMemory :exec
+UPDATE deployments SET reserved_memory_mb = $2::float8 WHERE id = $1
+`
+
+type SetDeploymentReservedMemoryParams struct {
+	ID               pgtype.UUID `json:"id"`
+	ReservedMemoryMb float64     `json:"reserved_memory_mb"`
+}
+
+// The memory a deploy that went live reserved on its server, in MiB (D-166).
+func (q *Queries) SetDeploymentReservedMemory(ctx context.Context, arg SetDeploymentReservedMemoryParams) error {
+	_, err := q.db.Exec(ctx, setDeploymentReservedMemory, arg.ID, arg.ReservedMemoryMb)
+	return err
+}
+
 const setDeploymentSettingsFingerprint = `-- name: SetDeploymentSettingsFingerprint :exec
 UPDATE deployments SET settings_fingerprint = $2 WHERE id = $1
 `
@@ -4617,7 +4638,7 @@ SET
     finished_at     = $5,
     error_summary   = $6
 WHERE id = $7
-RETURNING id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint
+RETURNING id, service_id, status, image_tag, commit_sha, commit_message, triggered_by, queued_at, started_at, finished_at, error_summary, created_at, compose_commit_sha, git_event_id, handed_off_at, handed_off_input, image_removed_at, settings_fingerprint, reserved_memory_mb
 `
 
 type UpdateDeploymentStatusParams struct {
@@ -4663,6 +4684,7 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.HandedOffInput,
 		&i.ImageRemovedAt,
 		&i.SettingsFingerprint,
+		&i.ReservedMemoryMb,
 	)
 	return i, err
 }

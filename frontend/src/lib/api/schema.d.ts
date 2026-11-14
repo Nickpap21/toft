@@ -9536,6 +9536,8 @@ export interface components {
         CapacityExceededError: {
             code: string;
             can_bypass: boolean;
+            /** @description The server is the panel's own. Its room is every workspace's and is counted in memory only (the CPU figures are 0); only an instance operator may bypass. */
+            panel_host: boolean;
             effective_cpu_cores: number;
             effective_memory_mb: number;
             allocated_cpu_cores: number;
