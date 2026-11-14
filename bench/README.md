@@ -4,12 +4,48 @@ Toft, Coolify and Dokploy measured the same way on matching fresh servers.
 These scripts produce the numbers in the README, so anyone can rerun them
 and check.
 
+## Results
+
+2026-11-13: Toft v1.0.0, Coolify 4.5.3 and Dokploy v0.30.10, each on its own
+Hetzner Cloud `cx23`. Median of three rounds, range in brackets. The README
+shows six of these rows.
+
+| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.0 |
+|---|---|---|---|
+| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 142.9 (141.5–143) |
+| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 403 (381–406) |
+| Idle CPU (% of 2 vCPU) | 5.9 (5.8–6.3) | 1.5 (1.3–2.6) | 3.5 (3.4–3.6) |
+| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2296 (2296–2296) |
+| First deploy, image (s) | 7.8 (7–8.4) | 5.7 (5.3–6) | 6.1 (5.8–6.6) |
+| First deploy, build (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 105.3 (105–108.5) |
+| Redeploy, image (s) | 6.9 (4.8–8.3) | 6.4 (5.6–6.6) | 5.2 (4.2–9.7) |
+| Redeploy, build (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 5.1 (4.3–9) |
+| Seconds with failed requests per redeploy, image | 3 (0–3) | 0 (0–0) | 0 (0–0) |
+| Seconds with failed requests per redeploy, build | 3 (0–3) | 0 (0–0) | 0 (0–3) |
+| Dashboard load (ms) | 573.5 (501–630) | 346.5 (296–435) | 517.5 (362–855) |
+| Dashboard largest paint (ms) | 602 (516–652) | 458 (396–552) | 676 (524–1036) |
+| Dashboard transfer (KiB) | 3811 (3811–3925) | 1533 (1530–1578) | 476 (475–480) |
+| Dashboard requests | 18 (18–18) | 119 (119–119) | 41 (39–46) |
+
+A redeploy is the same commit again; failed seconds are counted over 15
+image and 15 build redeploys per platform. Toft is the slowest of the three
+to build an app the first time and to paint its dashboard. The readings are
+in [`results/2026-11-13-v1.0.0/`](results/2026-11-13-v1.0.0/), and earlier
+runs beside it.
+
 ## Method
 
 - **Servers:** three Hetzner Cloud servers of one x86 shared-vCPU type with
   2 vCPU and 4 GB, running Ubuntu 24.04, all in one location, one platform
   each. They run side by side. A fourth, smaller server in the same location
   loads the dashboards.
+- **The CPU under them:** one server type runs on more than one CPU model,
+  and the same loop took 2.0 s on one `cx23` and 4 to 5.4 s on another
+  (2026-11-14). Each run records the model and that loop's time
+  (`cpu_model`, `cpu_loop_s`), and `bench/summary.sh` prints them. If the
+  three servers differ, delete and create them again until they match:
+  the timed rows compare the hardware otherwise. The rounds up to
+  2026-11-13 did not record it.
 - **Rounds:** three. Each round rebuilds the servers from the image. Results
   are the median over every round, with the range.
 - **Versions:** each platform's stable release, pinned and recorded. Every
@@ -40,8 +76,12 @@ API token. Neither documents a way to do it without a browser. Coolify's
 installer can make the account, but it checks the address's domain for mail,
 and `example.com` takes none: the account is made on Coolify's first page,
 which only allows it within 10 minutes of Coolify starting
-(`docker restart coolify` reopens it). The token needs root. Toft's are
-made by the script, and it finishes Toft's setup as a new owner would. The
+(`docker restart coolify` reopens it). The token needs root, and Coolify
+4.5.3 starts with its API turned off: turn it on in its settings (or set
+`instance_settings.is_api_enabled` in its database). Dokploy's key needs
+its organisation and its rate limit turned off; with the default, it allows
+10 requests a day. Toft's account and key
+are made by the script, and it finishes Toft's setup as a new owner would. The
 hand step ends with signing out and closing the tab, so no open dashboard
 counts in the idle readings. If Coolify's proxy has to be started by hand,
 that is outside its install time, and the results say so.
@@ -84,7 +124,9 @@ bench/run.sh coolify root@COOLIFY_IP 1    # COOLIFY_VERSION, default 4.5.3
 bench/run.sh dokploy root@DOKPLOY_IP 1    # DOKPLOY_VERSION, default v0.30.10
 ```
 
-Coolify and Dokploy stop once for the hand step. Each run then prints its
+Coolify and Dokploy stop once for the hand step and read the token from the
+terminal; `BENCH_TTY=FILE` reads it from that file (a FIFO) instead. Each
+run then prints its
 dashboard line. Run that line on the dashboard server:
 
 ```sh
@@ -107,7 +149,9 @@ v0.30, after its git builds stopped putting `.git` in the build context
 install's wait for the database). Its servers were slower that day: the
 install and the first build took about 20 % longer, and the dashboard,
 unchanged since v0.29.0, loaded more slowly. That folder's dashboard files
-are kept for the record and are not compared.
+are kept for the record and are not compared. `bench/results/2026-11-13-v1.0.0/`
+holds all three platforms' rounds of 2026-11-13 (Toft v1.0.0, Coolify
+4.5.3, Dokploy v0.30.10), the numbers above and in the README.
 
 Each run writes the following to `bench/results/`:
 

@@ -1,0 +1,8 @@
+dokploy-traefik 18.03MiB / 3.73GiB 0.00%
+dokploy.1.woheju1jbwcygmhh3391nr5o5 847MiB / 3.73GiB 0.12%
+dokploy-postgres.1.sjuuqar54z5mlflqdpm5sd071 67.98MiB / 3.73GiB 0.00%
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          3         3         3.909GB   0B (0%)
+Containers      3         3         63B       0B (0%)
+Local Volumes   2         2         69.39MB   0B (0%)
+Build Cache     0         0         0B        0B

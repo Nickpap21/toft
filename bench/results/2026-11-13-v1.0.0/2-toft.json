@@ -1,0 +1,65 @@
+{
+  "platform": "toft",
+  "round": "2",
+  "os": [
+    24.04
+  ],
+  "cpus": [
+    2
+  ],
+  "mem_total_kib": [
+    3911572
+  ],
+  "version": [
+    "v1.0.0"
+  ],
+  "install_s": [
+    143.0
+  ],
+  "role_apps_http": [
+    200
+  ],
+  "idle_mem_mib": [
+    406
+  ],
+  "idle_cpu_pct": [
+    3.59
+  ],
+  "disk_mib": [
+    2296
+  ],
+  "first_image_s": [
+    6.6
+  ],
+  "redeploy_image_s": [
+    6.3,
+    5.2,
+    4.9,
+    9.7,
+    5.1
+  ],
+  "redeploy_image_down_s": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "first_git_s": [
+    108.5
+  ],
+  "redeploy_git_s": [
+    9.0,
+    4.9,
+    5.0,
+    5.8,
+    5.7
+  ],
+  "redeploy_git_down_s": [
+    3,
+    0,
+    0,
+    0,
+    0
+  ]
+}

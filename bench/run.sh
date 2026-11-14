@@ -69,6 +69,10 @@ fi
 put os "$(on '. /etc/os-release && echo "$VERSION_ID"')"
 put cpus "$(on nproc)"
 put mem_total_kib "$(on "awk '/^MemTotal:/{print \$2}' /proc/meminfo")"
+# One server type runs on more than one CPU, and the timed rows follow it:
+# the model, and the seconds one core takes over a fixed loop.
+put cpu_model "$(on "grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ //'")"
+put cpu_loop_s "$(on "python3 -c 'import timeit; print(round(timeit.timeit(\"sum(i*i for i in range(10**7))\", number=3), 2))'")"
 on 'mkdir -p /root/bench && cat >/root/bench/sample.sh' <"$DIR/sample.sh"
 
 log "the fresh server: 5 minutes of readings"

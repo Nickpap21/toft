@@ -26,7 +26,7 @@ account() {
   3. Sign out and close the tab: an open dashboard would count in idle.
 EOF
 	printf '  Paste the key: ' >&2
-	read -r TOKEN </dev/tty
+	read -r TOKEN <"${BENCH_TTY:-/dev/tty}"
 }
 
 setup() {
