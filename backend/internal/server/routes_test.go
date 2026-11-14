@@ -170,8 +170,8 @@ func TestTraefikFollowsTheServersConnection(t *testing.T) {
 	assert.Contains(t, run.Log, "This server moved to SSH")
 	assert.Equal(t, -1, host.synced, "the agent isn't asked")
 	assert.NotContains(t, host.sh.cmds[indexOf(host.sh.cmds, "docker run -d")], traefikFileFlag)
-	assert.GreaterOrEqual(t, indexOf(host.sh.cmds, "amd64) docker plugin install grafana/loki-docker-driver:3.7.9-amd64@sha256:"), 0)
-	assert.GreaterOrEqual(t, indexOf(host.sh.cmds, "arm64) docker plugin install grafana/loki-docker-driver:3.7.9-arm64@sha256:"), 0)
+	assert.GreaterOrEqual(t, indexOf(host.sh.cmds, "x86_64) docker plugin install grafana/loki-docker-driver:3.7.9-amd64@sha256:"), 0)
+	assert.GreaterOrEqual(t, indexOf(host.sh.cmds, "aarch64 | arm64) docker plugin install grafana/loki-docker-driver:3.7.9-arm64@sha256:"), 0)
 }
 
 // A Traefik Toft started before 7f, whose redirect outranks every router,
