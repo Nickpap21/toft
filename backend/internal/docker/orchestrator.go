@@ -1189,7 +1189,17 @@ func buildTraefikLabels(serviceID string, domains []string, port int, ac service
 	svcName := traefikServiceName(serviceID)
 	for i, hostname := range domains {
 		routerName := fmt.Sprintf("paas-%s-%d", serviceID[:8], i)
+		// The HTTP router of a temporary (sslip.io) name that still waits for
+		// its certificate serves instead of redirecting (below), under a name
+		// of its own: the deploy that follows the certificate redirects, and
+		// one router that the two slots of that deploy define differently is
+		// a routing change, which stops the previous slot while Traefik still
+		// sends it the name's HTTPS requests.
+		plain := domain.IsTemporary(hostname) && !slices.Contains(ac.Certified, hostname) && (ac.BasicAuthUser == "" || ac.BasicAuthPassword == "")
 		httpRouter := fmt.Sprintf("paas-%s-%d-http", serviceID[:8], i)
+		if plain {
+			httpRouter = fmt.Sprintf("paas-%s-%d-plain-http", serviceID[:8], i)
+		}
 		rule, resolver := fmt.Sprintf("Host(`%s`)", hostname), "letsencrypt"
 		if base, ok := strings.CutPrefix(hostname, "*."); ok {
 			// A wildcard: one label in front of base. Traefik ranks routers by
@@ -1226,7 +1236,7 @@ func buildTraefikLabels(serviceID string, domains []string, port int, ac service
 		// a password never crosses plain HTTP.
 		labels[fmt.Sprintf("traefik.http.routers.%s.rule", httpRouter)] = rule
 		labels[fmt.Sprintf("traefik.http.routers.%s.entrypoints", httpRouter)] = "web"
-		if domain.IsTemporary(hostname) && !slices.Contains(ac.Certified, hostname) && (ac.BasicAuthUser == "" || ac.BasicAuthPassword == "") {
+		if plain {
 			labels[fmt.Sprintf("traefik.http.routers.%s.middlewares", httpRouter)] = middlewareStr
 		} else {
 			labels[fmt.Sprintf("traefik.http.routers.%s.middlewares", httpRouter)] = "redirect-to-https@file"

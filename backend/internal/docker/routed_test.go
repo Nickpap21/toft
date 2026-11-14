@@ -34,9 +34,10 @@ func TestTemporaryNamesServeHTTP(t *testing.T) {
 	labels := buildTraefikLabels(id, []string{"shop.example.com", "web-production-shop.203-0-113-10.sslip.io"}, 8080,
 		service.AccessControl{IPAllowlist: []string{"10.0.0.0/8"}})
 	assert.Equal(t, "redirect-to-https@file", labels["traefik.http.routers.paas-01234567-0-http.middlewares"])
-	assert.Equal(t, "secure-headers@file,paas-01234567-ipallow", labels["traefik.http.routers.paas-01234567-1-http.middlewares"])
-	assert.Equal(t, labels["traefik.http.routers.paas-01234567-1.middlewares"], labels["traefik.http.routers.paas-01234567-1-http.middlewares"],
+	assert.Equal(t, "secure-headers@file,paas-01234567-ipallow", labels["traefik.http.routers.paas-01234567-1-plain-http.middlewares"])
+	assert.Equal(t, labels["traefik.http.routers.paas-01234567-1.middlewares"], labels["traefik.http.routers.paas-01234567-1-plain-http.middlewares"],
 		"no less protected over HTTP")
+	assert.NotContains(t, labels, "traefik.http.routers.paas-01234567-1-http.rule", "one HTTP router a name")
 
 	labels = buildTraefikLabels(id, []string{"web-production-shop.203-0-113-10.sslip.io"}, 8080,
 		service.AccessControl{BasicAuthUser: "admin", BasicAuthPassword: "s3cret"})
