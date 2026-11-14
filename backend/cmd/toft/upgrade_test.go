@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,7 +29,9 @@ import (
 
 // fakeHost answers the commands toft upgrade runs, as a panel host would.
 type fakeHost struct {
-	t       *testing.T
+	t *testing.T
+	// mu holds each command whole: the upgrade pulls images side by side.
+	mu      sync.Mutex
 	calls   []string
 	images  map[string]string // ref → image ID present on the host
 	running map[string]string // container → the image ID it runs
@@ -38,7 +41,9 @@ type fakeHost struct {
 	failAtlas   bool
 	failRestore bool
 	pullFails   bool
-	contract    bool // the release has a contract.sql
+	failPull    string // a pull of a ref holding this fails
+	failCompose bool   // docker compose pull fails
+	contract    bool   // the release has a contract.sql
 	// contractEmpty: the release's contract.sql holds only its header.
 	contractEmpty bool
 	git           bool // the release has git hosting's compose file (D-71)
@@ -77,6 +82,8 @@ func newFakeHost(t *testing.T) *fakeHost {
 }
 
 func (f *fakeHost) run(_ context.Context, out io.Writer, stdin io.Reader, env []string, name string, args ...string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	call := strings.TrimSpace(name + " " + strings.Join(args, " "))
 	f.calls = append(f.calls, call)
 	if out == nil {
@@ -108,7 +115,7 @@ func (f *fakeHost) run(_ context.Context, out io.Writer, stdin io.Reader, env []
 			return errors.New("No such image")
 		}
 		_, _ = io.WriteString(out, id)
-	case args[0] == "pull" && f.pullFails:
+	case args[0] == "pull" && (f.pullFails || f.failPull != "" && strings.Contains(args[len(args)-1], f.failPull)):
 		return errors.New("manifest unknown")
 	case args[0] == "pull" && strings.HasSuffix(args[len(args)-1], "-release"):
 		if f.noRelease {
@@ -198,6 +205,10 @@ func (f *fakeHost) run(_ context.Context, out io.Writer, stdin io.Reader, env []
 		f.postgres = true
 		for _, c := range []string{"backend", "frontend"} {
 			f.running["paas-"+c] = f.images["ghcr.io/acme/paas-"+c+":"+env["IMAGE_TAG"]]
+		}
+	case args[0] == "compose" && contains(args, "pull"):
+		if f.failCompose {
+			return errors.New("exit status 18")
 		}
 	case args[0] == "compose" && contains(args, "postgres"):
 		f.postgres = true
@@ -342,7 +353,7 @@ func TestUpgrade_FreshInstall(t *testing.T) {
 	// Migrations run before the stack starts.
 	atlas, up := -1, -1
 	for i, c := range h.calls {
-		if strings.Contains(c, atlasImage) && atlas < 0 {
+		if strings.HasPrefix(c, "docker run") && strings.Contains(c, atlasImage) && atlas < 0 {
 			atlas = i
 		}
 		if strings.HasSuffix(c, "up -d --remove-orphans") && up < 0 {
@@ -598,7 +609,9 @@ func TestUpgrade_FailedMigrationAborts(t *testing.T) {
 	if got := tag(t, u); got != "v0.1.0" {
 		t.Fatalf("IMAGE_TAG = %q", got)
 	}
-	if h.did("docker compose") != 1 || !strings.Contains(h.calls[indexOf(h.calls, "docker compose")], "--no-recreate postgres") {
+	// The background pull of postgres and traefik touches no container.
+	composed := slices.DeleteFunc(slices.Clone(h.calls), func(c string) bool { return strings.Contains(c, " pull --quiet ") })
+	if countPrefix(composed, "docker compose") != 1 || !strings.Contains(composed[indexOf(composed, "docker compose")], "--no-recreate postgres") {
 		t.Fatalf("the stack was touched beyond postgres:\n%s", strings.Join(h.calls, "\n"))
 	}
 	if !strings.Contains(out.String(), "v0.1.0 keeps running") {
@@ -613,6 +626,61 @@ func indexOf(calls []string, prefix string) int {
 		}
 	}
 	return -1
+}
+
+// The two signed images download side by side, and each is tagged as the
+// release; either failing fails the upgrade with its error.
+func TestUpgrade_PullsTheImagesSideBySide(t *testing.T) {
+	h, u, out := installed(t)
+	if err := u.upgrade(context.Background(), "v0.2.0", false); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, c := range []string{"backend", "frontend"} {
+		ref := "ghcr.io/acme/paas-" + c + "@" + digest(c, "v0.2.0")
+		if h.did("docker pull --quiet "+ref) != 1 || h.did("docker tag "+ref+" ghcr.io/acme/paas-"+c+":v0.2.0") != 1 {
+			t.Errorf("%s not pulled and tagged:\n%s", c, strings.Join(h.calls, "\n"))
+		}
+	}
+
+	for _, c := range []string{"backend", "frontend"} {
+		t.Run(c+" failing", func(t *testing.T) {
+			h, u, out := installed(t)
+			h.failPull = "paas-" + c + "@"
+			ref := "ghcr.io/acme/paas-" + c + "@" + digest(c, "v0.2.0")
+			err := u.upgrade(context.Background(), "v0.2.0", false)
+			if err == nil || !strings.HasPrefix(err.Error(), "pull "+ref+": manifest unknown") {
+				t.Fatalf("err = %v\n%s", err, out)
+			}
+			if got := tag(t, u); got != "v0.1.0" {
+				t.Fatalf("IMAGE_TAG = %q", got)
+			}
+		})
+	}
+}
+
+// postgres, traefik and Atlas download in the background once the release
+// is verified, and their failing is left to the steps that need them.
+func TestUpgrade_PrefetchesTheOtherImages(t *testing.T) {
+	h, u, out := installed(t)
+	h.failCompose = true // and Atlas's pull fails too: the fake registry lacks it
+	if err := u.upgrade(context.Background(), "v0.2.0", false); err != nil {
+		t.Fatalf("a failed prefetch failed the upgrade: %v\n%s", err, out)
+	}
+	pull := slices.IndexFunc(h.calls, func(c string) bool {
+		return strings.HasPrefix(c, "docker compose") && strings.HasSuffix(c, " pull --quiet --policy missing postgres traefik")
+	})
+	atlas := slices.IndexFunc(h.calls, func(c string) bool { return c == "docker pull --quiet "+atlasImage })
+	verified := indexOf(h.calls, "docker cp cid:/toft-images.sig")
+	bundle := indexOf(h.calls, "docker cp cid:/usr/share/toft/bundle")
+	if pull < 0 || atlas < 0 {
+		t.Fatalf("postgres and traefik at %d, Atlas at %d:\n%s", pull, atlas, strings.Join(h.calls, "\n"))
+	}
+	if first := indexOf(h.calls, "docker image inspect --format {{.Id}} "+atlasImage); first < verified || pull < bundle {
+		t.Fatalf("fetched before the release was verified (manifest at %d, bundle at %d; Atlas at %d, compose pull at %d)", verified, bundle, first, pull)
+	}
+	if !strings.Contains(out.String(), "Schema migrated") || strings.Contains(out.String(), "manifest unknown") {
+		t.Errorf("output:\n%s", out)
+	}
 }
 
 func TestUpgrade_Refusals(t *testing.T) {
