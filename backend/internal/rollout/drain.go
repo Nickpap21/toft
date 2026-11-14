@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -32,20 +33,27 @@ import (
 //
 // An image's own HEALTHCHECK is kept, on its own interval, timeout, retries
 // and shell: drainScript runs it at most once an interval and reports as
-// Docker would have, so the flag is still seen within drainInterval.
+// Docker would have.
+//
+// Docker runs a check at one interval for the container's whole life, and
+// starting one costs it far more than the check itself. So a check that
+// passed before doesn't end at once: it stays for up to drainHold, looking
+// for the flag every second (holdTail), and Docker starts the next one
+// drainInterval after it ends. A healthy slot is checked about twice a
+// minute, and a drained one still fails its check within a second (D-168).
 
 const (
 	drainDir  = "/.toft-drain"
 	drainFlag = drainDir + "/now"
-	// The check's own cadence: a drained container leaves Traefik within
-	// drainInterval × drainRetries of the flag, and two failed checks in a
-	// row (an exec Docker couldn't start) are needed to drop one by mistake.
-	// Each check costs Docker about 4% of a core-second: at 5 s about 0.8%
-	// of one core per routed slot, measured on a test server (2 s: 1.8%,
-	// 10 s: 0.5%), for a switch a few seconds longer than at 2 s.
+	// The gap between two checks: a drained container fails the check that
+	// is running within a second and the next one drainInterval later, and
+	// two failed checks in a row (an exec Docker couldn't start) are needed
+	// to drop one by mistake.
 	drainInterval = 5 * time.Second
 	drainRetries  = 2
 	drainTimeout  = 5 * time.Second
+	// How long a check that passed before stays, looking for the flag.
+	drainHold = 25 * time.Second
 	// A new slot is checked this often until it first passes.
 	drainStartInterval = 500 * time.Millisecond
 	drainStartPeriod   = 30 * time.Second
@@ -75,6 +83,26 @@ const busybox = ProbeMountPath + "/bin/busybox"
 // drained is the shell test that the flag was set less than a minute ago.
 const drained = `[ -n "$(` + busybox + ` find ` + drainFlag + ` -mmin -1 2>/dev/null)" ]`
 
+// holdTail ends both checks once the slot is healthy. The first healthy
+// answer after a start or a drain is given at once; later ones after h
+// seconds of looking for the flag ($D/ok is gone after any failed check).
+const holdTail = `
+[ -e $D/ok ] || { : >$D/ok; exit 0; }
+while [ "$h" -gt 0 ]; do
+	$B sleep 1
+	if [ -e ` + drainFlag + ` ] && ` + drained + `; then echo "drained: leaving Traefik's rotation before it stops"; exit 1; fi
+	h=$((h - 1))
+done`
+
+// holdSetup is what both checks start with.
+var holdSetup = `B=` + busybox + ` D=` + drainDir + ` H=` + secs(drainHold) + `
+trap '[ $? -eq 0 ] || $B rm -f $D/ok' EXIT
+if ` + drained + `; then echo "drained: leaving Traefik's rotation before it stops"; exit 1; fi
+`
+
+// flagScript is the check of a slot whose image has none: the flag alone.
+var flagScript = holdSetup + `h=$H` + holdTail
+
 // drainScript runs in busybox's sh from the probe mount. Its arguments are
 // the gap between runs of the image's check until it first passes, the gap
 // after, the image's retries and timeout (seconds), then the image's check
@@ -84,14 +112,13 @@ const drained = `[ -n "$(` + busybox + ` find ` + drainFlag + ` -mmin -1 2>/dev/
 // would (busybox timeout leaves a watcher for PID 1 to reap, which many
 // apps' PID 1 never does), and the flag is still read while it runs. Its
 // output is dropped: the tmpfs is small, and nothing reads it.
-const drainScript = `B=` + busybox + ` D=` + drainDir + `
-if ` + drained + `; then echo "drained: leaving Traefik's rotation before it stops"; exit 1; fi
-gap=$1 iv=$2 re=$3 to=$4
+var drainScript = holdSetup + `gap=$1 iv=$2 re=$3 to=$4
 shift 4
 [ -e $D/passed ] && gap=$iv
 now=$($B date +%s)
 last=$($B cat $D/last 2>/dev/null) || last=0
 if [ $((now - last)) -ge "$gap" ]; then
+	last=$now
 	echo "$now" >$D/last
 	"$@" >/dev/null 2>&1 &
 	p=$!
@@ -112,7 +139,9 @@ if [ $((now - last)) -ge "$gap" ]; then
 		echo $(($($B cat $D/fails 2>/dev/null || echo 0) + 1)) >$D/fails
 	fi
 fi
-[ -e $D/passed ] && [ "$($B cat $D/fails)" -lt "$re" ]`
+[ -e $D/passed ] && [ "$($B cat $D/fails)" -lt "$re" ] || exit 1
+h=$((last + iv - $($B date +%s) - ` + secs(drainInterval) + `))
+[ "$h" -le "$H" ] || h=$H` + holdTail
 
 // drainHealthcheck is the health check a routed slot is created with, from
 // its image's own (nil: none) and the image's shell (nil: /bin/sh -c, as
@@ -139,8 +168,8 @@ func drainHealthcheck(image *container.HealthConfig, shell []string) (hc *contai
 	}
 	if len(argv) == 0 {
 		return &container.HealthConfig{
-			Test:     []string{"CMD", busybox, "sh", "-c", "! " + drained},
-			Interval: drainInterval, Timeout: drainTimeout, Retries: drainRetries,
+			Test:     []string{"CMD", busybox, "sh", "-c", flagScript},
+			Interval: drainInterval, Timeout: drainHold + drainTimeout, Retries: drainRetries,
 			StartPeriod: drainStartPeriod, StartInterval: drainStartInterval,
 		}, true
 	}
@@ -155,7 +184,7 @@ func drainHealthcheck(image *container.HealthConfig, shell []string) (hc *contai
 		secs(orDefault(image.StartInterval, dockerStartInterval)), secs(iv), strconv.Itoa(re), secs(to)}, argv...)
 	return &container.HealthConfig{
 		Test:     test,
-		Interval: drainInterval, Timeout: to + drainTimeout, Retries: drainRetries,
+		Interval: drainInterval, Timeout: to + drainHold + drainTimeout, Retries: drainRetries,
 		// Until the image's check first passes, Docker reports starting, as
 		// it would have within the image's start period and retries.
 		StartPeriod: image.StartPeriod + iv*time.Duration(re), StartInterval: drainStartInterval,
@@ -203,7 +232,12 @@ func AwaitHealthy(ctx context.Context, dc *client.Client, name string, settle bo
 		return nil
 	}
 	hc := info.Config.Healthcheck
-	limit := hc.StartPeriod + (hc.Interval+hc.Timeout)*time.Duration(hc.Retries+1)
+	// A check never holds before it first passes.
+	timeout := hc.Timeout
+	if strings.HasSuffix(hc.Test[4], holdTail) {
+		timeout -= drainHold
+	}
+	limit := hc.StartPeriod + (hc.Interval+timeout)*time.Duration(hc.Retries+1)
 	status, err := waitHealth(ctx, dc, name, limit, container.Healthy)
 	if err != nil {
 		return fmt.Errorf("wait for Docker to report %s healthy: %w", name, err)
