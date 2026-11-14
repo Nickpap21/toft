@@ -264,19 +264,22 @@ if ! command -v docker >/dev/null 2>&1; then
 	# The app address pool (D-31): written only where Docker has no
 	# daemon.json yet, and only by this installer; an existing one is never
 	# edited. Before the packages, since apt starts Docker as it installs it.
-	if [ ! -e /etc/docker/daemon.json ]; then
-		if [ -z "$POOL" ]; then
-			used=$(ip -4 route | awk '{ print $1 }')
-			for n in 203 204 205 206 207 208 209 210; do
-				echo "$used" | grep -q "^10\.$n\." || { POOL="10.$n.0.0/16"; break; }
-			done
-			[ -n "$POOL" ] || die "no free /16 between 10.203 and 10.210 on this host" "Choose one with --pool CIDR."
+	docker_pool() {
+		if [ ! -e /etc/docker/daemon.json ]; then
+			if [ -z "$POOL" ]; then
+				used=$(ip -4 route | awk '{ print $1 }')
+				for n in 203 204 205 206 207 208 209 210; do
+					echo "$used" | grep -q "^10\.$n\." || { POOL="10.$n.0.0/16"; break; }
+				done
+				[ -n "$POOL" ] || die "no free /16 between 10.203 and 10.210 on this host" "Choose one with --pool CIDR."
+			fi
+			mkdir -p /etc/docker
+			printf '{"default-address-pools":[{"base":"%s","size":24}]}\n' "$POOL" >/etc/docker/daemon.json
 		fi
-		mkdir -p /etc/docker
-		printf '{"default-address-pools":[{"base":"%s","size":24}]}\n' "$POOL" >/etc/docker/daemon.json
-	fi
+	}
 	case "$ID" in
 	ubuntu | debian)
+		docker_pool
 		# needrestart (Ubuntu) would print and restart services after each install.
 		export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
 		# Docker's key needs curl and the CA certificates, which every cloud
@@ -293,6 +296,7 @@ if ! command -v docker >/dev/null 2>&1; then
 		apt-get install -yq nftables docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin >&3 2>&3
 		;;
 	rocky | almalinux | rhel | centos)
+		docker_pool
 		dnf -y install dnf-plugins-core nftables >&3 2>&3
 		dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >&3 2>&3
 		dnf -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin >&3 2>&3
@@ -303,7 +307,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # dnf leaves Docker stopped; apt has started it, with the pool.
-[ -z "$installed_docker" ] || systemctl enable --now docker >/dev/null 2>&1
+[ -z "$installed_docker" ] || systemctl enable --now docker >&3 2>&3 || true
 docker_v=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || die "Docker is installed but not running" "Start it (systemctl start docker), then run this again."
 [ "${docker_v%%.*}" -ge 29 ] || die "Docker $docker_v found: Toft needs Docker 29 or newer" \
 	"Upgrading Docker restarts every container on this server. Stop or move them first, upgrade Docker (https://docs.docker.com/engine/install/), then run this again."
