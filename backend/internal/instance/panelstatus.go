@@ -282,6 +282,10 @@ const (
 	panelCertRetryTTL = time.Minute
 	// The monitor's containers, older than this, are read again on request.
 	panelContainersTTL = 3 * panelTick
+	// The monitor takes the containers' stats for this long after
+	// PanelStatus was last asked: Docker spends about a second of a core a
+	// minute on them, which no one reads on an idle server.
+	panelWatched = time.Minute
 )
 
 // panelMonitor reads the host every panelTick for the live view and stores
@@ -313,9 +317,11 @@ type panelMonitor struct {
 	// ask is certificateTick's latest for askDomain.
 	ask       *PanelCertificateAsk
 	askDomain string
-	// The containers with their stats, from the last tick.
+	// The containers from the last tick, and when a tick last took them
+	// with their stats (while askedAt is within panelWatched).
 	containers   []PanelContainer
 	containersAt time.Time
+	askedAt      time.Time
 	system       *PanelSystem
 	systemAt     time.Time
 }
@@ -431,17 +437,27 @@ func (s *Service) panelTick(ctx context.Context, now time.Time) {
 	}
 }
 
-// panelContainersTick takes the containers with their stats, which wait
-// about two seconds for a second CPU reading, so that PanelStatus, polled
-// every 5 seconds, answers without that wait. A failed read leaves the last
-// one to go stale; PanelStatus then reads them itself and says why.
+// panelContainersTick takes the containers. While PanelStatus is being
+// asked it takes their stats too, which wait about two seconds for a second
+// CPU reading, so that PanelStatus, polled every 5 seconds, answers without
+// that wait; the first PanelStatus after a quiet minute reads them itself.
+// A failed read leaves the last one to go stale; PanelStatus then reads
+// them itself and says why.
 func (s *Service) panelContainersTick(ctx context.Context, now time.Time) {
-	cs, err := s.panel.probe.Containers(ctx, s.panelContainerNames(), true)
+	s.panel.mu.Lock()
+	watched := now.Sub(s.panel.askedAt) < panelWatched
+	s.panel.mu.Unlock()
+	cs, err := s.panel.probe.Containers(ctx, s.panelContainerNames(), watched)
 	if err != nil {
 		return
 	}
 	s.panel.mu.Lock()
-	s.panel.containers, s.panel.containersAt = cs, now
+	s.panel.containers = cs
+	// Without their stats they are never fresh: whoever asks next reads them.
+	s.panel.containersAt = time.Time{}
+	if watched {
+		s.panel.containersAt = now
+	}
 	s.panel.mu.Unlock()
 }
 
@@ -497,6 +513,7 @@ func (s *Service) PanelStatus(ctx context.Context, actorID string) (*PanelStatus
 		return nil, errors.New("the panel's monitor is not configured")
 	}
 	s.panel.mu.Lock()
+	s.panel.askedAt = time.Now()
 	cs := slices.Clone(s.panel.containers)
 	fresh := time.Since(s.panel.containersAt) < panelContainersTTL
 	s.panel.mu.Unlock()

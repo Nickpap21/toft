@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -259,7 +260,7 @@ func upgradeCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if os.Geteuid() != 0 {
 		return errors.New("run toft upgrade as root on the panel host")
 	}
-	u := &upgrader{h: osHost{}, p: hostPaths, repo: *repo, out: stdout, wait: 2 * time.Minute, poll: 3 * time.Second, now: time.Now, sleep: time.Sleep, size: hostSize, free: freeBytes,
+	u := &upgrader{h: osHost{}, p: hostPaths, repo: *repo, out: stdout, wait: 2 * time.Minute, poll: time.Second, now: time.Now, sleep: time.Sleep, size: hostSize, free: freeBytes,
 		self: buildinfo.Version, exec: func(path string, args []string) error { return syscall.Exec(path, args, os.Environ()) },
 		listen: portFree, key: builtInReleaseKey()}
 	if !*handedOver {
@@ -455,6 +456,13 @@ func (u *upgrader) upgrade(ctx context.Context, to string, force bool) (err erro
 	from := st.Version
 	end := u.beginRun(to, from, logPath)
 	defer func() { end(err) }()
+	// The images fetched in the background, best effort, end with the
+	// upgrade: cancelled when it returns, then waited for (defers run last
+	// first), so none outlives the command.
+	var bg sync.WaitGroup
+	bgCtx, cancel := context.WithCancel(ctx)
+	defer bg.Wait()
+	defer cancel()
 	repo := u.repoFor(env)
 	if from == "" {
 		u.say("Installing Toft %s", to)
@@ -485,11 +493,21 @@ func (u *upgrader) upgrade(ctx context.Context, to string, force bool) (err erro
 	if err != nil {
 		return err
 	}
-	ids := make([]string, 0, len(refs))
+	// The release is verified: the migrations' Atlas, pinned here, downloads
+	// beside its images. A failure is the migration's to report.
+	bg.Go(func() { _, _ = u.image(bgCtx, atlasImage) })
+	// The two images download side by side; the first error in refs' order
+	// fails the upgrade, as one after the other did.
+	ids := make([]string, len(refs))
+	errs := make([]error, len(refs))
+	var pulls sync.WaitGroup
 	for i, ref := range refs {
-		id, err := u.image(ctx, ref)
-		if err != nil {
-			return err
+		pulls.Go(func() { ids[i], errs[i] = u.image(ctx, ref) })
+	}
+	pulls.Wait()
+	for i, ref := range refs {
+		if errs[i] != nil {
+			return errs[i]
 		}
 		// The stack runs the release's tag (docker-compose.yml): here it
 		// names the signed image, whatever the registry's tag points at.
@@ -497,7 +515,6 @@ func (u *upgrader) upgrade(ctx context.Context, to string, force bool) (err erro
 		if err := u.docker(ctx, io.Discard, "tag", ref, tag); err != nil {
 			return fmt.Errorf("tag %s: %w", ref, err)
 		}
-		ids = append(ids, id)
 	}
 	u.note("pull", fmt.Sprintf("%d images", len(refs)))
 	if from == "" {
@@ -517,6 +534,13 @@ func (u *upgrader) upgrade(ctx context.Context, to string, force bool) (err erro
 	if err := u.checkGitPort(ctx, env, filepath.Join(release, "bundle")); err != nil {
 		return err
 	}
+	// The bundle came out of the signed image: postgres and traefik, by the
+	// compose files the stack starts from, download while the database is
+	// saved. Present ones are skipped; a failure is the start's to report.
+	bundle := filepath.Join(release, "bundle")
+	bg.Go(func() {
+		_ = u.composeWith(bgCtx, bundle, u.withGit(bundle), "pull", "--quiet", "--policy", "missing", "postgres", "traefik")
+	})
 	// The backend reads run.json and the release check through this (D-68).
 	if env["TOFT_UPGRADE_DIR"] == "" {
 		if err := setEnv(u.p.secrets, "TOFT_UPGRADE_DIR", u.p.work); err != nil {
@@ -736,11 +760,17 @@ func (u *upgrader) dump(ctx context.Context, env map[string]string, version stri
 // with git hosting (docker-compose.git.yml, D-71) when the bundle has it
 // and the install has not turned it off.
 func (u *upgrader) compose(ctx context.Context, bundle string, args ...string) error {
+	u.git = u.withGit(bundle)
+	return u.composeWith(ctx, bundle, u.git, args...)
+}
+
+// composeWith is compose with git hosting's file or without it, leaving
+// u.git alone: the background pull runs beside the upgrade's own compose.
+func (u *upgrader) composeWith(ctx context.Context, bundle string, git bool, args ...string) error {
 	subnet, _ := u.dockerOut(ctx, "network", "inspect", "paas-network", "-f", "{{range .IPAM.Config}}{{.Subnet}},{{end}}")
 	env := []string{"TOFT_CONTROL_PLANE_SUBNET=" + strings.TrimSuffix(subnet, ",")}
 	base := []string{"compose", "--project-directory", bundle, "-f", filepath.Join(bundle, "docker-compose.yml")}
-	u.git = u.withGit(bundle)
-	if u.git {
+	if git {
 		base = append(base, "-f", filepath.Join(bundle, gitCompose))
 	}
 	base = append(base, "--env-file", u.p.secrets)
