@@ -22,15 +22,16 @@ func TestDrainHealthcheck(t *testing.T) {
 	for _, image := range []*container.HealthConfig{nil, {Test: []string{"NONE"}}, {Test: []string{"CMD-SHELL"}}} {
 		hc, ok := drainHealthcheck(image, nil)
 		require.True(t, ok)
-		assert.Equal(t, []string{"CMD", busybox, "sh", "-c", "! " + drained}, hc.Test, "no check of the image's own: the flag alone")
+		assert.Equal(t, []string{"CMD", busybox, "sh", "-c", flagScript}, hc.Test, "no check of the image's own: the flag alone")
 		assert.Equal(t, drainInterval, hc.Interval)
+		assert.Equal(t, drainHold+drainTimeout, hc.Timeout, "a check that holds isn't killed for it")
 	}
 
 	hc, ok := drainHealthcheck(&container.HealthConfig{Test: []string{"CMD", "curl", "-f", "http://localhost/"}}, nil)
 	require.True(t, ok)
 	assert.Equal(t, []string{"CMD", busybox, "sh", "-c", drainScript, "toft-drain", "5", "30", "3", "30", "curl", "-f", "http://localhost/"}, hc.Test,
 		"Docker's defaults; the start interval until the check first passes, start period or not")
-	assert.Equal(t, 30*time.Second+drainTimeout, hc.Timeout)
+	assert.Equal(t, 30*time.Second+drainHold+drainTimeout, hc.Timeout)
 	assert.Equal(t, 90*time.Second, hc.StartPeriod, "starting until the image's retries would have run out")
 
 	hc, _ = drainHealthcheck(&container.HealthConfig{Test: []string{"CMD-SHELL", "pg_isready || exit 1"},
@@ -46,11 +47,61 @@ func TestDrainHealthcheck(t *testing.T) {
 	assert.False(t, ok, "a form this doesn't know keeps the image's check")
 }
 
-// drainScript, run by the host's sh with its own date, cat, head, find and
-// sleep in place of busybox's, against a state directory of its own.
+// hostScript is a check's script for the host's sh, with its own date, cat,
+// find, rm and sleep in place of busybox's, a state directory of its own
+// and a hold of one second.
+func hostScript(script, dir string) string {
+	return strings.NewReplacer(busybox+" ", "", "B="+busybox, "B=", "D="+drainDir, "D="+dir, drainFlag, filepath.Join(dir, "now"),
+		"H="+secs(drainHold), "H=1").Replace(script)
+}
+
+// A check that passed before holds, so Docker starts one about twice a
+// minute, and still fails within a second of the flag; the first healthy
+// answer after a start or a drain is given at once.
+func TestFlagScriptHolds(t *testing.T) {
+	dir := t.TempDir()
+	flag := filepath.Join(dir, "now")
+	run := func() (int, time.Duration) {
+		start := time.Now()
+		cmd := exec.Command("sh", "-c", hostScript(flagScript, dir))
+		if err := cmd.Run(); err != nil {
+			return cmd.ProcessState.ExitCode(), time.Since(start)
+		}
+		return 0, time.Since(start)
+	}
+
+	code, took := run()
+	assert.Equal(t, 0, code)
+	assert.Less(t, took, 900*time.Millisecond, "a new slot is healthy at once")
+	code, took = run()
+	assert.Equal(t, 0, code)
+	assert.GreaterOrEqual(t, took, time.Second, "then each check holds")
+
+	require.NoError(t, os.WriteFile(flag, nil, 0o600))
+	code, took = run()
+	assert.Equal(t, 1, code, "drained")
+	assert.Less(t, took, 900*time.Millisecond)
+	require.NoError(t, os.Remove(flag))
+	code, took = run()
+	assert.Equal(t, 0, code)
+	assert.Less(t, took, 900*time.Millisecond, "serving again is reported at once, not a hold later")
+
+	drainHold := 5 * time.Second
+	script := strings.Replace(hostScript(flagScript, dir), "H=1", "H="+secs(drainHold), 1)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = os.WriteFile(flag, nil, 0o600)
+	}()
+	start := time.Now()
+	err := exec.Command("sh", "-c", script).Run()
+	assert.Error(t, err, "drained while it holds")
+	assert.Less(t, time.Since(start), 3*time.Second, "seen within a second")
+}
+
+// drainScript, run by the host's sh, against a state directory of its own.
 func TestDrainScript(t *testing.T) {
 	dir := t.TempDir()
-	script := strings.NewReplacer(busybox+" ", "", "B="+busybox, "B=", "D="+drainDir, "D="+dir, drainFlag, filepath.Join(dir, "now")).Replace(drainScript)
+	script := hostScript(drainScript, dir)
 	run := func(gap, iv, re, to string, argv ...string) int {
 		cmd := exec.Command("sh", append([]string{"-c", script, "toft-drain", gap, iv, re, to}, argv...)...)
 		if err := cmd.Run(); err != nil {
@@ -70,6 +121,13 @@ func TestDrainScript(t *testing.T) {
 	assert.Equal(t, 1, run("30", "30", "2", "5", "false"), "the second in a row is not")
 	again()
 	assert.Equal(t, 0, run("30", "30", "2", "5", "true"), "one pass is healthy again")
+	held := time.Now()
+	assert.Equal(t, 0, run("30", "30", "2", "5", "true"), "not due again: healthy by its last run")
+	assert.GreaterOrEqual(t, time.Since(held), time.Second, "and it holds until the image's check is nearly due")
+	again()
+	held = time.Now()
+	assert.Equal(t, 0, run("5", "5", "2", "5", "true"))
+	assert.Less(t, time.Since(held), 900*time.Millisecond, "an image's check every 5 s keeps its interval: nothing to hold for")
 	again()
 	start := time.Now()
 	assert.Equal(t, 1, run("30", "30", "1", "1", "sleep", "5"), "a check past its timeout is a failure")
