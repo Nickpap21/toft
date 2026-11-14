@@ -57,76 +57,7 @@ On a fresh Linux server ([requirements](#install)):
 curl -fsSL https://github.com/Nickpap21/toft/releases/latest/download/install.sh | sudo sh
 ```
 
-## Proof
-
-### How it compares
-
-Toft, Coolify and Dokploy, each on its own fresh Hetzner Cloud `cx23`
-(2 vCPU, 4 GB, Ubuntu 24.04), deploying the same app from its image and
-from its source. Median of three rounds, range in brackets. The method, the
-scripts to rerun it and every reading are in [`bench/`](bench/).
-
-| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.0 |
-|---|---|---|---|
-| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 142.9 (141.5–143) |
-| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 403 (381–406) |
-| Idle CPU (% of 2 vCPU) | 5.9 (5.8–6.3) | 1.5 (1.3–2.6) | 3.5 (3.4–3.6) |
-| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2296 (2296–2296) |
-| First deploy, image (s) | 7.8 (7–8.4) | 5.7 (5.3–6) | 6.1 (5.8–6.6) |
-| First deploy, build (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 105.3 (105–108.5) |
-| Redeploy, image (s) | 6.9 (4.8–8.3) | 6.4 (5.6–6.6) | 5.2 (4.2–9.7) |
-| Redeploy, build (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 5.1 (4.3–9) |
-| Seconds with failed requests per redeploy, image | 3 (0–3) | 0 (0–0) | 0 (0–0) |
-| Seconds with failed requests per redeploy, build | 3 (0–3) | 0 (0–0) | 0 (0–3) |
-| Dashboard load (ms) | 573.5 (501–630) | 346.5 (296–435) | 517.5 (362–855) |
-| Dashboard largest paint (ms) | 602 (516–652) | 458 (396–552) | 676 (524–1036) |
-| Dashboard transfer (KiB) | 3811 (3811–3925) | 1533 (1530–1578) | 476 (475–480) |
-| Dashboard requests | 18 (18–18) | 119 (119–119) | 41 (39–46) |
-
-Measured 2026-11-13, all three platforms on the same day. A redeploy is the
-same commit again; failed seconds are counted over 15 image and 15 build
-redeploys per platform. Toft is the slowest of the three to build an app
-the first time and to paint its dashboard. Earlier runs are in
-[`bench/results/`](bench/results/).
-
-### Security
-
-Each claim links the decision behind it and the guide that shows it working.
-
-| | Decision | Guide |
-| --- | --- | --- |
-| **gVisor sandboxing.** A service runs Standard, Sandboxed (gVisor), or Sandboxed with a strict network. | [Isolation levels](https://nickpap21.github.io/toft/decisions/isolation-levels/) | [Isolation](https://nickpap21.github.io/toft/reference/isolation/) |
-| **A firewall on every server.** App containers reach their own host only on web ports and DNS, and never the cloud's metadata address. | [Host firewall](https://nickpap21.github.io/toft/decisions/host-firewall/) | [The host firewall](https://nickpap21.github.io/toft/guide/servers/#the-host-firewall) |
-| **Signed agent releases.** The agent installs only a release whose signature covers its version, architecture and hash. | [The node agent](https://nickpap21.github.io/toft/decisions/node-agent/) | [Signed releases](https://nickpap21.github.io/toft/guide/servers/#signed-releases-and-upgrades) |
-| **Write-once secrets, bound to their place.** Nobody can read a secret back, and an encrypted value copied to another row doesn't open. | [Write-once secrets](https://nickpap21.github.io/toft/decisions/write-once-secrets/) | [Variables and secrets](https://nickpap21.github.io/toft/guide/deploys/#variables-and-secrets) |
-| **Deploy policies.** A policy limits what a service may mount or reach. An exception is pinned to the values it approved: change one and the deploy is refused until it's granted again. | | [Deploy policy](https://nickpap21.github.io/toft/guide/deploys/#deploy-policy) |
-| **Scoped keys that expire.** A key can be limited to one project and chosen scopes, and every key expires after 90 days unless you choose otherwise. | | [Expiry](https://nickpap21.github.io/toft/reference/cli/#expiry) |
-| **Agent approvals.** Each AI agent action runs, waits for a person, or is refused, with its own setting for previews, other environments and protected ones. Deploys to `production` wait by default. | [Agent policy](https://nickpap21.github.io/toft/decisions/agent-policy/) | [The agent policy](https://nickpap21.github.io/toft/reference/mcp/#the-agent-policy) |
-
-Toft had a full security audit before launch, then a second one after the
-fixes. Nothing Medium or above is open. Please report vulnerabilities
-privately, never in a public issue: see [SECURITY.md](SECURITY.md).
-
-## How it works
-
-```
-            you: browser · toft CLI · git · AI agents (MCP)
-                                 │
-               ┌─────────────────▼─────────────────┐
-               │  Toft panel                       │
-               │  Go API · Next.js · Postgres · git│
-               └─────────┬─────────────────┬───────┘
-                    SSH  │                 │  outbound agent
-               ┌─────────▼──────┐   ┌──────▼─────────┐
-               │  server        │   │  server        │
-               │  Traefik       │   │  Traefik       │
-               │  your apps     │   │  your apps     │
-               └────────────────┘   └────────────────┘
-```
-Each server runs its own Traefik, so a server keeps serving its apps when the
-panel is down. Read more in the [architecture guide](https://nickpap21.github.io/toft/architecture/).
-
-### What's in it
+## Features
 
 <table>
 <tr>
@@ -213,7 +144,7 @@ panel is down. Read more in the [architecture guide](https://nickpap21.github.io
 </table>
 </div>
 
-## First use
+## Quick start
 
 ### Install
 
@@ -257,6 +188,80 @@ From there: [deploy from git](https://nickpap21.github.io/toft/guide/deploys/#gi
 Upgrades run from **Instance → Overview** in the panel, or with
 `toft upgrade --to <version>`. See the [install guide](https://nickpap21.github.io/toft/install/)
 for domains, options and restoring from a backup.
+
+## How it works
+
+```
+            you: browser · toft CLI · git · AI agents (MCP)
+                                 │
+               ┌─────────────────▼─────────────────┐
+               │  Toft panel                       │
+               │  Go API · Next.js · Postgres · git│
+               └─────────┬─────────────────┬───────┘
+                    SSH  │                 │  outbound agent
+               ┌─────────▼──────┐   ┌──────▼─────────┐
+               │  server        │   │  server        │
+               │  Traefik       │   │  Traefik       │
+               │  your apps     │   │  your apps     │
+               └────────────────┘   └────────────────┘
+```
+Each server runs its own Traefik, so a server keeps serving its apps when the
+panel is down. Read more in the [architecture guide](https://nickpap21.github.io/toft/architecture/).
+
+## Security
+
+Each claim links the decision behind it and the guide that shows it working.
+
+| | Decision | Guide |
+| --- | --- | --- |
+| **gVisor sandboxing.** A service runs Standard, Sandboxed (gVisor), or Sandboxed with a strict network. | [Isolation levels](https://nickpap21.github.io/toft/decisions/isolation-levels/) | [Isolation](https://nickpap21.github.io/toft/reference/isolation/) |
+| **A firewall on every server.** App containers reach their own host only on web ports and DNS, and never the cloud's metadata address. | [Host firewall](https://nickpap21.github.io/toft/decisions/host-firewall/) | [The host firewall](https://nickpap21.github.io/toft/guide/servers/#the-host-firewall) |
+| **Signed agent releases.** The agent installs only a release whose signature covers its version, architecture and hash. | [The node agent](https://nickpap21.github.io/toft/decisions/node-agent/) | [Signed releases](https://nickpap21.github.io/toft/guide/servers/#signed-releases-and-upgrades) |
+| **Write-once secrets, bound to their place.** Nobody can read a secret back, and an encrypted value copied to another row doesn't open. | [Write-once secrets](https://nickpap21.github.io/toft/decisions/write-once-secrets/) | [Variables and secrets](https://nickpap21.github.io/toft/guide/deploys/#variables-and-secrets) |
+| **Deploy policies.** A policy limits what a service may mount or reach. An exception is pinned to the values it approved: change one and the deploy is refused until it's granted again. | | [Deploy policy](https://nickpap21.github.io/toft/guide/deploys/#deploy-policy) |
+| **Scoped keys that expire.** A key can be limited to one project and chosen scopes, and every key expires after 90 days unless you choose otherwise. | | [Expiry](https://nickpap21.github.io/toft/reference/cli/#expiry) |
+| **Agent approvals.** Each AI agent action runs, waits for a person, or is refused, with its own setting for previews, other environments and protected ones. Deploys to `production` wait by default. | [Agent policy](https://nickpap21.github.io/toft/decisions/agent-policy/) | [The agent policy](https://nickpap21.github.io/toft/reference/mcp/#the-agent-policy) |
+
+Toft had a full security audit before launch, then a second one after the
+fixes. Nothing Medium or above is open. Please report vulnerabilities
+privately, never in a public issue: see [SECURITY.md](SECURITY.md).
+
+## How it compares
+
+Toft, Coolify and Dokploy, each on its own fresh Hetzner Cloud `cx23`
+(2 vCPU, 4 GB, Ubuntu 24.04), building and deploying the same app from its
+source. Median of three rounds, range in brackets.
+
+| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.0 |
+|---|---|---|---|
+| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 142.9 (141.5–143) |
+| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 403 (381–406) |
+| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2296 (2296–2296) |
+| First deploy (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 105.3 (105–108.5) |
+| Redeploy (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 5.1 (4.3–9) |
+| Seconds with failed requests per redeploy | 3 (0–3) | 0 (0–0) | 0 (0–3) |
+
+Measured 2026-11-13, all three platforms on the same day. A redeploy is the
+same commit again; failed seconds are counted over 15 redeploys per
+platform. Toft is the slowest of the three to build an app the first time.
+The servers were one type, but that run didn't record the CPU under each,
+and the timed rows depend on it; the scripts record it now.
+
+The method, the scripts to rerun it and the full table, with idle CPU,
+deploys from an image and each dashboard's load, are in [`bench/`](bench/).
+
+## Documentation
+
+The docs are at [nickpap21.github.io/toft](https://nickpap21.github.io/toft/):
+
+- **Start:** [install](https://nickpap21.github.io/toft/install/) and [upgrade](https://nickpap21.github.io/toft/upgrade/)
+- **Guides:** [deploys](https://nickpap21.github.io/toft/guide/deploys/), [domains](https://nickpap21.github.io/toft/guide/domains/),
+  [previews](https://nickpap21.github.io/toft/guide/previews/), [servers](https://nickpap21.github.io/toft/guide/servers/),
+  [backups](https://nickpap21.github.io/toft/guide/backups/) and [operating](https://nickpap21.github.io/toft/guide/operating/)
+- **Reference:** the [CLI](https://nickpap21.github.io/toft/reference/cli/), the [MCP server](https://nickpap21.github.io/toft/reference/mcp/)
+  and [isolation](https://nickpap21.github.io/toft/reference/isolation/)
+- **Why it's built this way:** the [architecture](https://nickpap21.github.io/toft/architecture/) and the
+  [decisions](https://nickpap21.github.io/toft/decisions/) behind it
 
 ## Built with AI, reviewed by people
 

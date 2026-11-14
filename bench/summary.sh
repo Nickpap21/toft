@@ -28,5 +28,6 @@ jq -rs '
 	  "|---" + ($platforms | map("|---") | add) + "|",
 	  ($metrics[] as [$key, $label] | "| \($label) | " + ($platforms | map([.[][$key][]?] | cell) | join(" | ")) + " |"),
 	  "",
-	  "Rounds: " + ($platforms | map("\(.[0].platform) \(map(.round) | unique | length)") | join(", "))
+	  "Rounds: " + ($platforms | map("\(.[0].platform) \(map(.round) | unique | length)") | join(", ")),
+	  ($platforms[] | select(any(.[]; .cpu_model)) | "CPU, \(.[0].platform): \([.[].cpu_model[]?] | unique | join(" / ")), loop \([.[].cpu_loop_s[]?] | cell) s")
 ' ./*.json
