@@ -261,18 +261,36 @@ changing=1
 installed_docker=""
 if ! command -v docker >/dev/null 2>&1; then
 	doing "Installing Docker from Docker's repository"
+	# The app address pool (D-31): written only where Docker has no
+	# daemon.json yet, and only by this installer; an existing one is never
+	# edited. Before the packages, since apt starts Docker as it installs it.
+	if [ ! -e /etc/docker/daemon.json ]; then
+		if [ -z "$POOL" ]; then
+			used=$(ip -4 route | awk '{ print $1 }')
+			for n in 203 204 205 206 207 208 209 210; do
+				echo "$used" | grep -q "^10\.$n\." || { POOL="10.$n.0.0/16"; break; }
+			done
+			[ -n "$POOL" ] || die "no free /16 between 10.203 and 10.210 on this host" "Choose one with --pool CIDR."
+		fi
+		mkdir -p /etc/docker
+		printf '{"default-address-pools":[{"base":"%s","size":24}]}\n' "$POOL" >/etc/docker/daemon.json
+	fi
 	case "$ID" in
 	ubuntu | debian)
 		# needrestart (Ubuntu) would print and restart services after each install.
 		export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
-		apt-get update -q >&3 2>&3
-		apt-get install -yq ca-certificates curl gnupg nftables >&3 2>&3
+		# Docker's key needs curl and the CA certificates, which every cloud
+		# image has: one apt-get update then covers Docker's repository too.
+		if ! command -v curl >/dev/null 2>&1 || [ ! -s /etc/ssl/certs/ca-certificates.crt ]; then
+			apt-get update -q >&3 2>&3
+			apt-get install -yq ca-certificates curl >&3 2>&3
+		fi
 		install -m 0755 -d /etc/apt/keyrings
-		curl -fsSL "https://download.docker.com/linux/$ID/gpg" 2>&3 | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg 2>&3
-		chmod a+r /etc/apt/keyrings/docker.gpg
-		echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID ${VERSION_CODENAME:?} stable" >/etc/apt/sources.list.d/docker.list
+		curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc 2>&3
+		chmod a+r /etc/apt/keyrings/docker.asc
+		echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$ID ${VERSION_CODENAME:?} stable" >/etc/apt/sources.list.d/docker.list
 		apt-get update -q >&3 2>&3
-		apt-get install -yq docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin >&3 2>&3
+		apt-get install -yq nftables docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin >&3 2>&3
 		;;
 	rocky | almalinux | rhel | centos)
 		dnf -y install dnf-plugins-core nftables >&3 2>&3
@@ -284,25 +302,8 @@ if ! command -v docker >/dev/null 2>&1; then
 	installed_docker=1
 fi
 
-# The app address pool (D-31): written only where Docker has no daemon.json
-# yet, and only by this installer; an existing one is never edited.
-if [ -n "$installed_docker" ] && [ ! -e /etc/docker/daemon.json ]; then
-	if [ -z "$POOL" ]; then
-		used=$(ip -4 route | awk '{ print $1 }')
-		for n in 203 204 205 206 207 208 209 210; do
-			echo "$used" | grep -q "^10\.$n\." || { POOL="10.$n.0.0/16"; break; }
-		done
-		[ -n "$POOL" ] || die "no free /16 between 10.203 and 10.210 on this host" "Choose one with --pool CIDR."
-	fi
-	mkdir -p /etc/docker
-	printf '{"default-address-pools":[{"base":"%s","size":24}]}\n' "$POOL" >/etc/docker/daemon.json
-fi
-# apt starts Docker as soon as it is installed, before the pool above was
-# written: restart it so the pool applies. A fresh Docker runs nothing yet.
-if [ -n "$installed_docker" ]; then
-	systemctl enable docker >/dev/null 2>&1
-	systemctl restart docker
-fi
+# dnf leaves Docker stopped; apt has started it, with the pool.
+[ -z "$installed_docker" ] || systemctl enable --now docker >/dev/null 2>&1
 docker_v=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || die "Docker is installed but not running" "Start it (systemctl start docker), then run this again."
 [ "${docker_v%%.*}" -ge 29 ] || die "Docker $docker_v found: Toft needs Docker 29 or newer" \
 	"Upgrading Docker restarts every container on this server. Stop or move them first, upgrade Docker (https://docs.docker.com/engine/install/), then run this again."
@@ -469,11 +470,13 @@ doing "Installing Toft $RELEASE"
 # The Loki log driver (D-48), as the provisioner installs it on servers, by
 # digest: it has one tag per architecture, and a tag can be moved.
 # Without it, a container started with the driver fails; non-fatal here.
+# Beside the pulls below, and waited for before toft upgrade starts anything.
 docker plugin ls --format '{{.Name}}' 2>/dev/null | grep -q loki ||
 	case $(dpkg --print-architecture) in
 	amd64) docker plugin install grafana/loki-docker-driver:3.7.9-amd64@sha256:88f98af1110ba24b7b2eddad28ac445037327c712912aec3596b85702ea7b56f --alias loki --grant-all-permissions ;;
 	arm64) docker plugin install grafana/loki-docker-driver:3.7.9-arm64@sha256:c78bdbb26c5936e5d5258b8efa7a55e49e126a235461e9dc91ad455bebd9ef26 --alias loki --grant-all-permissions ;;
-	esac >/dev/null 2>&1 || true
+	esac >/dev/null 2>&1 &
+loki=$!
 
 # signed_digest DIR COMPONENT prints the digest DIR/toft-images, lines of
 # "toft-image <release> <component> sha256:<hex>", names for $RELEASE's
@@ -514,6 +517,7 @@ cid=$(docker create "$image")
 docker cp "$cid:/usr/local/bin/toft" /usr/local/bin/toft >/dev/null
 docker rm "$cid" >/dev/null
 chmod 0755 /usr/local/bin/toft
+wait "$loki" || true
 
 # toft upgrade with its steps in the log. A failure dies with its error
 # (toft's "toft: " line to the end); what it finished without (its ✗
