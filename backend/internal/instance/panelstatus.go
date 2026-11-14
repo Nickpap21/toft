@@ -453,6 +453,8 @@ func (s *Service) panelContainersTick(ctx context.Context, now time.Time) {
 	}
 	s.panel.mu.Lock()
 	s.panel.containers = cs
+	// Without their stats they are never fresh: whoever asks next reads them.
+	s.panel.containersAt = time.Time{}
 	if watched {
 		s.panel.containersAt = now
 	}

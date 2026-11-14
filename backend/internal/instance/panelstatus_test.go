@@ -198,6 +198,13 @@ func TestPanelStatusFromTheMonitor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, calls+1, probe.containerCalls, "a stale tick is read again")
 	assert.False(t, st.Healthy)
+
+	svc.PanelContainersTick(ctx, time.Now())
+	svc.PanelContainersTick(ctx, time.Now().Add(2*time.Minute))
+	calls = probe.containerCalls
+	_, err = svc.PanelStatus(ctx, ada.id)
+	require.NoError(t, err)
+	assert.Equal(t, calls+1, probe.containerCalls, "a tick that left the stats doesn't answer for them")
 }
 
 func TestPanelServer(t *testing.T) {
