@@ -116,9 +116,15 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 	// server capacity. ?force=true deploys past it only for a caller allowed
 	// to bypass (checkCapacity's CanBypass); anyone else gets the 409 again.
 	reqCPU, reqMemMB := s.requestedLimits(ctx, svc)
+	// A move takes new room on its target: what the service holds on the
+	// server it leaves is not in the target's sum.
+	holder := svc.ID
+	if moveFrom != nil {
+		holder = ""
+	}
 	capErr, err := s.checkCapacity(
 		ctx,
-		svc.ServerID, svc.ID, userID,
+		svc.ServerID, holder, userID,
 		who.Role, orgID,
 		reqCPU, reqMemMB,
 	)
@@ -287,6 +293,7 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 		MoveFrom:            moveFrom,
 		Settings:            svc,
 		FromCreate:          fromCreate,
+		roomChecked:         true,
 	}
 	// A client that created the service with deploy and now deploys it
 	// itself (a tab loaded before the create did): one deploy, not two.

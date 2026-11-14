@@ -63,7 +63,7 @@ export const RULES: { kind: AlertKind; fires: string; resolves: string }[] = [
   },
   {
     kind: "oom_killed",
-    fires: "A container was killed for using more memory than its limit.",
+    fires: "A container was killed for memory: it reached its limit, or its server ran out.",
     resolves: "One message; nothing to resolve.",
   },
   {

@@ -38,6 +38,9 @@ type Deployment struct {
 	// SettingsFingerprint is what it shipped of its service's settings
 	// (SettingsFingerprint, D-159); "" when unknown.
 	SettingsFingerprint string `json:"-"`
+	// ReservedMemoryMB is the memory its service's limits reserved when it
+	// went live (D-166); nil when it wasn't recorded.
+	ReservedMemoryMB *float64 `json:"-"`
 }
 
 // PullRef is a pull request of one of the project's repositories.

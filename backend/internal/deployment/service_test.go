@@ -32,7 +32,8 @@ import (
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 type mockRepo struct {
-	fingerprint   string // SetSettingsFingerprint's last
+	fingerprint   string   // SetSettingsFingerprint's last
+	reserved      *float64 // SetReservedMemory's last
 	mu            sync.Mutex
 	createdID     string
 	statusHistory []deployment.Status
@@ -110,6 +111,13 @@ func (m *mockRepo) CountAgentLogLines(_ context.Context, _, prefix string) (int,
 
 func (m *mockRepo) ListPulls(context.Context, []string) (map[string]deployment.PullRef, error) {
 	return map[string]deployment.PullRef{}, nil
+}
+
+func (m *mockRepo) SetReservedMemory(_ context.Context, _ string, memoryMB float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reserved = &memoryMB
+	return nil
 }
 
 func (m *mockRepo) SetSettingsFingerprint(_ context.Context, _, fingerprint string) error {
@@ -2459,6 +2467,7 @@ func TestPipeline_ComposeRepoAddsDefaultsBeforeTheCheck(t *testing.T) {
 
 	_, err := svc.Trigger(context.Background(), deployment.TriggerInput{
 		ServiceID: "svc-1", ServiceName: "infra", SourceType: "docker-compose", ComposeRepoURL: src, GitBranch: "main",
+		Settings: &service.Service{ID: "svc-1", SourceType: "docker-compose"},
 	})
 	require.NoError(t, err)
 	waitForStatus(t, repo, deployment.StatusRunning, 5*time.Second)
@@ -2480,6 +2489,10 @@ func TestPipeline_ComposeRepoAddsDefaultsBeforeTheCheck(t *testing.T) {
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
+	// The stack had no limits when the deploy started; it runs with the
+	// default, and the next deploy's room check compares with that.
+	require.NotNil(t, repo.reserved)
+	assert.Equal(t, 512.0, *repo.reserved, "the default it was given is what it reserves")
 	logs := strings.Join(repo.logMessages, "\n")
 	assert.Contains(t, logs, "→ a: memory limit 512m (default for app); change it on the service page")
 	assert.Contains(t, logs, "→ b: memory limit 256m (compose file)")

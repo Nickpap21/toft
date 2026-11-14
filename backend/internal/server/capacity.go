@@ -78,7 +78,10 @@ type CapacityExceededError struct {
 	AllocatedMemoryMB float64 `json:"allocated_memory_mb"`
 	RequestedCPUCores float64 `json:"requested_cpu_cores"`
 	RequestedMemoryMB float64 `json:"requested_memory_mb"`
-	Server            string  `json:"-"`
+	// PanelHost is true for the panel's own server, whose room is every
+	// workspace's and is counted in memory only (the CPU fields are 0).
+	PanelHost bool   `json:"panel_host"`
+	Server    string `json:"-"`
 }
 
 // Error says what is short, as the panel's capacity dialog does: "Not
@@ -86,8 +89,8 @@ type CapacityExceededError struct {
 func (e *CapacityExceededError) Error() string {
 	var short []string
 	if e.RequestedMemoryMB > 0 && e.AllocatedMemoryMB+e.RequestedMemoryMB > e.EffectiveMemoryMB {
-		short = append(short, fmt.Sprintf("needs %s of memory, %s left of %s", memory(e.RequestedMemoryMB),
-			memory(max(e.EffectiveMemoryMB-e.AllocatedMemoryMB, 0)), memory(e.EffectiveMemoryMB)))
+		short = append(short, fmt.Sprintf("needs %s of memory, %s left of %s", Memory(e.RequestedMemoryMB),
+			Memory(max(e.EffectiveMemoryMB-e.AllocatedMemoryMB, 0)), Memory(e.EffectiveMemoryMB)))
 	}
 	if e.RequestedCPUCores > 0 && e.AllocatedCPUCores+e.RequestedCPUCores > e.EffectiveCPUCores {
 		short = append(short, fmt.Sprintf("needs %s, %s left of %s", cores(e.RequestedCPUCores),
@@ -100,8 +103,8 @@ func (e *CapacityExceededError) Error() string {
 	return fmt.Sprintf("Not enough room on %s: %s.", name, strings.Join(short, "; "))
 }
 
-// memory is MiB under 1 GiB, else GiB with one decimal.
-func memory(mb float64) string {
+// Memory is MiB under 1 GiB, else GiB with one decimal.
+func Memory(mb float64) string {
 	if mb >= 1024 {
 		return fmt.Sprintf("%.1f GiB", mb/1024)
 	}

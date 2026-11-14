@@ -763,6 +763,12 @@ CREATE TABLE IF NOT EXISTS deployments (
     -- while the live deployment's still matches. NULL: from before 0072, or
     -- a setting changed while it ran.
     settings_fingerprint TEXT CHECK (settings_fingerprint ~ '^[0-9a-f]{64}$'),
+    -- The memory its service's limits reserved when it went live, in MiB
+    -- (0082, D-166): what the service holds of its server's room while this
+    -- is its live deployment, so a deploy that asks for no more takes no new
+    -- room. NULL: from before 0082, it never went live, or its success was
+    -- recorded by a recovery after a panel restart.
+    reserved_memory_mb DOUBLE PRECISION CHECK (reserved_memory_mb >= 0),
     CONSTRAINT deployments_handed_off_check CHECK ((handed_off_at IS NULL) = (handed_off_input IS NULL))
 );
 

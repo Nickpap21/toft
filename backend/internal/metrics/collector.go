@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"math"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Nickpap21/toft/backend/internal/hoststats"
+	"github.com/Nickpap21/toft/backend/internal/server"
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -54,6 +56,14 @@ type Alerter interface {
 	OOMKilled(serviceID, detail string)
 }
 
+// PanelRoom is the panel's own server's ledger: the memory it leaves its
+// apps together (D-62) and what their limits add up to. Satisfied by
+// cmd/server's panelLedger.
+type PanelRoom interface {
+	AppsMemoryMB(ctx context.Context) (float64, error)
+	AllocatedMemoryMB(ctx context.Context) (float64, error)
+}
+
 // Usage is where memory kills and servers' CPU waiting are stored, and
 // what folds the samples into daily rows and deletes old ones. Satisfied by
 // *resources.Service, which owns those tables.
@@ -81,8 +91,9 @@ type Usage interface {
 // The daily rows are also recomputed once at start. A cycle runs inline, so
 // it never overlaps the next one; the per-server timeout bounds it. It
 // stops when ctx is cancelled.
-func RunCollector(ctx context.Context, src Source, alerts Alerter, usage Usage, log *zap.Logger) {
+func RunCollector(ctx context.Context, src Source, alerts Alerter, usage Usage, panel PanelRoom, log *zap.Logger) {
 	c := newCollector(src, alerts, usage, log)
+	c.panel = panel
 	collectTicker := time.NewTicker(collectInterval)
 	gcTicker := time.NewTicker(gcInterval)
 	defer collectTicker.Stop()
@@ -128,6 +139,7 @@ type collector struct {
 	src         Source
 	alerts      Alerter
 	usage       Usage
+	panel       PanelRoom // nil: no ledger for the panel's server
 	log         *zap.Logger
 	now         func() time.Time
 	concurrency int
@@ -297,7 +309,7 @@ func (c *collector) store(ctx context.Context, serverID string, st *serverState,
 	st.containers = seen // containers not seen this cycle are forgotten
 	c.storeLatency(ctx, st, targets, sample)
 
-	if c.storeKills(ctx, sample.OOMKills) && sample.Until != 0 {
+	if c.storeKills(ctx, serverID, sample.OOMKills) && sample.Until != 0 {
 		st.since = sample.Until
 	}
 	// The control-plane server's pressure is not read in v1.
@@ -464,8 +476,12 @@ func higher(a, b *float64) *float64 {
 // before: the windows of two samples overlap at their edge and after a
 // backend restart. It reports whether every kill was stored; if not, the
 // caller keeps the window's start so the next sample reads them again.
-func (c *collector) storeKills(ctx context.Context, kills []service.OOMEvent) bool {
+func (c *collector) storeKills(ctx context.Context, serverID string, kills []service.OOMEvent) bool {
 	stored := true
+	why := ""
+	if len(kills) > 0 {
+		why = c.overCommitted(ctx, serverID)
+	}
 	for _, k := range kills {
 		if k.At.Unix() <= 0 {
 			continue // no time: cannot be told from another kill
@@ -483,10 +499,31 @@ func (c *collector) storeKills(ctx context.Context, kills []service.OOMEvent) bo
 			if k.ComposeService != "" {
 				detail += " (compose service " + k.ComposeService + ")"
 			}
-			c.alerts.OOMKilled(k.ServiceID, detail)
+			c.alerts.OOMKilled(k.ServiceID, detail+why)
 		}
 	}
 	return stored
+}
+
+// overCommitted is what a kill on the panel's server adds to its alert when
+// the services there reserve more than the apps' shared cap: the kernel
+// then kills inside the cap, so the service may be far from its own limit.
+// "" on another server, within the cap, or when the ledger can't say.
+func (c *collector) overCommitted(ctx context.Context, serverID string) string {
+	if serverID != "" || c.panel == nil {
+		return ""
+	}
+	apps, err := c.panel.AppsMemoryMB(ctx)
+	if err != nil || apps <= 0 {
+		return ""
+	}
+	allocated, err := c.panel.AllocatedMemoryMB(ctx)
+	if err != nil || allocated <= apps {
+		return ""
+	}
+	return fmt.Sprintf(". The panel's server leaves its apps %s between them and their limits add up to %s, so a service can be killed "+
+		"before it reaches its own limit: lower the limits, move a service to another server or give this one more memory",
+		server.Memory(apps), server.Memory(allocated))
 }
 
 // recordState logs a server's sample outcome when it differs from the last

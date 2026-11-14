@@ -22,6 +22,8 @@ export interface CapacityWarning {
     allocated_memory_mb: number;
     requested_cpu_cores: number;
     requested_memory_mb: number;
+    /** The panel's own server: every workspace's room, counted in memory only, an instance operator's to pass. */
+    panel_host?: boolean;
 }
 
 /** The capacity refusal in a deploy's error, or null: it arrives as { data: CapacityWarning } with a 409. */
@@ -66,6 +68,15 @@ export function CapacityDialog({ warning, serviceName, onCancel, onDeployAnyway,
     const cpuLeft = w ? Math.max(w.effective_cpu_cores - w.allocated_cpu_cores, 0) : 0;
     const memShort = !!w && w.allocated_memory_mb + w.requested_memory_mb > w.effective_memory_mb;
     const cpuShort = !!w && w.allocated_cpu_cores + w.requested_cpu_cores > w.effective_cpu_cores;
+    // With no memory left at all, no lower limit of this service's fits.
+    const full = memShort && memLeft === 0;
+    const lower = create
+        ? full
+            ? "Pick another server or free memory on this one first"
+            : "Lower its memory above or pick another server"
+        : full
+          ? "Lower other services’ limits on this server or move one to another server"
+          : "Lower the service's limits in its settings";
 
     return (
         <Dialog open={!!w} onOpenChange={(open) => !open && onCancel()}>
@@ -73,8 +84,9 @@ export function CapacityDialog({ warning, serviceName, onCancel, onDeployAnyway,
                 <DialogHeader>
                     <DialogTitle>{serviceName ? `Not enough room to deploy ${serviceName}` : "Not enough room on the server"}</DialogTitle>
                     <DialogDescription>
-                        This {create ? "service" : "deploy"} needs more {memShort && cpuShort ? "memory and CPU" : cpuShort ? "CPU" : "memory"} than this
-                        workspace has left on its server. Nothing was {create ? "created" : "deployed"}.
+                        This {create ? "service" : "deploy"} needs more {memShort && cpuShort ? "memory and CPU" : cpuShort ? "CPU" : "memory"} than{" "}
+                        {w?.panel_host ? "the panel’s server has left for its apps" : "this workspace has left on its server"}. Nothing was{" "}
+                        {create ? "created" : "deployed"}.
                     </DialogDescription>
                 </DialogHeader>
                 {w && (
@@ -84,19 +96,23 @@ export function CapacityDialog({ warning, serviceName, onCancel, onDeployAnyway,
                             <dd className={memShort ? "text-status-failed-fg" : undefined}>
                                 needs {formatMemory(w.requested_memory_mb)}, {formatMemory(memLeft)} left of {formatMemory(w.effective_memory_mb)}
                             </dd>
-                            <dt className="text-muted">CPU</dt>
-                            <dd className={cpuShort ? "text-status-failed-fg" : undefined}>
-                                needs {cores(w.requested_cpu_cores)}, {cores(cpuLeft)} left of {cores(w.effective_cpu_cores)}
-                            </dd>
+                            {!w.panel_host && (
+                                <>
+                                    <dt className="text-muted">CPU</dt>
+                                    <dd className={cpuShort ? "text-status-failed-fg" : undefined}>
+                                        needs {cores(w.requested_cpu_cores)}, {cores(cpuLeft)} left of {cores(w.effective_cpu_cores)}
+                                    </dd>
+                                </>
+                            )}
                         </dl>
                         <p className="text-muted">
                             {create
                                 ? w.can_bypass
-                                    ? "Lower its memory above or pick another server, or create and deploy it anyway: the server may then run short for every service on it."
-                                    : "Lower its memory above or pick another server, or ask a workspace owner to create it."
+                                    ? `${lower}, or create and deploy it anyway: the server may then run short for every service on it.`
+                                    : `${lower}, or ask ${w.panel_host ? "an instance operator" : "a workspace owner"} to create it.`
                                 : w.can_bypass
-                                  ? "Lower the service's limits in its settings, or deploy anyway: the server may then run short for every service on it."
-                                  : "Lower the service's limits in its settings, or ask a workspace owner to deploy it."}
+                                  ? `${lower}, or deploy anyway: the server may then run short for every service on it.`
+                                  : `${lower}, or ask ${w.panel_host ? "an instance operator" : "a workspace owner"} to deploy it.`}
                         </p>
                     </div>
                 )}

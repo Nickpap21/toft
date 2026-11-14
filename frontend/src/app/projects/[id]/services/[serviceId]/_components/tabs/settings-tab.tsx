@@ -756,9 +756,7 @@ export function SettingsTab({
                   )}
                   . {name} reserves{" "}
                   <span className="font-mono text-fg/85">
-                    {!service.server_id
-                      ? "nothing here"
-                      : isCompose
+                    {isCompose
                         ? (() => {
                             const mb = (resources?.rows ?? [])
                               .filter((r) => r.memory.source === "panel")
@@ -766,7 +764,8 @@ export function SettingsTab({
                             return mb ? memoryText(`${mb}m`) : "nothing yet";
                           })()
                         : [
-                            service.cpu_limit ? `${service.cpu_limit} vCPU` : "",
+                            // CPU isn't counted on the panel's server.
+                            service.server_id && service.cpu_limit ? `${service.cpu_limit} vCPU` : "",
                             memoryText(service.memory_limit),
                           ]
                             .filter(Boolean)

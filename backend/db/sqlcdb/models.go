@@ -230,6 +230,7 @@ type Deployment struct {
 	HandedOffInput      []byte             `json:"handed_off_input"`
 	ImageRemovedAt      pgtype.Timestamptz `json:"image_removed_at"`
 	SettingsFingerprint *string            `json:"settings_fingerprint"`
+	ReservedMemoryMb    *float64           `json:"reserved_memory_mb"`
 }
 
 type DeploymentLog struct {

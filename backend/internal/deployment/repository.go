@@ -14,6 +14,9 @@ type Repository interface {
 	// SetSettingsFingerprint records what a deploy that went live shipped of
 	// its service's settings (D-159).
 	SetSettingsFingerprint(ctx context.Context, id, fingerprint string) error
+	// SetReservedMemory records the memory a deploy that went live reserved
+	// on its server, in MiB (D-166).
+	SetReservedMemory(ctx context.Context, id string, memoryMB float64) error
 	// ListPulls is the pull requests whose merges started deployments ids,
 	// by deployment (D-77).
 	ListPulls(ctx context.Context, ids []string) (map[string]PullRef, error)

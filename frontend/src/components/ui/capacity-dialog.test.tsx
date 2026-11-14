@@ -71,8 +71,50 @@ describe("CapacityDialog", () => {
         expect(screen.queryByText(/settings/)).toBeNull();
     });
 
+    // With nothing left, no lower limit of this service's fits: say what does help.
+    it("doesn't advise lowering the service's memory when the server has none left", () => {
+        const full = { ...warning, allocated_memory_mb: 1600, can_bypass: false };
+        const { unmount } = render(<CapacityDialog warning={full} onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(
+            screen.getByText("Lower other services’ limits on this server or move one to another server, or ask a workspace owner to deploy it."),
+        ).toBeTruthy();
+        unmount();
+        render(<CapacityDialog warning={full} create onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(screen.getByText("Pick another server or free memory on this one first, or ask a workspace owner to create it.")).toBeTruthy();
+    });
+
     it("writes MiB under 1 GiB and GiB with one decimal above", () => {
         expect(formatMemory(436)).toBe("436 MiB");
         expect(formatMemory(1536)).toBe("1.5 GiB");
+    });
+});
+
+// The panel's own server: every workspace's room, counted in memory only.
+describe("CapacityDialog on the panel's server", () => {
+    const panel: CapacityWarning = {
+        code: "capacity_exceeded",
+        can_bypass: false,
+        panel_host: true,
+        effective_cpu_cores: 0,
+        effective_memory_mb: 747,
+        allocated_cpu_cores: 0,
+        allocated_memory_mb: 512,
+        requested_cpu_cores: 0,
+        requested_memory_mb: 512,
+    };
+
+    it("names the panel's server, shows no CPU it doesn't count, and sends to an operator", () => {
+        render(<CapacityDialog warning={panel} serviceName="worker" onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(screen.getByRole("dialog")).toHaveAccessibleDescription(
+            "This deploy needs more memory than the panel’s server has left for its apps. Nothing was deployed.",
+        );
+        expect(screen.getByText("needs 512 MiB, 235 MiB left of 747 MiB")).toBeTruthy();
+        expect(screen.queryByText("CPU")).toBeNull();
+        expect(screen.getByText(/ask an instance operator to deploy it/)).toBeTruthy();
+    });
+
+    it("lets an operator deploy anyway", () => {
+        render(<CapacityDialog warning={{ ...panel, can_bypass: true }} onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(screen.getByRole("button", { name: "Deploy anyway" })).toBeTruthy();
     });
 });

@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useIsOperator } from "@/context/AuthContext";
-import { panelHostQuery } from "@/lib/api/instance.service";
+import { panelHostQuery, panelRoom } from "@/lib/api/instance.service";
+import { formatMemory } from "@/components/ui/capacity-dialog";
 import { size } from "@/components/instance/instance-view";
 import { workspaceServicesQuery } from "@/lib/queries";
 import { ToftMark } from "@/components/shell/toft-mark";
@@ -32,6 +34,7 @@ export function PanelServerCard() {
   if (!host || host.role !== "apps") return null;
   const here = (services.data ?? []).filter((s) => s.server_id === "");
   const r = host.reservation;
+  const room = panelRoom(host);
   const meta = [host.address, `${host.cpu_cores} vCPU`, size(host.memory_bytes)].filter(Boolean).join(" · ");
   return (
     <section aria-labelledby="srv-panel" className="flex flex-col gap-1.5 border-t border-subtle px-4 py-3">
@@ -58,6 +61,13 @@ export function PanelServerCard() {
           Apps get {r.apps_cpu} vCPU and {size(r.apps_memory_bytes)} after the panel’s share
           {r.enforced ? ", and are held to it." : "."}
         </span>
+        {room && (
+          <span className={room.over ? "text-status-pending-fg" : undefined}>
+            {room.over && <AlertTriangle role="img" aria-label="Warning" className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-status-pending" />}
+            <span className={room.over ? undefined : "text-muted"}>Reserved by all workspaces</span> {formatMemory(room.reserved)} of {formatMemory(room.total)}
+            {room.over ? ": more than apps get, so a service can be killed for memory before it reaches its own limit. Lower limits or move services to another server." : ""}
+          </span>
+        )}
         <span>
           <span className="text-muted">Running here</span>{" "}
           {!services.data

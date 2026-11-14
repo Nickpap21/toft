@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Service } from "@/lib/api/service.service";
-import { OverviewTab } from "./overview-tab";
+import { memoryKillsText, OverviewTab } from "./overview-tab";
 
 // S1, S2: a read that failed says so and offers Retry. It isn't drawn as an
 // answer: not "Not deployed yet" on a running service, not a wait for the
@@ -118,5 +118,22 @@ describe("Overview when a read fails", () => {
     expect(await screen.findByText("Couldn’t load the other services in this environment.")).toBeTruthy();
     expect(screen.queryByText("No other services in this environment yet.")).toBeNull();
     expect(screen.getByText("web-prod:80")).toBeTruthy();
+  });
+});
+
+describe("Usage's memory kills line", () => {
+  it("says nothing without kills", () => {
+    expect(memoryKillsText(0, { total: 747, reserved: 1946, left: 0, over: true })).toBe("");
+  });
+
+  it("counts the kills", () => {
+    expect(memoryKillsText(1, null)).toBe("Killed for memory once in 7 days.");
+    expect(memoryKillsText(4, { total: 747, reserved: 512, left: 235, over: false })).toBe("Killed for memory 4 times in 7 days.");
+  });
+
+  it("says why on the panel's server when its apps reserve more than they get", () => {
+    expect(memoryKillsText(4, { total: 747, reserved: 1946, left: 0, over: true })).toBe(
+      "Killed for memory 4 times in 7 days. The panel’s server has 747 MiB for all its apps, but their memory limits add up to 1.9 GiB, so any of them can be killed before it reaches its own limit.",
+    );
   });
 });

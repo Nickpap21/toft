@@ -493,6 +493,10 @@ RETURNING *;
 -- What a deploy that went live shipped of its service's settings (D-159).
 UPDATE deployments SET settings_fingerprint = sqlc.narg(settings_fingerprint) WHERE id = $1;
 
+-- name: SetDeploymentReservedMemory :exec
+-- The memory a deploy that went live reserved on its server, in MiB (D-166).
+UPDATE deployments SET reserved_memory_mb = sqlc.arg(reserved_memory_mb)::float8 WHERE id = $1;
+
 -- name: ListDeploymentPulls :many
 -- The pull requests whose merges started these deployments (D-77).
 SELECT d.id AS deployment_id, p.number, p.repository_id

@@ -160,7 +160,10 @@ type PanelHost struct {
 // Reservation is D-62's fixed share on a server that runs the panel and
 // apps (D-26), what it leaves the apps, and the least a server needs for
 // it (D-132). Enforced when the apps run under toft-apps.slice
-// (TOFT_APPS_SLICE).
+// (TOFT_APPS_SLICE). AppsAllocatedMemoryBytes is what every workspace's
+// running services there reserve of AppsMemoryBytes, the ledger the deploy
+// gate counts; past it a service can be killed for memory before it reaches
+// its own limit.
 type Reservation struct {
 	MinCPU            int     `json:"min_cpu"`
 	MinMemoryBytes    int64   `json:"min_memory_bytes"`
@@ -171,6 +174,8 @@ type Reservation struct {
 	AppsCPU           float64 `json:"apps_cpu"`
 	AppsMemoryBytes   int64   `json:"apps_memory_bytes"`
 	Enforced          bool    `json:"enforced"`
+
+	AppsAllocatedMemoryBytes int64 `json:"apps_allocated_memory_bytes"`
 }
 
 // Operator is one instance operator, as returned by the API.

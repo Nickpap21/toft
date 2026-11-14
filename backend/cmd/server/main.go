@@ -342,6 +342,8 @@ type panelHost struct {
 	// network is the control plane's network; slice the apps' systemd
 	// slice ("" when apps aren't capped).
 	network, slice string
+	// allocated is what the services here reserve, in MiB.
+	allocated func(context.Context) (float64, error)
 }
 
 func (p panelHost) PanelHost(ctx context.Context) (instance.PanelHost, error) {
@@ -364,6 +366,11 @@ func (p panelHost) PanelHost(ctx context.Context) (instance.PanelHost, error) {
 		PanelCPU: reservation.PanelCPU, PanelMemoryBytes: reservation.PanelMemory,
 		AppsCPU: appsCPU, AppsMemoryBytes: appsMem, Enforced: p.slice != "",
 	}
+	allocated, err := p.allocated(ctx)
+	if err != nil {
+		return instance.PanelHost{}, fmt.Errorf("the panel host's reservations: %w", err)
+	}
+	host.Reservation.AppsAllocatedMemoryBytes = int64(allocated * (1 << 20))
 	host.Version = buildinfo.Version
 	// A second at most: Home waits on this, and a name that resolves at all
 	// resolves well within it.
@@ -783,7 +790,7 @@ func main() {
 	serverSvc.WithPanelCapabilities(instanceSvc) // the panel's own server too (D-97)
 	orchestratorFactory := docker.NewFactory(localOrchestrator, netCfg, serverSvc, logger.Named("docker.factory"))
 	instanceSvc.WithPanelHost(panelHost{local: localOrchestrator, servers: serverSvc, domain: instanceSvc.PanelDomain,
-		network: cfg.TraefikNetwork, slice: cfg.AppsSlice})
+		network: cfg.TraefikNetwork, slice: cfg.AppsSlice, allocated: serviceRepo.SumAllocatedOnPanel})
 	// The panel's own containers and server (D-68): the host's /proc, which
 	// a container shares, and / inside the backend, which is on Docker's
 	// filesystem.
@@ -1271,7 +1278,7 @@ func main() {
 	go diskSvc.RunAutomatic(alertCtx)
 
 	metricsCtx, cancelMetrics := context.WithCancel(context.Background())
-	go metrics.RunCollector(metricsCtx, serviceSvc, alertSvc, resourcesSvc, logger.Named("metrics.collector"))
+	go metrics.RunCollector(metricsCtx, serviceSvc, alertSvc, resourcesSvc, panelLedger{local: localOrchestrator, services: serviceRepo}, logger.Named("metrics.collector"))
 
 	// ── Server health polling ─────────────────────────────────────────────────
 	pollCtx, cancelPoll := context.WithCancel(context.Background())

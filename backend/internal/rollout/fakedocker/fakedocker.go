@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
@@ -142,6 +144,12 @@ type Docker struct {
 	statsCalls    []string
 	statsInFlight int
 	statsMax      int
+
+	// Events (GET /events): what the daemon answers and then ends the
+	// stream, the query of the last request, and EventsErr to refuse it.
+	Events      []events.Message
+	EventsQuery url.Values
+	EventsErr   bool
 
 	// Execs (POST /containers/{id}/exec, then an attached /exec/{id}/start
 	// and /exec/{id}/json), by ID: their exit codes. noProbe makes every
@@ -605,6 +613,13 @@ func (f *Docker) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "OK")
 	case r.Method == http.MethodGet && path == "/containers/json":
 		f.list(w, r)
+	case r.Method == http.MethodGet && path == "/events" && f.EventsErr:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "events are off"})
+	case r.Method == http.MethodGet && path == "/events":
+		f.EventsQuery = r.URL.Query()
+		for _, e := range f.Events {
+			_ = json.NewEncoder(w).Encode(e)
+		}
 	case r.Method == http.MethodPost && path == "/containers/create":
 		f.create(w, r)
 	case r.Method == http.MethodPost && path == "/volumes/create":

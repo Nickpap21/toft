@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/Nickpap21/toft/backend/pkg/agentproto"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -634,7 +636,23 @@ func TestLocalCollectServiceStatsSamplesOnlyTargetContainers(t *testing.T) {
 	f.Sample(stackProject+"-web-1", 5, 50)
 	f.Sample("traefik", 1, 1)
 
+	// A kill of a process in a running slot, one of a container that is
+	// gone, one of a build step that carries a stack's labels, and Traefik's.
+	killed := func(name string, at int64, attrs map[string]string) events.Message {
+		attrs["name"] = name
+		return events.Message{Type: events.ContainerEventType, Action: events.ActionOOM, Time: at,
+			Actor: events.Actor{ID: "id-" + name, Attributes: attrs}}
+	}
+	f.Events = []events.Message{
+		killed(appBlue, 1760000010, map[string]string{rollout.LabelServiceID: appID}),
+		killed(stackProject+"-job-1", 1760000020, map[string]string{rollout.LabelComposeProject: stackProject, rollout.LabelComposeService: "job", "image": "job:1"}),
+		killed("build-step", 1760000030, map[string]string{rollout.LabelComposeProject: stackProject, rollout.LabelComposeService: "web",
+			"image": "sha256:" + strings.Repeat("a", 64)}),
+		killed("traefik", 1760000040, map[string]string{}),
+	}
+
 	o := &LocalOrchestrator{dockerClient: f.Client(), log: zap.NewNop()}
+	before := time.Now().Unix()
 	got, err := o.CollectServiceStats(context.Background(), statsTargets, 1760000000)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]service.ContainerStats{
@@ -644,10 +662,26 @@ func TestLocalCollectServiceStatsSamplesOnlyTargetContainers(t *testing.T) {
 	assert.Equal(t, map[string][]service.ContainerStats{"web": {{ContainerID: web.ID, ComposeService: "web", CPUPercent: 5, MemoryMB: 50, RestartCount: 2, RestartsRead: true}}},
 		got.Containers[stackID], "the compose service from its label, its restarts from inspect; no counters on the control plane")
 	assert.Nil(t, got.CPUWaitPct)
-	assert.Empty(t, got.OOMKills)
-	assert.Zero(t, got.Until, "memory kills are not read on the control plane")
+	assert.Equal(t, []service.OOMEvent{
+		{ServiceID: appID, Container: appBlue, At: time.Unix(1760000010, 0).UTC()},
+		{ServiceID: stackID, ComposeService: "job", Container: stackProject + "-job-1", At: time.Unix(1760000020, 0).UTC()},
+	}, got.OOMKills, "the targets' memory kills, from Docker's events")
+	assert.GreaterOrEqual(t, got.Until, before, "the next sample reads kills from here")
+	assert.Equal(t, "1760000000", f.EventsQuery.Get("since"))
+	assert.Equal(t, strconv.FormatInt(got.Until, 10), f.EventsQuery.Get("until"), "a window that has ended: Docker answers at once")
+	assert.Contains(t, f.EventsQuery.Get("filters"), `"oom"`)
 	assert.Equal(t, []string{appBlue, appGreen, stackProject + "-web-1"}, f.SampledNames(),
 		"only the targets' running containers are sampled")
+}
+
+func TestLocalCollectServiceStatsReadsTheKillWindowAgainWhenEventsFail(t *testing.T) {
+	f := fakedocker.New(t)
+	f.EventsErr = true
+	o := &LocalOrchestrator{dockerClient: f.Client(), log: zap.NewNop()}
+	got, err := o.CollectServiceStats(context.Background(), statsTargets, 1760000000)
+	require.NoError(t, err, "the sample is kept without its kills")
+	assert.Empty(t, got.OOMKills)
+	assert.Zero(t, got.Until, "the collector reads the same window next time")
 }
 
 func TestLocalCollectServiceStatsBoundsParallelSamples(t *testing.T) {

@@ -123,8 +123,23 @@ export type PanelHost = components["schemas"]["PanelHost"];
 export const panelHostQuery = queryOptions({
     queryKey: ["instance", "panel-host"],
     queryFn: () => fetchAPI<PanelHost>("/api/v1/instance/panel-host"),
-    staleTime: 5 * 60_000,
+    // As a server's fit: what is reserved there moves with every deploy.
+    staleTime: 30_000,
 });
+
+/** The room on the panel's server, in MiB, as the deploy's capacity check
+ *  counts it: what it leaves its apps together (total), what every
+ *  workspace's services reserve of that (reserved), what is left, and
+ *  whether more is reserved than there is (over), when a service can be
+ *  killed for memory before it reaches its own limit. null when it runs no
+ *  apps or the room isn't known. */
+export function panelRoom(host: PanelHost | undefined) {
+    const r = host && host.role !== "control_plane" ? host.reservation : undefined;
+    const total = (r?.apps_memory_bytes ?? 0) / 2 ** 20;
+    if (!r || total <= 0) return null;
+    const reserved = (r.apps_allocated_memory_bytes ?? 0) / 2 ** 20;
+    return { total, reserved, left: Math.max(total - reserved, 0), over: reserved > total };
+}
 
 // ── The panel itself (D-68). Operators only. ────────────────────────────────
 

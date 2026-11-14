@@ -58,6 +58,8 @@ func (r *deployments) UpdateStatus(_ context.Context, _ string, status deploymen
 	d := r.d
 	return &d, nil
 }
+func (r *deployments) SetReservedMemory(context.Context, string, float64) error { return nil }
+
 func (r *deployments) SetSettingsFingerprint(_ context.Context, _, fp string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

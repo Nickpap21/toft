@@ -2030,6 +2030,9 @@ type CapacityExceededError struct {
 	Code              string  `json:"code"`
 	EffectiveCpuCores float32 `json:"effective_cpu_cores"`
 	EffectiveMemoryMb float32 `json:"effective_memory_mb"`
+
+	// PanelHost The server is the panel's own. Its room is every workspace's and is counted in memory only (the CPU figures are 0); only an instance operator may bypass.
+	PanelHost         bool    `json:"panel_host"`
 	RequestedCpuCores float32 `json:"requested_cpu_cores"`
 	RequestedMemoryMb float32 `json:"requested_memory_mb"`
 }
@@ -4904,8 +4907,10 @@ type PanelHost struct {
 
 	// Reservation D-62's fixed reservation on a server that runs the panel and apps (D-26), what it leaves the apps, and the least a server needs for it.
 	Reservation struct {
-		AppsCpu         float32 `json:"apps_cpu"`
-		AppsMemoryBytes int     `json:"apps_memory_bytes"`
+		// AppsAllocatedMemoryBytes What every workspace's running services on the panel's server reserve of apps_memory_bytes (their memory limits). A deploy that would take it past apps_memory_bytes is refused (409 capacity_exceeded); past it a service can be killed for memory before it reaches its own limit.
+		AppsAllocatedMemoryBytes int64   `json:"apps_allocated_memory_bytes"`
+		AppsCpu                  float32 `json:"apps_cpu"`
+		AppsMemoryBytes          int     `json:"apps_memory_bytes"`
 
 		// Enforced Apps here run under toft-apps.slice, which holds them to apps_cpu and apps_memory_bytes; false on installs without it.
 		Enforced bool `json:"enforced"`
