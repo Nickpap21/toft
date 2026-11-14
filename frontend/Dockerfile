@@ -30,6 +30,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:'+process.env.PORT,function(r){process.exit(r.statusCode<500?0:1)}).on('error',function(){process.exit(1)})"
+# busybox's wget: starting node for the same question costs five times the CPU.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=1s --retries=3 \
+  CMD wget -qO /dev/null "http://127.0.0.1:$PORT/" || exit 1
 CMD ["node", "server.js"]

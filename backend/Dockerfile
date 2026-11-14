@@ -78,6 +78,6 @@ COPY --from=bundle install.sh /usr/share/toft/bundle/install.sh
 COPY db/migrations/schema.sql db/migrations/premigrate.sql db/migrations/contract.sql db/migrations/atlas.hcl /usr/share/toft/bundle/migrations/
 COPY internal/server/firewall.nft internal/server/toft-firewall.service internal/server/toft-backup.sh internal/server/toft-backup.service internal/server/toft-backup.timer cmd/toft/toft-release-check.service cmd/toft/toft-release-check.timer /usr/share/toft/bundle/host/
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=1s --retries=3 \
   CMD wget -qO- http://localhost:8080/health 2>/dev/null || exit 1
 CMD ["./server"]

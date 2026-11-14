@@ -264,6 +264,19 @@ func TestRunContainerBlueGreenReportsARoutingChange(t *testing.T) {
 	}
 }
 
+// The deploy that follows a temporary name's certificate turns its HTTP
+// router from serving into redirecting. Both slots still serve the name
+// over HTTPS, so the switch must drain the previous one as any other does.
+func TestACertificateForATemporaryNameIsNoRoutingChange(t *testing.T) {
+	name := []string{"web-production-shop.203-0-113-10.sslip.io"}
+	f := fakedocker.New(t)
+	f.Add(slotBlue, container.StateRunning, routeLabels(slotSvcID, name, 3000, service.AccessControl{}))
+	sw := &rollout.SlotSwitch{}
+	require.NoError(t, runContainerBlueGreen(sw, f.Client(), rollout.NetConfig{}, netplan.LegacyPlan(slotSvcID, "web", "", ""), slotSvcID, "web", "", "app:2",
+		name, nil, 3000, "", "", nil, "", "", service.AccessControl{Certified: name}, rollout.Security{}, nil))
+	assert.False(t, sw.RoutingChanged)
+}
+
 // A shared volume (D-38) is created by name if missing and mounted as a
 // named volume, read-only when set, next to the service's own volumes.
 func TestRunContainerMountsASharedVolume(t *testing.T) {
