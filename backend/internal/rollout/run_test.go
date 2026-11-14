@@ -196,9 +196,10 @@ func TestRunRoutesTheNewSlotBeforeRetiringThePrevious(t *testing.T) {
 	assert.Equal(t, "abort "+slotGreen, h.calls[len(h.calls)-1])
 }
 
-// The previous slot drains only where it serves beside the new one through
-// its labels: not on a first deploy, nor when the routing changed (Traefik
-// serves neither), nor where the route moves in a file (D-113).
+// The previous slot drains wherever Traefik reads it from its labels beside
+// the new one, a routing change included (the routes the change left alone
+// are served by both): not on a first deploy, nor where the route moves in
+// a file (D-113).
 func TestRunDrainsWhereBothSlotsServe(t *testing.T) {
 	spec := Spec{Slot: Slot{ServiceID: slotSvcID, Image: "app:2"}}
 	for _, c := range []struct {
@@ -209,7 +210,7 @@ func TestRunDrainsWhereBothSlotsServe(t *testing.T) {
 	}{
 		{"redeploy", &fakeHost{previous: []string{slotBlue}}, Hooks{}, []bool{true}},
 		{"first deploy", &fakeHost{}, Hooks{}, []bool{false}},
-		{"routing changed", &fakeHost{previous: []string{slotBlue}, routingChanged: true}, Hooks{}, []bool{false}},
+		{"routing changed", &fakeHost{previous: []string{slotBlue}, routingChanged: true}, Hooks{}, []bool{true}},
 		{"file routes", &fakeHost{previous: []string{slotBlue}}, Hooks{Route: func(context.Context, string, func(string)) error { return nil }}, []bool{false}},
 	} {
 		res := Run(context.Background(), c.host, spec, c.hooks)

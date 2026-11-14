@@ -1193,8 +1193,8 @@ func buildTraefikLabels(serviceID string, domains []string, port int, ac service
 		// its certificate serves instead of redirecting (below), under a name
 		// of its own: the deploy that follows the certificate redirects, and
 		// one router that the two slots of that deploy define differently is
-		// a routing change, which stops the previous slot while Traefik still
-		// sends it the name's HTTPS requests.
+		// a routing change, which takes the router down until the previous
+		// slot has left Traefik's rotation.
 		plain := domain.IsTemporary(hostname) && !slices.Contains(ac.Certified, hostname) && (ac.BasicAuthUser == "" || ac.BasicAuthPassword == "")
 		httpRouter := fmt.Sprintf("paas-%s-%d-http", serviceID[:8], i)
 		if plain {
