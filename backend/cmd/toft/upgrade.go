@@ -28,6 +28,7 @@ import (
 	"github.com/Nickpap21/toft/backend/pkg/buildinfo"
 	"github.com/Nickpap21/toft/backend/pkg/config"
 	"github.com/Nickpap21/toft/backend/pkg/reservation"
+	"golang.org/x/sync/errgroup"
 )
 
 // toft upgrade (D-63): moves the panel host to a release in place, and back
@@ -496,19 +497,20 @@ func (u *upgrader) upgrade(ctx context.Context, to string, force bool) (err erro
 	// The release is verified: the migrations' Atlas, pinned here, downloads
 	// beside its images. A failure is the migration's to report.
 	bg.Go(func() { _, _ = u.image(bgCtx, atlasImage) })
-	// The two images download side by side; the first error in refs' order
-	// fails the upgrade, as one after the other did.
+	// The two images download side by side; the first to fail cancels the
+	// other and fails the upgrade at once, with its own error.
 	ids := make([]string, len(refs))
-	errs := make([]error, len(refs))
-	var pulls sync.WaitGroup
+	pulls, pullCtx := errgroup.WithContext(ctx)
 	for i, ref := range refs {
-		pulls.Go(func() { ids[i], errs[i] = u.image(ctx, ref) })
+		pulls.Go(func() (err error) {
+			ids[i], err = u.image(pullCtx, ref)
+			return err
+		})
 	}
-	pulls.Wait()
+	if err := pulls.Wait(); err != nil {
+		return err
+	}
 	for i, ref := range refs {
-		if errs[i] != nil {
-			return errs[i]
-		}
 		// The stack runs the release's tag (docker-compose.yml): here it
 		// names the signed image, whatever the registry's tag points at.
 		tag := repo + "/paas-" + []string{"backend", "frontend"}[i] + ":" + to

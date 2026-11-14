@@ -43,7 +43,11 @@ type fakeHost struct {
 	pullFails   bool
 	failPull    string // a pull of a ref holding this fails
 	failCompose bool   // docker compose pull fails
-	contract    bool   // the release has a contract.sql
+	// hangPull: a pull of a ref holding this blocks until its context ends,
+	// and hung is what it saw then.
+	hangPull string
+	hung     error
+	contract bool // the release has a contract.sql
 	// contractEmpty: the release's contract.sql holds only its header.
 	contractEmpty bool
 	git           bool // the release has git hosting's compose file (D-71)
@@ -81,7 +85,14 @@ func newFakeHost(t *testing.T) *fakeHost {
 	}
 }
 
-func (f *fakeHost) run(_ context.Context, out io.Writer, stdin io.Reader, env []string, name string, args ...string) error {
+func (f *fakeHost) run(ctx context.Context, out io.Writer, stdin io.Reader, env []string, name string, args ...string) error {
+	if name == "docker" && args[0] == "pull" && f.hangPull != "" && strings.Contains(args[len(args)-1], f.hangPull) {
+		<-ctx.Done()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.hung = ctx.Err()
+		return ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	call := strings.TrimSpace(name + " " + strings.Join(args, " "))
@@ -653,6 +664,37 @@ func TestUpgrade_PullsTheImagesSideBySide(t *testing.T) {
 			}
 			if got := tag(t, u); got != "v0.1.0" {
 				t.Fatalf("IMAGE_TAG = %q", got)
+			}
+		})
+	}
+}
+
+// The first pull to fail cancels the other and fails the upgrade at once,
+// with its own error rather than the other's "context canceled".
+func TestUpgrade_FailedPullCancelsTheOther(t *testing.T) {
+	for _, c := range [][2]string{{"backend", "frontend"}, {"frontend", "backend"}} {
+		t.Run(c[0]+" failing", func(t *testing.T) {
+			h, u, out := installed(t)
+			h.failPull = "paas-" + c[0] + "@"
+			h.hangPull = "paas-" + c[1] + "@"
+			ref := "ghcr.io/acme/paas-" + c[0] + "@" + digest(c[0], "v0.2.0")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- u.upgrade(ctx, "v0.2.0", false) }()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(3 * time.Second):
+				cancel() // lets the blocked pull, and so the upgrade, end
+				<-done
+				t.Fatalf("the upgrade waited for the other pull after %s failed", c[0])
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), "pull "+ref+": manifest unknown") {
+				t.Fatalf("err = %v\n%s", err, out)
+			}
+			if !errors.Is(h.hung, context.Canceled) {
+				t.Fatalf("the other pull saw %v, not its context cancelled", h.hung)
 			}
 		})
 	}
