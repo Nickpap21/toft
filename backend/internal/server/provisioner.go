@@ -774,9 +774,9 @@ func ensureLokiDriver(sc shell, local bool, logFn func(string)) error {
 	// By digest: the plugin publishes one tag per architecture (X.Y.Z-amd64,
 	// X.Y.Z-arm64), no plain X.Y.Z, and a tag can be moved. The same two as
 	// install.sh: scripts/check-pinned-images-test.sh compares them.
-	cmd := `case $(dpkg --print-architecture) in
-amd64) docker plugin install grafana/loki-docker-driver:3.7.9-amd64@sha256:88f98af1110ba24b7b2eddad28ac445037327c712912aec3596b85702ea7b56f --alias loki --grant-all-permissions ;;
-arm64) docker plugin install grafana/loki-docker-driver:3.7.9-arm64@sha256:c78bdbb26c5936e5d5258b8efa7a55e49e126a235461e9dc91ad455bebd9ef26 --alias loki --grant-all-permissions ;;
+	cmd := `case $(uname -m) in
+x86_64) docker plugin install grafana/loki-docker-driver:3.7.9-amd64@sha256:88f98af1110ba24b7b2eddad28ac445037327c712912aec3596b85702ea7b56f --alias loki --grant-all-permissions ;;
+aarch64 | arm64) docker plugin install grafana/loki-docker-driver:3.7.9-arm64@sha256:c78bdbb26c5936e5d5258b8efa7a55e49e126a235461e9dc91ad455bebd9ef26 --alias loki --grant-all-permissions ;;
 esac 2>&1 || true`
 	return sc.ExecStream(cmd, logFn)
 }
