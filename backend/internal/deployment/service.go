@@ -719,9 +719,12 @@ type Service struct {
 	// a client's deploy starts a second one; a column on deployments if
 	// that ever matters.
 	created sync.Map
-	// turns holds, per service, the last deploy in its line (takeTurn).
-	turnMu sync.Mutex
-	turns  map[string]*turn
+	// turns holds, per service, the last deploy in its line (takeTurn);
+	// deleting, the services whose delete stopped their deploys
+	// (StopDeploys), which take no turn until it has ended.
+	turnMu   sync.Mutex
+	turns    map[string]*turn
+	deleting map[string]int
 	// shuttingDown is set by BeginShutdown: a pipeline that fails from then
 	// on is left for the next start's recovery (leaveForRecovery).
 	shuttingDown atomic.Bool
@@ -788,11 +791,22 @@ func (s *Service) acquireBuildSlot(ctx context.Context, clock *deployClock, appe
 type turn struct {
 	done chan struct{} // closed when its pipeline has ended
 	move bool          // it moves the service to another server
+	// ctx is the line's, shared by every deploy in it: StopDeploys cancels
+	// it with errServiceDeleted.
+	ctx    context.Context
+	cancel context.CancelCauseFunc
 }
 
 // ErrServiceMoving refuses a deploy while the service moves to another
 // server: it was aimed at the server the service is leaving.
 var ErrServiceMoving = errors.New("the service is moving to another server: deploy it again once the move has finished")
+
+// errServiceDeleting refuses a deploy while its service is being deleted.
+var errServiceDeleting = &refusal{refusedNotFound, "service not found: it is being deleted"}
+
+// errServiceDeleted is the cause a deploy's context is cancelled with when
+// its service is deleted (StopDeploys).
+var errServiceDeleted = errors.New("cancelled by the service's delete")
 
 // takeTurn puts a deploy of serviceID in line (move: it moves the service).
 // A service's deploys run one after the other, so two never switch its
@@ -802,21 +816,31 @@ var ErrServiceMoving = errors.New("the service is moving to another server: depl
 // refused (ErrServiceMoving); a move waits like any other deploy. A turn
 // given up while the deploy ahead still runs (a deploy refused after it
 // took its turn) stays in the line until that one has ended, so the next
-// deploy still waits for it.
+// deploy still waits for it. The deploy runs on ctx, which the service's
+// delete cancels (StopDeploys); while the delete runs, a deploy is refused
+// (errServiceDeleting).
 // ponytail: the line is in this process's memory, which recovery already
 // assumes is the only one (recovery.go); a row lock or an advisory lock per
 // service if the panel ever runs as more than one instance.
-func (s *Service) takeTurn(serviceID string, move bool) (ahead <-chan struct{}, done func(), err error) {
+func (s *Service) takeTurn(serviceID string, move bool) (ctx context.Context, ahead <-chan struct{}, done func(), err error) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
+	if s.deleting[serviceID] > 0 {
+		return nil, nil, nil, errServiceDeleting
+	}
 	last := s.turns[serviceID]
 	if last != nil {
 		if last.move {
-			return nil, nil, ErrServiceMoving
+			return nil, nil, nil, ErrServiceMoving
 		}
 		ahead = last.done
 	}
 	mine := &turn{done: make(chan struct{}), move: move}
+	if last != nil && last.ctx.Err() == nil {
+		mine.ctx, mine.cancel = last.ctx, last.cancel
+	} else { // a new line, or one a delete that gave up waiting cancelled
+		mine.ctx, mine.cancel = context.WithCancelCause(context.Background())
+	}
 	if s.turns == nil {
 		s.turns = make(map[string]*turn)
 	}
@@ -829,7 +853,7 @@ func (s *Service) takeTurn(serviceID string, move bool) (ahead <-chan struct{}, 
 		}
 		close(mine.done)
 	}
-	return ahead, func() {
+	return mine.ctx, ahead, func() {
 		if ahead != nil {
 			select {
 			case <-ahead:
@@ -843,6 +867,42 @@ func (s *Service) takeTurn(serviceID string, move bool) (ahead <-chan struct{}, 
 		}
 		end()
 	}, nil
+}
+
+// StopDeploys is what a delete of serviceID calls before it tears the
+// service down (service.DeployStopper). Every deploy of the service this
+// process runs is cancelled with errServiceDeleted, wherever it is (in
+// line, waiting for a build slot, cloning, building, rolling out), and it
+// returns once all of them have ended, so the teardown removes whatever
+// they created. Until release is called no deploy of the service starts
+// (errServiceDeleting). A rollout already handed to a server's agent is
+// followed to its end: the agent can't be told to stop it.
+func (s *Service) StopDeploys(ctx context.Context, serviceID string) (release func(), err error) {
+	s.turnMu.Lock()
+	if s.deleting == nil {
+		s.deleting = make(map[string]int)
+	}
+	s.deleting[serviceID]++
+	last := s.turns[serviceID]
+	s.turnMu.Unlock()
+	release = func() {
+		s.turnMu.Lock()
+		defer s.turnMu.Unlock()
+		if s.deleting[serviceID]--; s.deleting[serviceID] == 0 {
+			delete(s.deleting, serviceID)
+		}
+	}
+	if last == nil {
+		return release, nil
+	}
+	last.cancel(errServiceDeleted)
+	select {
+	case <-last.done: // the line's last: every deploy ahead of it has ended too
+		return release, nil
+	case <-ctx.Done():
+		release()
+		return nil, fmt.Errorf("wait for the service's deploys to stop: %w", context.Cause(ctx))
+	}
 }
 
 // waitTurn waits for the deploy of the service ahead of this one (takeTurn)
@@ -1490,10 +1550,11 @@ func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*Deployment,
 		input.EnvVars = withServiceURL(input.EnvVars, input.Domains, input.AccessControl.Certified)
 	}
 	decision, refusal := s.precheck(ctx, input)
+	var line context.Context
 	var ahead <-chan struct{}
 	var done func()
 	if refusal == nil {
-		ahead, done, refusal = s.takeTurn(input.ServiceID, input.MoveFrom != nil)
+		line, ahead, done, refusal = s.takeTurn(input.ServiceID, input.MoveFrom != nil)
 	}
 	// A move that ended between the caller's read of the service and this
 	// turn: the input still names the server the service has left, or
@@ -1550,7 +1611,7 @@ func (s *Service) Trigger(ctx context.Context, input TriggerInput) (*Deployment,
 	started = true
 	go func() {
 		defer done()
-		s.runPipeline(d.ID, input, decision, ahead)
+		s.runPipeline(line, d.ID, input, decision, ahead)
 	}()
 	return d, nil
 }
@@ -1792,8 +1853,10 @@ func (s *Service) recordRefusal(ctx context.Context, input TriggerInput, decisio
 //
 // The deploy runs under its service's time limit (D-125): every step gets a
 // context the limit cancels, and what records how it ended runs without
-// that cancellation (settled), as does the rollout's own clean-up.
-func (s *Service) runPipeline(deploymentID string, input TriggerInput, decision *deploypolicy.Decision, ahead <-chan struct{}) {
+// that cancellation (settled), as does the rollout's own clean-up. Its
+// steps' context is also line's, its turn's, which a delete of the service
+// cancels (StopDeploys).
+func (s *Service) runPipeline(line context.Context, deploymentID string, input TriggerInput, decision *deploypolicy.Decision, ahead <-chan struct{}) {
 	defer s.inflight.Delete(deploymentID)
 	defer s.moving.Delete(deploymentID)
 	if input.FromCreate {
@@ -1803,9 +1866,13 @@ func (s *Service) runPipeline(deploymentID string, input TriggerInput, decision 
 		return
 	}
 	base := context.Background()
-	ctx, clock := startClock(base, s.timeLimit(base, input.ServiceID))
+	ctx, clock := startClock(line, s.timeLimit(base, input.ServiceID))
 	defer clock.stop()
 	input.clock = clock
+	if ctx.Err() != nil { // its service's delete began before it did
+		s.failAndPublish(ctx, deploymentID, input, "", ctx.Err().Error())
+		return
+	}
 
 	appendLog := func(msg string) {
 		if _, err := s.repo.InsertLog(base, deploymentID, msg); err != nil {

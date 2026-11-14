@@ -108,6 +108,7 @@ type ServiceManager struct {
 	tx               Transactor         // a create with secrets
 	panelRole        PanelRole          // optional; nil = the panel host runs apps
 	capacity         CapacityGate       // optional; nil refuses no create for room
+	deploys          DeployStopper      // optional; nil stops no deploy before a delete
 }
 
 // PanelRole says whether the panel host runs apps (D-26, D-62). Satisfied by
@@ -1177,11 +1178,24 @@ type configFileRemover interface {
 	RemoveFromHost(ctx context.Context, serviceID string, srv *serverPkg.Server) error
 }
 
+// DeployStopper cancels a service's deploys and waits for them to end, and
+// keeps new ones from starting until release is called. Satisfied by
+// *deployment.Service.
+type DeployStopper interface {
+	StopDeploys(ctx context.Context, serviceID string) (release func(), err error)
+}
+
+// WithDeployStopper makes a delete stop the service's deploys before it
+// tears the service down, so none leaves a container behind it.
+func (s *ServiceManager) WithDeployStopper(d DeployStopper) { s.deploys = d }
+
 // Delete removes a service and everything it has on its server: its
 // containers, its volumes and its compose stack's (data included), the
 // images built for it, its compose files and config files. Shared volumes
-// it mounts belong to the workspace and stay. Its rows go last, and only
-// once the server is clean (ErrTeardown otherwise).
+// it mounts belong to the workspace and stay. Its deploys are stopped
+// first, so the teardown removes what they created. Its rows go last, and
+// only once the server is clean (ErrTeardown otherwise, and the service
+// can be deployed again).
 func (s *ServiceManager) Delete(ctx context.Context, id string) error {
 	svc, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -1197,6 +1211,13 @@ func (s *ServiceManager) Delete(ctx context.Context, id string) error {
 		if err := s.Delete(ctx, c); err != nil {
 			return err
 		}
+	}
+	if s.deploys != nil {
+		release, err := s.deploys.StopDeploys(ctx, id)
+		if err != nil {
+			return fmt.Errorf("stop the service's deploys: %w", err)
+		}
+		defer release()
 	}
 	if err := s.teardown(ctx, svc); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrTeardown, svc.Name, err)

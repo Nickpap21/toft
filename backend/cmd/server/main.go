@@ -994,7 +994,8 @@ func main() {
 	deploymentSvc.WithCapacitySvc(serverSvc)
 	deploymentSvc.WithServiceReader(serviceSvc)
 	deploymentSvc.WithEnvVarSwapper(envvarSvc)
-	serviceSvc.WithCapacityGate(deploymentSvc) // Create and deploy is refused, not created, when it won't fit
+	serviceSvc.WithCapacityGate(deploymentSvc)  // Create and deploy is refused, not created, when it won't fit
+	serviceSvc.WithDeployStopper(deploymentSvc) // a delete cancels the service's deploys and waits for them first
 	serviceHandler.WithFirstDeploys(deploymentHandler)
 	deploymentSvc.WithHashKey(hashKey)
 	deploymentSvc.WithServerReader(serverSvc)

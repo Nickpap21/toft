@@ -8,7 +8,7 @@ import (
 // HoldMove puts a move of serviceID in its line, as a deploy that moves the
 // service does, until the func it returns is called.
 func (s *Service) HoldMove(serviceID string) (ended func()) {
-	_, done, _ := s.takeTurn(serviceID, true)
+	_, _, done, _ := s.takeTurn(serviceID, true)
 	return done
 }
 
