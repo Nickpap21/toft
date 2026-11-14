@@ -2722,7 +2722,7 @@ export interface paths {
         put?: never;
         /**
          * Create a service in an environment; owners and developers
-         * @description A saved configuration that breaks the deploy policy is refused with 422 deploy_policy_violation and data.violations (D-39). 409 server_not_ready when server_id is a server still waiting for its first agent (Add a server, D-153). 409 panel_host_no_apps when server_id is empty (the panel host) and its role on Instance is Only Toft (D-62). 409 capacity_exceeded, with data as a deploy's, when deploy is true and the service won't fit its server, and nothing is created (force creates it for a role that may deploy past the gate).
+         * @description A saved configuration that breaks the deploy policy is refused with 422 deploy_policy_violation and data.violations (D-39). 409 server_not_ready when server_id is a server still waiting for its first agent (Add a server, D-153). 409 panel_host_no_apps when server_id is empty (the panel host) and its role on Instance is Only Toft (D-62). 409 capacity_exceeded, with data as a deploy's, when deploy is true and the service won't fit its server, and nothing is created (force creates it for a role that may deploy past the gate). 409 alias_taken when another service of the environment has the network alias (given, or made from the name).
          */
         post: operations["postEnvironmentsEnvironmentidServices"];
         delete?: never;
@@ -5813,7 +5813,7 @@ export interface paths {
         get?: never;
         /**
          * Change a service's configuration; owners and developers
-         * @description Changes the fields the body sends and keeps the rest: a field left out, or sent as null, keeps its stored value; "" or [] clears it (v0.5.1). The write-only secrets keep theirs when empty. Takes effect on the next deploy. Refused with 422 deploy_policy_violation when the configuration that results breaks the policy, such as having no memory limit. A save that changes something is in the audit log as service.settings_changed, with the names of the fields it changed (fields); a credential is named, never recorded.
+         * @description Changes the fields the body sends and keeps the rest: a field left out, or sent as null, keeps its stored value; "" or [] clears it (v0.5.1). The write-only secrets keep theirs when empty. Takes effect on the next deploy. Refused with 422 deploy_policy_violation when the configuration that results breaks the policy, such as having no memory limit. A save that changes something is in the audit log as service.settings_changed, with the names of the fields it changed (fields); a credential is named, never recorded. 409 alias_taken when another service of the environment has the network alias.
          */
         put: operations["putServicesServiceidConfig"];
         post?: never;
@@ -21708,6 +21708,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };

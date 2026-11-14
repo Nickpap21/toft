@@ -2266,7 +2266,7 @@ func (s *ServiceManager) validateAliasUnique(ctx context.Context, environmentID,
 	}
 	for _, svc := range existing {
 		if svc.NetworkAlias == alias && svc.ID != excludeID {
-			return fmt.Errorf("network alias %q is already used by service %q in this environment", alias, svc.Name)
+			return fmt.Errorf("%w: %q is used by service %q", ErrAliasTaken, alias, svc.Name)
 		}
 	}
 	return nil
