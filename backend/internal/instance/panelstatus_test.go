@@ -21,6 +21,7 @@ type fakeProbe struct {
 	runOut         string
 	containers     []instance.PanelContainer
 	containerCalls int
+	statsCalls     int
 	cert           *instance.PanelCertificate
 	certErr        error
 	certCalls      int
@@ -33,8 +34,11 @@ type fakeProbe struct {
 	host func(argv []string, stdin io.Reader, logFn func(string)) (string, error)
 }
 
-func (f *fakeProbe) Containers(_ context.Context, names []string, _ bool) ([]instance.PanelContainer, error) {
+func (f *fakeProbe) Containers(_ context.Context, names []string, stats bool) ([]instance.PanelContainer, error) {
 	f.containerCalls++
+	if stats {
+		f.statsCalls++
+	}
 	out := make([]instance.PanelContainer, len(names))
 	for i, n := range names {
 		out[i] = instance.PanelContainer{Name: n, State: "running", Health: "healthy"}
@@ -173,9 +177,16 @@ func TestPanelStatusFromTheMonitor(t *testing.T) {
 	svc, _ := panelService(t, probe, &fakeStore{}, t.TempDir())
 
 	svc.PanelContainersTick(ctx, time.Now())
+	assert.Zero(t, probe.statsCalls, "no one asked: the tick leaves the stats")
+	st, err := svc.PanelStatus(ctx, ada.id)
+	require.NoError(t, err)
+	assert.Equal(t, 1, probe.statsCalls, "the first one who asks reads them")
+
+	svc.PanelContainersTick(ctx, time.Now())
+	assert.Equal(t, 2, probe.statsCalls, "and the ticks take them from then on")
 	probe.containers = []instance.PanelContainer{{Name: "paas-frontend", State: "restarting"}}
 	calls := probe.containerCalls
-	st, err := svc.PanelStatus(ctx, ada.id)
+	st, err = svc.PanelStatus(ctx, ada.id)
 	require.NoError(t, err)
 	assert.Equal(t, calls, probe.containerCalls, "a fresh tick answers without asking Docker")
 	assert.True(t, st.Healthy, "the tick's reading")

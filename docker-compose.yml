@@ -126,13 +126,14 @@ services:
     networks:
       - paas-network
     healthcheck:
-      # The same ping entrypoint as in command (the healthcheck subcommand
-      # does not read the container's flags).
-      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=ping", "--entrypoints.ping.address=127.0.0.1:8082"]
+      # The ping entrypoint of command, asked by the image's busybox: the
+      # healthcheck subcommand starts all of Traefik to ask the same.
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8082/ping"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+      start_interval: 1s
     deploy:
       resources:
         limits:
@@ -178,10 +179,14 @@ services:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       # -h: over TCP, which the image's setup server doesn't listen on.
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
+      # Every second until it first answers, so what waits for it starts at
+      # once; then twice a minute, like the others.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      interval: 30s
       timeout: 5s
-      retries: 5
+      retries: 2
+      start_period: 30s
+      start_interval: 1s
     # Not on paas-network: only the backend and Atlas reach it (D-31).
     networks:
       - paas-internal
