@@ -1296,13 +1296,16 @@ func (s *Service) requestedLimits(ctx context.Context, svc *service.Service) (cp
 // CanBypass says whether userID may deploy past it: on the workspace's own server, a
 // member whose role reaches the workspace's bypass setting; on a share of another
 // workspace's server, only an owner of that workspace, since the share protects its
-// services.
+// services. The panel's own server (serverID "") has its own gate, checkPanelCapacity.
 func (s *Service) checkCapacity(
 	ctx context.Context,
 	serverID, currentServiceID, userID, memberRole, orgID string,
 	requestedCPU, requestedMemMB float64,
 ) (*server.CapacityExceededError, error) {
-	if serverID == "" || s.capacitySvc == nil || s.orgSettingsSvc == nil {
+	if serverID == "" {
+		return s.checkPanelCapacity(ctx, currentServiceID, userID, requestedMemMB), nil
+	}
+	if s.capacitySvc == nil || s.orgSettingsSvc == nil {
 		return nil, nil
 	}
 
@@ -1345,6 +1348,42 @@ func (s *Service) checkCapacity(
 		RequestedCPUCores: requestedCPU,
 		RequestedMemoryMB: requestedMemMB,
 	}, nil
+}
+
+// checkPanelCapacity is the gate on the panel's own server: the memory it
+// leaves its apps (D-62) against what every workspace's services reserve
+// there, the ledger previews are counted in (room). The apps share one
+// memory cap, so past it a service is killed for memory before it reaches
+// its own limit. CPU is not counted: the ledger is memory only. A running
+// service deployed again within what it already holds is never refused: it
+// takes no new room, and servers were filled past the ledger before this
+// gate existed. Only an instance operator deploys past it, since the server
+// is every workspace's. A ledger that can't say refuses nothing.
+func (s *Service) checkPanelCapacity(ctx context.Context, currentServiceID, userID string, requestedMemMB float64) *server.CapacityExceededError {
+	if s.panelCapacity == nil || requestedMemMB == 0 {
+		return nil
+	}
+	apps, err := s.panelCapacity.AppsMemoryMB(ctx)
+	if err != nil || apps <= 0 {
+		return nil
+	}
+	allocated, err := s.panelCapacity.AllocatedMemoryMB(ctx)
+	if err != nil {
+		return nil
+	}
+	_, own := s.ownAllocation(ctx, currentServiceID)
+	allocated = max(allocated-own, 0)
+	if requestedMemMB <= own || allocated+requestedMemMB <= apps {
+		return nil
+	}
+	canBypass := false
+	if s.operators != nil && userID != "" {
+		canBypass, _ = s.operators.IsOperator(ctx, userID)
+	}
+	return &server.CapacityExceededError{
+		Code: "capacity_exceeded", Server: "the panel's server", CanBypass: canBypass,
+		EffectiveMemoryMB: apps, AllocatedMemoryMB: allocated, RequestedMemoryMB: requestedMemMB,
+	}
 }
 
 // CheckNewCapacity is the capacity gate for svc, a service not created yet

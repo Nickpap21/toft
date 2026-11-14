@@ -86,8 +86,8 @@ type CapacityExceededError struct {
 func (e *CapacityExceededError) Error() string {
 	var short []string
 	if e.RequestedMemoryMB > 0 && e.AllocatedMemoryMB+e.RequestedMemoryMB > e.EffectiveMemoryMB {
-		short = append(short, fmt.Sprintf("needs %s of memory, %s left of %s", memory(e.RequestedMemoryMB),
-			memory(max(e.EffectiveMemoryMB-e.AllocatedMemoryMB, 0)), memory(e.EffectiveMemoryMB)))
+		short = append(short, fmt.Sprintf("needs %s of memory, %s left of %s", Memory(e.RequestedMemoryMB),
+			Memory(max(e.EffectiveMemoryMB-e.AllocatedMemoryMB, 0)), Memory(e.EffectiveMemoryMB)))
 	}
 	if e.RequestedCPUCores > 0 && e.AllocatedCPUCores+e.RequestedCPUCores > e.EffectiveCPUCores {
 		short = append(short, fmt.Sprintf("needs %s, %s left of %s", cores(e.RequestedCPUCores),
@@ -100,8 +100,8 @@ func (e *CapacityExceededError) Error() string {
 	return fmt.Sprintf("Not enough room on %s: %s.", name, strings.Join(short, "; "))
 }
 
-// memory is MiB under 1 GiB, else GiB with one decimal.
-func memory(mb float64) string {
+// Memory is MiB under 1 GiB, else GiB with one decimal.
+func Memory(mb float64) string {
 	if mb >= 1024 {
 		return fmt.Sprintf("%.1f GiB", mb/1024)
 	}

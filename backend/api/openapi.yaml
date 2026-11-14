@@ -8704,7 +8704,7 @@ paths:
           $ref: '#/components/responses/Problem'
         default:
           $ref: '#/components/responses/Problem'
-      description: 'Fire and forget: the pipeline runs in the background and the client follows it over the deployment''s log stream. A service created with deploy is already deploying: asked while that first deploy still runs, with no override in its body and nothing it ships changed since, this answers 202 with that deployment and starts none. Under the workspace''s agent policy when an agent''s token calls it (D-100): Ask answers 202 approval_pending (from the MCP tool, which gives a reason) or 403 approval_required; Never 403 agent_policy_never; 422 reason_required; 429 too_many_approvals. 409 capacity_exceeded when the server cannot fit it, a problem whose detail names the server and what is short (Not enough room on qa-node: needs 512 MiB of memory, 0 MiB left of 3.7 GiB.) with the shortfall in data; owners (or developers, by the workspace''s rule) retry with ?force=true to deploy anyway, which the audit log records. 422 deploy_policy_violation lists the violations. 409 sandbox_unavailable when the service runs Sandboxed (D-95) or Sandboxed with a strict network (D-115) and its server can''t run it: no gVisor there, its smoke test failing, the panel''s own server, a server never probed, or, for the strict network, no agent answering names. 409 server_frozen when its server (or, for a move, the server it leaves) kept its own state over a restored panel (D-113). 409 server_not_ready when the target server (for a move, the one it moves to) is still waiting for its first agent (D-153). A service''s deploys run one after the other: asked while another of its deploys is pending or building, this one is accepted (202) and stays pending, its log saying it waits, until that one has ended. 409 service_moving while the service is moving to another server: nothing is queued behind a move.'
+      description: 'Fire and forget: the pipeline runs in the background and the client follows it over the deployment''s log stream. A service created with deploy is already deploying: asked while that first deploy still runs, with no override in its body and nothing it ships changed since, this answers 202 with that deployment and starts none. Under the workspace''s agent policy when an agent''s token calls it (D-100): Ask answers 202 approval_pending (from the MCP tool, which gives a reason) or 403 approval_required; Never 403 agent_policy_never; 422 reason_required; 429 too_many_approvals. 409 capacity_exceeded when the server cannot fit it, a problem whose detail names the server and what is short (Not enough room on qa-node: needs 512 MiB of memory, 0 MiB left of 3.7 GiB.) with the shortfall in data; owners (or developers, by the workspace''s rule) retry with ?force=true to deploy anyway, which the audit log records. The panel''s own server is counted too, in memory, against reservation.apps_memory_bytes of GET /instance/panel-host: only an instance operator deploys past it, and a running service deployed again within the memory it already holds is never refused. 422 deploy_policy_violation lists the violations. 409 sandbox_unavailable when the service runs Sandboxed (D-95) or Sandboxed with a strict network (D-115) and its server can''t run it: no gVisor there, its smoke test failing, the panel''s own server, a server never probed, or, for the strict network, no agent answering names. 409 server_frozen when its server (or, for a move, the server it leaves) kept its own state over a restored panel (D-113). 409 server_not_ready when the target server (for a move, the one it moves to) is still waiting for its first agent (D-153). A service''s deploys run one after the other: asked while another of its deploys is pending or building, this one is accepted (202) and stays pending, its log saying it waits, until that one has ended. 409 service_moving while the service is moving to another server: nothing is queued behind a move.'
       parameters:
         - description: true to deploy past the server's capacity (D-44).
           in: query
@@ -16550,7 +16550,7 @@ components:
         reservation:
           type: object
           description: D-62's fixed reservation on a server that runs the panel and apps (D-26), what it leaves the apps, and the least a server needs for it.
-          required: [min_cpu, min_memory_bytes, system_cpu, system_memory_bytes, panel_cpu, panel_memory_bytes, apps_cpu, apps_memory_bytes, enforced]
+          required: [min_cpu, min_memory_bytes, system_cpu, system_memory_bytes, panel_cpu, panel_memory_bytes, apps_cpu, apps_memory_bytes, apps_allocated_memory_bytes, enforced]
           properties:
             min_cpu:
               type: integer
@@ -16570,6 +16570,10 @@ components:
               type: number
             apps_memory_bytes:
               type: integer
+            apps_allocated_memory_bytes:
+              type: integer
+              format: int64
+              description: What every workspace's running services on the panel's server reserve of apps_memory_bytes (their memory limits). A deploy that would take it past apps_memory_bytes is refused (409 capacity_exceeded); past it a service can be killed for memory before it reaches its own limit.
             enforced:
               type: boolean
               description: Apps here run under toft-apps.slice, which holds them to apps_cpu and apps_memory_bytes; false on installs without it.

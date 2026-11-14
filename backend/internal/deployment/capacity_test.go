@@ -228,3 +228,57 @@ func TestTrigger_MoveRefusals(t *testing.T) {
 		})
 	}
 }
+
+type isOperator map[string]bool
+
+func (o isOperator) IsOperator(_ context.Context, userID string) (bool, error) {
+	return o[userID], nil
+}
+
+// panelServices: "worker" runs on the panel's server with 512 MiB; "idle"
+// is stopped there.
+type panelServices struct{}
+
+func (panelServices) Get(_ context.Context, id string) (*service.Service, error) {
+	svc := &service.Service{ID: id, SourceType: "docker-image", MemoryLimit: "512m"}
+	if id == "idle" {
+		svc.RuntimeStatus = "stopped"
+	}
+	return svc, nil
+}
+
+// The panel's server has a ledger too: what it leaves its apps (D-62)
+// against what every workspace's services reserve there. Only an instance
+// operator deploys past it, since it is every workspace's server.
+func TestCheckCapacity_ThePanelsServer(t *testing.T) {
+	s := NewService(nil, nil, nil, zap.NewNop())
+	s.WithServiceReader(panelServices{})
+	s.WithControlPlaneStopgap(false, isOperator{"olga": true})
+	check := func(apps, alloc float64, serviceID, userID string, memMB float64) *server.CapacityExceededError {
+		t.Helper()
+		s.WithPreviews(nil, panelLedger{apps: apps, alloc: alloc}, nil)
+		capErr, err := s.checkCapacity(context.Background(), "", serviceID, userID, orgPkg.RoleOwner, "ws", 0, memMB)
+		require.NoError(t, err)
+		return capErr
+	}
+
+	assert.Nil(t, check(747, 235, "", "dave", 512), "fits what is left")
+
+	capErr := check(747, 512, "", "dave", 256)
+	require.NotNil(t, capErr, "256 MiB more than the 235 MiB left")
+	assert.Equal(t, "Not enough room on the panel's server: needs 256 MiB of memory, 235 MiB left of 747 MiB.", capErr.Error())
+	assert.Equal(t, "capacity_exceeded", capErr.Code)
+	assert.False(t, capErr.CanBypass, "an owner of a workspace is not the server's operator")
+	assert.True(t, check(747, 512, "", "olga", 256).CanBypass, "an instance operator")
+
+	assert.Nil(t, check(747, 1024, "worker", "dave", 512),
+		"over-committed already: a running service deployed again within what it holds takes no new room")
+	assert.NotNil(t, check(747, 1024, "worker", "dave", 768), "the same service asking for more")
+	assert.NotNil(t, check(747, 1024, "idle", "dave", 512), "a stopped service holds nothing")
+
+	assert.Nil(t, check(0, 1024, "", "dave", 512), "a ledger that can't say refuses nothing")
+	s.WithPreviews(nil, nil, nil)
+	capErr, err := s.checkCapacity(context.Background(), "", "", "dave", orgPkg.RoleOwner, "ws", 0, 512)
+	require.NoError(t, err)
+	assert.Nil(t, capErr, "no ledger")
+}

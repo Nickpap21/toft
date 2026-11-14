@@ -531,6 +531,35 @@ func TestCollectStoresEachKillOnceAndAlertsOnce(t *testing.T) {
 	}, src.alerts, "one alert per kill stored")
 }
 
+type panelRoom struct{ apps, alloc float64 }
+
+func (p panelRoom) AppsMemoryMB(context.Context) (float64, error)      { return p.apps, nil }
+func (p panelRoom) AllocatedMemoryMB(context.Context) (float64, error) { return p.alloc, nil }
+
+// On the panel's server the apps share one memory cap: a kill there, with
+// more reserved than the cap, says so, since the service may be far from
+// its own limit.
+func TestCollectSaysWhenThePanelsServerIsOverCommitted(t *testing.T) {
+	kill := func(room PanelRoom, serverID string) string {
+		t.Helper()
+		src := newFakeSource(target("a", serverID))
+		src.sample = func(context.Context, string, []service.MetricsTarget) (service.HostSample, error) {
+			return service.HostSample{OOMKills: []service.OOMEvent{{ServiceID: "a", Container: "a-blue", At: time.Unix(1_800_000_000, 0)}}, Until: 1_800_000_060}, nil
+		}
+		c := testCollector(src, zap.NewNop())
+		c.panel = room
+		c.collect(context.Background())
+		require.Len(t, src.alerts, 1)
+		return src.alerts[0]
+	}
+	assert.Equal(t, "a: a-blue was killed for memory. The panel's server leaves its apps 747 MiB between them and their limits add up to 1.9 GiB, "+
+		"so a service can be killed before it reaches its own limit: lower the limits, move a service to another server or give this one more memory",
+		kill(panelRoom{apps: 747, alloc: 1920}, ""))
+	assert.Equal(t, "a: a-blue was killed for memory", kill(panelRoom{apps: 747, alloc: 512}, ""), "within the cap: it reached its own limit")
+	assert.Equal(t, "a: a-blue was killed for memory", kill(panelRoom{apps: 747, alloc: 1920}, "srv-a"), "another server has no shared cap")
+	assert.Equal(t, "a: a-blue was killed for memory", kill(nil, ""))
+}
+
 func TestCollectReadsTheKillWindowAgainWhenAKillWasNotStored(t *testing.T) {
 	src := newFakeSource(target("a", "srv-a"))
 	until := int64(1000)
@@ -569,7 +598,7 @@ func TestRunCollectorSummarisesAtStart(t *testing.T) {
 	src := newFakeSource()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	RunCollector(ctx, src, src, src, zap.NewNop())
+	RunCollector(ctx, src, src, src, nil, zap.NewNop())
 	require.Len(t, src.hourly, 1)
 	assert.Contains(t, src.hourly[0], "summarise ")
 }
