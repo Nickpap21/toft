@@ -68,6 +68,15 @@ export function CapacityDialog({ warning, serviceName, onCancel, onDeployAnyway,
     const cpuLeft = w ? Math.max(w.effective_cpu_cores - w.allocated_cpu_cores, 0) : 0;
     const memShort = !!w && w.allocated_memory_mb + w.requested_memory_mb > w.effective_memory_mb;
     const cpuShort = !!w && w.allocated_cpu_cores + w.requested_cpu_cores > w.effective_cpu_cores;
+    // With no memory left at all, no lower limit of this service's fits.
+    const full = memShort && memLeft === 0;
+    const lower = create
+        ? full
+            ? "Pick another server or free memory on this one first"
+            : "Lower its memory above or pick another server"
+        : full
+          ? "Lower other services’ limits on this server or move one to another server"
+          : "Lower the service's limits in its settings";
 
     return (
         <Dialog open={!!w} onOpenChange={(open) => !open && onCancel()}>
@@ -99,11 +108,11 @@ export function CapacityDialog({ warning, serviceName, onCancel, onDeployAnyway,
                         <p className="text-muted">
                             {create
                                 ? w.can_bypass
-                                    ? "Lower its memory above or pick another server, or create and deploy it anyway: the server may then run short for every service on it."
-                                    : `Lower its memory above or pick another server, or ask ${w.panel_host ? "an instance operator" : "a workspace owner"} to create it.`
+                                    ? `${lower}, or create and deploy it anyway: the server may then run short for every service on it.`
+                                    : `${lower}, or ask ${w.panel_host ? "an instance operator" : "a workspace owner"} to create it.`
                                 : w.can_bypass
-                                  ? "Lower the service's limits in its settings, or deploy anyway: the server may then run short for every service on it."
-                                  : `Lower the service's limits in its settings, or ask ${w.panel_host ? "an instance operator" : "a workspace owner"} to deploy it.`}
+                                  ? `${lower}, or deploy anyway: the server may then run short for every service on it.`
+                                  : `${lower}, or ask ${w.panel_host ? "an instance operator" : "a workspace owner"} to deploy it.`}
                         </p>
                     </div>
                 )}

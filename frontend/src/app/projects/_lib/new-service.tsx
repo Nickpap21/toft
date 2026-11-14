@@ -1884,7 +1884,7 @@ export function NewServiceForm({ projectId, first = false }: { projectId: string
               {noRoom && serverRoom ? (
                 <p className="flex items-start gap-2 text-xs leading-[18px] text-status-pending-fg">
                   <AlertTriangle role="img" aria-label="Warning" className="mt-0.5 h-3.5 w-3.5 flex-none text-status-pending" />
-                  {`It needs ${mib(memory)} and ${serverLabel(server)} has ${formatMemory(memLeft)} left of ${formatMemory(serverRoom.total)}: Create and deploy ${canBypass ? "asks before creating it" : "won’t create it"}. Lower its memory or pick another server.`}
+                  {`It needs ${mib(memory)} and ${serverLabel(server)} has ${formatMemory(memLeft)} left of ${formatMemory(serverRoom.total)}: Create and deploy ${canBypass ? "asks before creating it" : "won’t create it"}. ${memLeft ? "Lower its memory or pick another server." : "Pick another server, or free memory on this one first."}`}
                 </p>
               ) : !noServer && !hostPending && !hostFailed && !serversFailed && <p className="text-xs leading-[18px] text-fg/70">
                 {isCatalog

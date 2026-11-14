@@ -30,12 +30,17 @@ database. Upgrade from 1.0.1.
   servers; an instance operator can deploy anyway. A service deployed
   again with the limit it went live with is never refused, also on a
   server already over; a limit raised since, or a service that never ran,
-  is new room. CPU isn't counted there, and a deploy from a push isn't
-  checked, as on added servers.
+  is new room, and so is a service moved there from another server. CPU
+  isn't counted there, and a rollback or a deploy from a push isn't
+  checked, as on added servers; one that takes a raised limit past the
+  room is recorded with what the service held before, so the raise is
+  still refused at the next deploy.
 - **The panel says when the limits there add up to more than apps get**,
   which is when a service is killed before it reaches its own limit: in
   the alert, on Servers, in the service's Resources and beside the kills
   on its Overview. New service shows the memory the panel host has free.
+  While it is over, Resources doesn't suggest raising a killed service's
+  limit: the server ran short, not the service.
 - After upgrading, an instance whose services on the panel's server
   already reserve more than it leaves them sees that warning; nothing is
   stopped, and what runs keeps deploying. Lower their limits, move a

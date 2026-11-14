@@ -133,7 +133,7 @@ describe("Usage's memory kills line", () => {
 
   it("says why on the panel's server when its apps reserve more than they get", () => {
     expect(memoryKillsText(4, { total: 747, reserved: 1946, left: 0, over: true })).toBe(
-      "Killed for memory 4 times in 7 days. The panel’s server leaves its apps 747 MiB between them and their limits add up to 1.9 GiB, so a service can be killed before it reaches its own limit.",
+      "Killed for memory 4 times in 7 days. The panel’s server has 747 MiB for all its apps, but their memory limits add up to 1.9 GiB, so any of them can be killed before it reaches its own limit.",
     );
   });
 });

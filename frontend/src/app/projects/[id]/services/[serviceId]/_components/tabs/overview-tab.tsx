@@ -380,7 +380,8 @@ function Usage({ service, serviceId, projectId, peers }: { service: Service; ser
     enabled: !service.server_id && kills > 0,
     meta: { quietFailure: "Only adds why to the memory kills line; the kills are said without it." },
   });
-  const killsText = memoryKillsText(kills, panelRoom(panelHost));
+  const room = panelRoom(panelHost);
+  const killsText = memoryKillsText(kills, room);
 
   const check = service.last_health_check;
   const unmet =peers.filter((p) => (service.dependencies ?? []).includes(p.id) && p.runtime_status !== "running");
@@ -535,7 +536,7 @@ function Usage({ service, serviceId, projectId, peers }: { service: Service; ser
             <span>
               {killsText}{" "}
               <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-resources`} className="text-link hover:underline">
-                Its limits, in Resources
+                {room?.over ? "Room on the panel’s server, in Resources" : "Memory limit in Resources"}
               </Link>
             </span>
           </p>
@@ -558,7 +559,7 @@ export function memoryKillsText(kills: number, room: ReturnType<typeof panelRoom
   if (kills === 0) return "";
   const said = `Killed for memory ${kills === 1 ? "once" : `${kills} times`} in 7 days.`;
   return room?.over
-    ? `${said} The panel’s server leaves its apps ${formatMemory(room.total)} between them and their limits add up to ${formatMemory(room.reserved)}, so a service can be killed before it reaches its own limit.`
+    ? `${said} The panel’s server has ${formatMemory(room.total)} for all its apps, but their memory limits add up to ${formatMemory(room.reserved)}, so any of them can be killed before it reaches its own limit.`
     : said;
 }
 

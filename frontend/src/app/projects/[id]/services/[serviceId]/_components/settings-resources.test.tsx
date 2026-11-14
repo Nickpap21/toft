@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -518,6 +518,30 @@ describe("ReservedBars on the panel's server", () => {
     show(1946);
     expect(await screen.findByText("1.9 GiB of 747 MiB")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Warning" })).toBeTruthy();
-    expect(screen.getByText(/so one can be\s+killed for memory before it reaches its own limit/)).toBeTruthy();
+    expect(screen.getByText(/can be killed for memory before it reaches its own limit\. Lower this service’s limit below/)).toBeTruthy();
+  });
+
+  // A kill there comes from the server running short: raising the limit
+  // would take more from every service, so that suggestion is left out.
+  it("offers no raise while the panel's server is over-committed, and offers it otherwise", async () => {
+    const killed: ServiceResources = {
+      ...single,
+      rows: [{ ...single.rows[0], memory: { ...single.rows[0].memory, suggestion: { direction: "up", value: "1280m", reason: "Killed for memory 1 time(s), last on 13 Nov", days: 7 } } }],
+    };
+    const host = (allocatedMiB: number) =>
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+        data: { role: "apps", reservation: { apps_memory_bytes: 747 * 2 ** 20, apps_allocated_memory_bytes: allocatedMiB * 2 ** 20, enforced: true } },
+      }), { status: 200 })));
+
+    host(512);
+    renderSingle(killed);
+    expect(await screen.findByText("Raise to 1.3 GiB")).toBeTruthy();
+    cleanup();
+
+    host(1946);
+    renderSingle(killed);
+    expect(await screen.findByText("1.9 GiB of 747 MiB")).toBeTruthy();
+    expect(screen.queryByText("Raise to 1.3 GiB")).toBeNull();
+    expect(screen.getByText(/killed for memory 1 time in 7 days/)).toBeTruthy();
   });
 });

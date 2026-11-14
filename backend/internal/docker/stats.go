@@ -242,10 +242,9 @@ func collectLocalStats(ctx context.Context, dc *client.Client, targets []service
 	if sampled > 0 && len(rows) == 0 {
 		return service.HostSample{}, firstErr // every sample failed: the daemon, not a container
 	}
+	// An events read that failed or ran out of time leaves the sample its
+	// rows: the kills are read again with the next one (until 0).
 	kills, until := localKills(ctx, dc, since)
-	if err := ctx.Err(); err != nil {
-		return service.HostSample{}, err
-	}
 	return attributeSample(hostSample{rows: rows, kills: kills, until: until}, targets), nil
 }
 

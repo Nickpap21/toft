@@ -71,6 +71,18 @@ describe("CapacityDialog", () => {
         expect(screen.queryByText(/settings/)).toBeNull();
     });
 
+    // With nothing left, no lower limit of this service's fits: say what does help.
+    it("doesn't advise lowering the service's memory when the server has none left", () => {
+        const full = { ...warning, allocated_memory_mb: 1600, can_bypass: false };
+        const { unmount } = render(<CapacityDialog warning={full} onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(
+            screen.getByText("Lower other services’ limits on this server or move one to another server, or ask a workspace owner to deploy it."),
+        ).toBeTruthy();
+        unmount();
+        render(<CapacityDialog warning={full} create onCancel={vi.fn()} onDeployAnyway={vi.fn()} />);
+        expect(screen.getByText("Pick another server or free memory on this one first, or ask a workspace owner to create it.")).toBeTruthy();
+    });
+
     it("writes MiB under 1 GiB and GiB with one decimal above", () => {
         expect(formatMemory(436)).toBe("436 MiB");
         expect(formatMemory(1536)).toBe("1.5 GiB");

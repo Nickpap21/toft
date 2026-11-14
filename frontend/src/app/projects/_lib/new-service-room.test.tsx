@@ -39,6 +39,7 @@ const refusal = {
   },
 };
 const created: { path: string; body: Record<string, unknown> }[] = [];
+let hostReservedMiB = 512;
 
 vi.mock("@/lib/api/client", async (importOriginal) => {
   const orig = await importOriginal<typeof import("@/lib/api/client")>();
@@ -51,7 +52,7 @@ vi.mock("@/lib/api/client", async (importOriginal) => {
       }
       // The panel host leaves its apps 747 MiB; 512 MiB of it is reserved.
       if (path === "/api/v1/instance/panel-host")
-        return { role: "apps", app_networks: "isolated", reservation: { apps_memory_bytes: 747 * 2 ** 20, apps_allocated_memory_bytes: 512 * 2 ** 20 } };
+        return { role: "apps", app_networks: "isolated", reservation: { apps_memory_bytes: 747 * 2 ** 20, apps_allocated_memory_bytes: hostReservedMiB * 2 ** 20 } };
       if (path === "/api/v1/projects/p1") return { id: "p1", name: "shop", description: "" };
       if (path === "/api/v1/projects/p1/environments")
         return [{ id: "e1", project_id: "p1", name: "production", color: "gray", protected: false }];
@@ -134,5 +135,21 @@ describe("Create and deploy over capacity", () => {
         "It needs 512 MiB and the panel host has 235 MiB left of 747 MiB: Create and deploy won’t create it. Lower its memory or pick another server.",
       ),
     ).toBeInTheDocument();
+  });
+
+  // Nothing left: no lower limit fits, so lowering it isn't offered.
+  it("doesn't advise lowering its memory when the panel host has none left", async () => {
+    hostReservedMiB = 1946;
+    try {
+      await fill();
+      fireEvent.click(await screen.findByRole("radio", { name: /panel host/ }));
+      expect(
+        await screen.findByText(
+          "It needs 512 MiB and the panel host has 0 MiB left of 747 MiB: Create and deploy won’t create it. Pick another server, or free memory on this one first.",
+        ),
+      ).toBeInTheDocument();
+    } finally {
+      hostReservedMiB = 512;
+    }
   });
 });

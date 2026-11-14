@@ -54,6 +54,22 @@ export function suggestionText(
   return `${s.direction === "down" ? "Lower to" : s.direction === "up" ? "Raise to" : "Set"} ${v}`;
 }
 
+/** The room on the panel's server for a service that runs there, else null. */
+function usePanelRoom(service: Service) {
+  const { data } = useQuery({
+    ...panelHostQuery,
+    enabled: !service.server_id,
+    meta: { quietFailure: "Without the panel host's room the bars are left out; the limits below still read and save." },
+  });
+  return service.server_id ? null : panelRoom(data);
+}
+
+/** A suggestion to raise memory is left out while the panel's server is
+ *  over-committed: the kill came from the server running short, and a higher
+ *  limit takes more from every service there. */
+const fitting = (s: ResourceSuggestion | null | undefined, hostOver: boolean) =>
+  hostOver && s?.direction === "up" ? null : (s ?? null);
+
 /** The server's reserved room, and this workspace's free share of it. */
 export function ReservedBars({
   service,
@@ -75,22 +91,17 @@ export function ReservedBars({
     enabled: !!service.server_id,
     staleTime: 30_000,
   });
-  const { data: panelHost } = useQuery({
-    ...panelHostQuery,
-    enabled: !service.server_id,
-    meta: { quietFailure: "Without the panel host's room the bars are left out; the limits below still read and save." },
-  });
+  const host = usePanelRoom(service);
   if (!service.server_id) {
     // The panel's server: every workspace's services share what it leaves
     // its apps, in memory; CPU isn't counted there.
-    const host = panelRoom(panelHost);
     if (!host) return null;
     return (
       <div className="flex flex-col gap-2.5">
         <div className="flex flex-col gap-1.5">
           <div className="flex justify-between gap-2 text-xs text-muted">
             <span>Memory reserved on the panel’s server</span>
-            <span className="font-mono text-fg/85">
+            <span className="shrink-0 whitespace-nowrap font-mono text-fg/85">
               {mib(host.reserved)} of {mib(host.total)}
             </span>
           </div>
@@ -104,14 +115,14 @@ export function ReservedBars({
         {host.over ? (
           <p className="flex items-start gap-2 text-xs leading-[17px] text-status-pending-fg">
             <AlertTriangle role="img" aria-label="Warning" className="mt-0.5 h-3.5 w-3.5 flex-none text-status-pending" />
-            The services on the panel’s server reserve more than the {mib(host.total)} it leaves its apps, so one can be
-            killed for memory before it reaches its own limit. Lower their limits, move a service to another server or
-            give this one more memory.
+            The services on the panel’s server reserve more memory than the {mib(host.total)} it has for apps, so any
+            of them can be killed for memory before it reaches its own limit. Lower this service’s limit below or move
+            it to another server; an instance operator can also give the server more memory.
           </p>
         ) : (
           <p className="text-xs leading-[17px] text-muted">
-            Free for apps: <span className="font-mono text-fg/85">{mib(host.left)}</span>, between every workspace’s
-            services here. The panel keeps the rest of its server; CPU isn’t counted here.
+            Free for apps: <span className="font-mono text-fg/85">{mib(host.left)}</span>, shared by every workspace’s
+            services on this server. The panel keeps the rest; CPU isn’t counted here.
           </p>
         )}
       </div>
@@ -197,6 +208,7 @@ export function SingleResources({
   });
   const { data, dataUpdatedAt } = read;
   const row = data?.rows[0];
+  const memSuggestion = fitting(row?.memory.suggestion, !!usePanelRoom(service)?.over);
   // The grace (D-41) as of the last read.
   const grace =
     data?.grace_until && new Date(data.grace_until).getTime() > dataUpdatedAt
@@ -338,15 +350,13 @@ export function SingleResources({
                   </span>
                 )}
               </span>
-              {row.memory.suggestion ? (
+              {memSuggestion ? (
                 <Suggestion
-                  s={row.memory.suggestion}
+                  s={memSuggestion}
                   field="memory"
                   canEdit={canEdit}
-                  filled={form.memory_limit === row.memory.suggestion.value}
-                  onUse={() =>
-                    set({ memory_limit: row.memory.suggestion!.value })
-                  }
+                  filled={form.memory_limit === memSuggestion.value}
+                  onUse={() => set({ memory_limit: memSuggestion.value })}
                 />
               ) : !row.memory.limit ? (
                 <span className="text-xs text-muted">
@@ -538,6 +548,7 @@ export function ComposeResources({
   onSaved: () => void;
 }) {
   const queryClient = useQueryClient();
+  const hostOver = !!usePanelRoom(service)?.over;
   const key = ["service-resources", serviceId];
   const { data, error, dataUpdatedAt, refetch } = useQuery({
     queryKey: key,
@@ -694,7 +705,7 @@ export function ComposeResources({
           <tbody>
             {data.rows.map((r) => {
               const v = current[r.compose_service] ?? { memory: "", cpu: "" };
-              const s = r.memory.suggestion;
+              const s = fitting(r.memory.suggestion, hostOver);
               return (
                 <tr
                   key={r.compose_service}

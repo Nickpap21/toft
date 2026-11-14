@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useIsOperator } from "@/context/AuthContext";
 import { panelHostQuery, panelRoom } from "@/lib/api/instance.service";
@@ -62,8 +63,9 @@ export function PanelServerCard() {
         </span>
         {room && (
           <span className={room.over ? "text-status-pending-fg" : undefined}>
-            <span className={room.over ? undefined : "text-muted"}>Reserved</span> {formatMemory(room.reserved)} of {formatMemory(room.total)}
-            {room.over ? ": more than apps get, so a service can be killed for memory before it reaches its own limit." : ""}
+            {room.over && <AlertTriangle role="img" aria-label="Warning" className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-status-pending" />}
+            <span className={room.over ? undefined : "text-muted"}>Reserved by all workspaces</span> {formatMemory(room.reserved)} of {formatMemory(room.total)}
+            {room.over ? ": more than apps get, so a service can be killed for memory before it reaches its own limit. Lower limits or move services to another server." : ""}
           </span>
         )}
         <span>

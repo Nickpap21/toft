@@ -3,6 +3,7 @@ package deployment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -244,7 +245,7 @@ type panelServices struct{}
 func (panelServices) Get(_ context.Context, id string) (*service.Service, error) {
 	svc := &service.Service{ID: id, SourceType: "docker-image", MemoryLimit: "512m", RuntimeStatus: "running"}
 	switch id {
-	case "worker", "raised", "old":
+	case "worker", "raised", "old", "unread":
 		svc.ActiveDeploymentID = "live-" + id
 	case "new":
 		svc.RuntimeStatus = "idle"
@@ -258,6 +259,9 @@ func (panelServices) Get(_ context.Context, id string) (*service.Service, error)
 type liveDeployments struct{ Repository }
 
 func (liveDeployments) GetByID(_ context.Context, id string) (*Deployment, error) {
+	if id == "live-unread" {
+		return nil, errors.New("connection reset")
+	}
 	reserved := map[string]float64{"live-worker": 512, "live-raised": 256}
 	d := &Deployment{ID: id}
 	if mb, ok := reserved[id]; ok {
@@ -300,10 +304,80 @@ func TestCheckCapacity_ThePanelsServer(t *testing.T) {
 	assert.NotNil(t, check(747, 1024, "new", "dave", 512), "a service never deployed holds nothing")
 	assert.NotNil(t, check(747, 1024, "stopped", "dave", 512), "a stopped service holds nothing")
 	assert.Nil(t, check(747, 700, "raised", "dave", 512), "a raised limit that fits")
+	assert.Nil(t, check(747, 1024, "unread", "dave", 512),
+		"a live deployment that can't be read refuses nothing, as a ledger that can't say")
 
 	assert.Nil(t, check(0, 1024, "", "dave", 512), "a ledger that can't say refuses nothing")
 	s.WithPreviews(nil, nil, nil)
 	capErr, err := s.checkCapacity(context.Background(), "", "", "dave", orgPkg.RoleOwner, "ws", 0, 512)
 	require.NoError(t, err)
 	assert.Nil(t, capErr, "no ledger")
+}
+
+// A deploy that met no room check (a rollback, a push) records no more than
+// the service held when the ledger has no room for the rest: a raise the
+// check refused isn't granted by deploying another way.
+func TestReservedBy_AnUncheckedDeployIsGrantedNoNewRoom(t *testing.T) {
+	s := NewService(liveDeployments{}, nil, nil, zap.NewNop())
+	s.WithServiceReader(panelServices{})
+	s.WithControlPlaneStopgap(false, isOperator{})
+	reserved := func(alloc float64, in TriggerInput) float64 {
+		t.Helper()
+		s.WithPreviews(nil, panelLedger{apps: 747, alloc: alloc}, nil)
+		mb := s.reservedBy(context.Background(), in)
+		require.NotNil(t, mb)
+		return *mb
+	}
+
+	assert.Equal(t, 256.0, reserved(1024, TriggerInput{ServiceID: "raised"}), "no room: it holds what it held")
+	assert.Equal(t, 0.0, reserved(1024, TriggerInput{ServiceID: "new"}), "no room, and it held nothing")
+	assert.Equal(t, 512.0, reserved(1024, TriggerInput{ServiceID: "raised", roomChecked: true}), "the check let it through, or an operator did")
+	assert.Equal(t, 512.0, reserved(700, TriggerInput{ServiceID: "raised"}), "there is room for the raise")
+	assert.Equal(t, 512.0, reserved(1024, TriggerInput{ServiceID: "worker"}), "nothing raised")
+}
+
+// liveOnServer is guestService running on srv-1 with a live deployment that
+// reserved its 512 MiB there.
+type liveOnServer struct{ guestService }
+
+func (o liveOnServer) Get(ctx context.Context, id string) (*service.Service, error) {
+	s, _ := o.guestService.Get(ctx, id)
+	s.RuntimeStatus, s.ActiveDeploymentID = "running", "live-worker"
+	return s, nil
+}
+
+// theServer is a server repository that has every server asked for.
+type theServer struct{ server.Repository }
+
+func (theServer) GetByID(_ context.Context, id string) (*server.Server, error) {
+	return &server.Server{ID: id}, nil
+}
+
+// A move onto the panel's server takes new room there: what the service
+// holds on the server it leaves doesn't count.
+func TestDeploy_AMoveOntoThePanelsServerMeetsItsRoomCheck(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	audit := &auditLog{}
+	s := NewService(liveDeployments{}, nil, nil, zap.NewNop())
+	s.WithServiceReader(liveOnServer{})
+	s.WithControlPlaneStopgap(false, isOperator{})
+	s.WithPreviews(nil, panelLedger{apps: 747, alloc: 700}, nil)
+	s.WithDeployUseCase(liveOnServer{}, server.NewService(theServer{}, ""), nil, nil, nil, nil, audit)
+	h := NewHandler(s, liveOnServer{}, zap.NewNop())
+	r := gin.New()
+	g := r.Group("/api/v1")
+	g.Use(func(c *gin.Context) {
+		c.Set("orgID", "guest")
+		c.Set("userID", "bob")
+		c.Set("memberRole", orgPkg.RoleOwner)
+		c.Next()
+	})
+	h.RegisterRoutes(g)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/services/svc-1/deployments", strings.NewReader(`{"server_id":""}`)))
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"panel_host":true`)
+	assert.Contains(t, w.Body.String(), "needs 512 MiB of memory, 47 MiB left of 747 MiB")
+	assert.Empty(t, audit.actions)
 }

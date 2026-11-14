@@ -641,6 +641,9 @@ type TriggerInput struct {
 	// reserve (requestedLimits): what its success records (D-166); nil when
 	// the service couldn't be read.
 	reservedMB *float64
+	// roomChecked says the deploy met the room check (Deploy), or an
+	// operator deployed past it: reservedBy.
+	roomChecked bool
 }
 
 // Service contains the business logic for triggering and managing deployments.
@@ -1369,16 +1372,24 @@ func (s *Service) checkPanelCapacity(ctx context.Context, currentServiceID, user
 		return nil
 	}
 	apps, err := s.panelCapacity.AppsMemoryMB(ctx)
-	if err != nil || apps <= 0 {
+	if err != nil {
+		s.log.Warn("the panel's server's room check is skipped: its apps' memory can't be read", zap.Error(err))
+		return nil
+	}
+	if apps <= 0 {
 		return nil
 	}
 	allocated, err := s.panelCapacity.AllocatedMemoryMB(ctx)
 	if err != nil {
+		s.log.Warn("the panel's server's room check is skipped: what is reserved there can't be read", zap.Error(err))
 		return nil
 	}
 	_, own := s.ownAllocation(ctx, currentServiceID)
 	allocated = max(allocated-own, 0)
-	if allocated+requestedMemMB <= apps || requestedMemMB <= s.heldLive(ctx, currentServiceID) {
+	if allocated+requestedMemMB <= apps {
+		return nil
+	}
+	if held, known := s.heldLive(ctx, currentServiceID); !known || requestedMemMB <= held {
 		return nil
 	}
 	canBypass := false
@@ -1393,30 +1404,41 @@ func (s *Service) checkPanelCapacity(ctx context.Context, currentServiceID, user
 
 // heldLive is the memory serviceID holds on its server through its live
 // deployment: what that deploy reserved, or the service's limits as they
-// are when it went live before deploys recorded it (0082). 0 for a service
-// that is stopped or never went live, and when it can't be read.
-func (s *Service) heldLive(ctx context.Context, serviceID string) float64 {
-	if s.serviceFetcher == nil || s.repo == nil || serviceID == "" {
-		return 0
+// are when it went live before deploys recorded it (0082). 0 for no service
+// (a new one, or one moving in) and for one that is stopped or never went
+// live. known is false when it can't be read: the check then refuses
+// nothing, as with a ledger that can't say.
+func (s *Service) heldLive(ctx context.Context, serviceID string) (memoryMB float64, known bool) {
+	if serviceID == "" {
+		return 0, true
+	}
+	if s.serviceFetcher == nil || s.repo == nil {
+		return 0, false
 	}
 	svc, err := s.serviceFetcher.Get(ctx, serviceID)
-	if err != nil || svc == nil || svc.RuntimeStatus == "stopped" || svc.ActiveDeploymentID == "" {
-		return 0
+	if err != nil || svc == nil {
+		return 0, false
+	}
+	if svc.RuntimeStatus == "stopped" || svc.ActiveDeploymentID == "" {
+		return 0, true
 	}
 	live, err := s.repo.GetByID(ctx, svc.ActiveDeploymentID)
 	if err != nil || live == nil {
-		return 0
+		return 0, false
 	}
 	if live.ReservedMemoryMB == nil {
 		_, mem := s.requestedLimits(ctx, svc)
-		return mem
+		return mem, true
 	}
-	return *live.ReservedMemoryMB
+	return *live.ReservedMemoryMB, true
 }
 
 // reservedBy is the memory input's service reserves with its limits as
 // they are, for its deployment to record once live; nil when the service
-// can't be read.
+// can't be read. A deploy that met no room check (a rollback, a push)
+// records no more than the service held when the panel's server has no
+// room for the rest: a raise the check refused isn't granted by deploying
+// another way.
 func (s *Service) reservedBy(ctx context.Context, input TriggerInput) *float64 {
 	svc := input.Settings
 	if svc == nil {
@@ -1429,6 +1451,9 @@ func (s *Service) reservedBy(ctx context.Context, input TriggerInput) *float64 {
 		}
 	}
 	_, mem := s.requestedLimits(ctx, svc)
+	if !input.roomChecked && svc.ServerID == "" && s.checkPanelCapacity(ctx, svc.ID, "", mem) != nil {
+		mem, _ = s.heldLive(ctx, svc.ID) // known, or the check had refused nothing
+	}
 	return &mem
 }
 
@@ -2406,6 +2431,13 @@ func (s *Service) runComposePipeline(ctx context.Context, deploymentID string, i
 			return
 		}
 		rc.Memory = memory
+		// The defaults are the stack's limits from here on: the next
+		// deploy's room check compares with what this one records.
+		if input.reservedMB != nil {
+			for _, d := range defaults {
+				*input.reservedMB += float64(d.MemoryMB)
+			}
+		}
 		var (
 			repoServices []string
 			repoMB       map[string]int64

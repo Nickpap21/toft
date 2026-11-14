@@ -55,7 +55,7 @@ describe("the panel's server on Servers", () => {
     serve({ "/api/v1/instance/panel-host": ok(reserving(512 * 2 ** 20)) });
     show();
     const line = await screen.findByText(/512 MiB of 1\.0 GiB/);
-    expect(line.textContent).toBe("Reserved 512 MiB of 1.0 GiB");
+    expect(line.textContent).toBe("Reserved by all workspaces 512 MiB of 1.0 GiB");
     expect(line.className).not.toContain("text-status-pending-fg");
   });
 
@@ -63,7 +63,7 @@ describe("the panel's server on Servers", () => {
     serve({ "/api/v1/instance/panel-host": ok({ ...host, reservation: { ...host.reservation, apps_allocated_memory_bytes: 2 * 2 ** 30 } }) });
     show();
     const line = await screen.findByText(/2\.0 GiB of 1\.0 GiB/);
-    expect(line.textContent).toBe("Reserved 2.0 GiB of 1.0 GiB: more than apps get, so a service can be killed for memory before it reaches its own limit.");
+    expect(line.textContent).toBe("Reserved by all workspaces 2.0 GiB of 1.0 GiB: more than apps get, so a service can be killed for memory before it reaches its own limit. Lower limits or move services to another server.");
     expect(line.className).toContain("text-status-pending-fg");
   });
 });
