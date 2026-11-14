@@ -192,7 +192,7 @@ func StartSlot(ctx context.Context, dc *client.Client, cfg NetConfig, plan netpl
 			sw.Stopped = appendNew(sw.Stopped, SummaryName(c))
 		}
 	}
-	sw.RoutingChanged = routingConflicts(labels, serving)
+	sw.RoutingChanged, sw.RoutesShared = routingConflicts(labels, serving)
 	// An entry at an old, lower cost gets the platform's where the new
 	// entry costs no time without routes: the previous slots stop first, or
 	// Traefik reads route files. Elsewhere it stays until one of those, or a

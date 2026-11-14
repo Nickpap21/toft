@@ -192,8 +192,9 @@ var HealthInterval = 2 * time.Second
 // the new one passes its health check, so the changed routes are down until
 // Traefik lets the previous slot go, not for the post-deploy commands too;
 // the price is that a failing post-deploy command can no longer bring the
-// previous slot back. It drains first, as in any switch: the routes the
-// change left alone are served by both slots until then.
+// previous slot back. Where the change left a route to both slots
+// (RoutesShared, one of several domains changed) it drains first, as in any
+// switch; where it left none, nothing reaches it and it stops at once.
 //
 // Where the agent writes Traefik's routes (Hooks.Route, D-113), none of
 // that applies: the previous slot keeps the route until the new one passed
@@ -500,11 +501,12 @@ func (r *run) retirePrevious(ctx context.Context) (retired bool, res *Result) {
 			return false, &failed
 		}
 	}
-	// Draining is for slots Traefik reads from their labels beside the new
-	// one, not when the route moved in a file. A routing change drains too:
-	// the routes it left alone are served by both slots, and the changed
-	// ones come back when Traefik lets the previous slot go.
-	drain := r.hooks.Route == nil && len(sw.Previous) > 0 && len(sw.Stopped) == 0
+	// Draining is for slots Traefik serves from their labels beside the new
+	// one, not when the route moved in a file. After a routing change that
+	// is where a route was left to both (RoutesShared); where none was,
+	// nothing reaches the previous slot and the routes come back when it is
+	// gone, so it stops at once.
+	drain := r.hooks.Route == nil && len(sw.Previous) > 0 && len(sw.Stopped) == 0 && (!sw.RoutingChanged || sw.RoutesShared)
 	if drain {
 		r.log("→ Taking the previous container out of Traefik's rotation; it finishes the requests it has, then stops")
 	}
