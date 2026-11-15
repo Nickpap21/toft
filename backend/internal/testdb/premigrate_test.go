@@ -495,3 +495,74 @@ func TestContractRunsTwiceAndRefuses(t *testing.T) {
 		t.Errorf("a copy without commands: %v", err)
 	}
 }
+
+// 0083: an environment has one service per network alias. premigrate renames
+// the later of two that share one (the oldest keeps it) before schema.sql's
+// unique index applies, and changes nothing on a second run.
+func TestPremigrateRenamesDuplicateAliases(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	sql, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations", "premigrate.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := testdb.New(t)
+	ctx := context.Background()
+	q := func(query string, args ...any) string {
+		t.Helper()
+		var id string
+		if err := db.QueryRow(ctx, query, args...).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	userID := q(`INSERT INTO users (email, name, password_hash) VALUES ('dev@toft.test', 'Dev', 'x') RETURNING id::text`)
+	orgID := q(`INSERT INTO organizations (name) VALUES ('Acme') RETURNING id::text`)
+	projectID := q(`INSERT INTO projects (user_id, org_id, name) VALUES ($1, $2, 'Shop') RETURNING id::text`, userID, orgID)
+	prod := q(`INSERT INTO environments (project_id, name) VALUES ($1, 'production') RETURNING id::text`, projectID)
+	staging := q(`INSERT INTO environments (project_id, name) VALUES ($1, 'staging') RETURNING id::text`, projectID)
+	// As a release before the index left it.
+	if _, err := db.Exec(ctx, `DROP INDEX IF EXISTS uq_services_alias_env`); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("a", 63)
+	service := func(envID, name, alias string, age int) string {
+		return q(`INSERT INTO services (environment_id, name, source_type, docker_image, network_alias, created_at)
+			VALUES ($1, $2, 'docker-image', 'web:1', $3, NOW() - make_interval(hours => $4)) RETURNING id::text`, envID, name, alias, age)
+	}
+	oldest, later, latest := service(prod, "api", "api", 3), service(prod, "api-b", "api", 2), service(prod, "api-c", "api", 1)
+	elsewhere := service(staging, "api", "api", 1)
+	longOld, longNew := service(prod, "long", long, 2), service(prod, "long-b", long, 1)
+
+	for i := range 2 {
+		if _, err := db.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	for id, want := range map[string]string{
+		oldest: "api", later: "api-" + later[:8], latest: "api-" + latest[:8], elsewhere: "api",
+		longOld: long, longNew: long[:54] + "-" + longNew[:8],
+	} {
+		if got := q(`SELECT network_alias FROM services WHERE id = $1`, id); got != want {
+			t.Errorf("service %s: alias %q, want %q", id, got, want)
+		}
+	}
+	// Each rename is in the workspace's audit log, as Toft's own act: the
+	// upgrade shows no NOTICE.
+	if got, want := q(`SELECT count(*)::text FROM audit_log WHERE action = 'service.alias_renamed'`), "3"; got != want {
+		t.Errorf("%s audit entries, want %s", got, want)
+	}
+	if got, want := q(`SELECT concat_ws(' ', org_id, actor_id, metadata->>'name', metadata->>'from', metadata->>'to')
+		FROM audit_log WHERE action = 'service.alias_renamed' AND resource = 'service:' || $1`, later),
+		orgID+" api-b api api-"+later[:8]; got != want {
+		t.Errorf("audit entry %q, want %q", got, want)
+	}
+	if _, err := db.Exec(ctx, `CREATE UNIQUE INDEX uq_services_alias_env ON services (environment_id, network_alias)
+		WHERE environment_id IS NOT NULL AND network_alias <> ''`); err != nil {
+		t.Errorf("the index after premigrate: %v", err)
+	}
+	// With the index there is nothing to rename, and the step says so by
+	// leaving the table alone.
+	if _, err := db.Exec(ctx, string(sql)); err != nil {
+		t.Fatalf("with the index: %v", err)
+	}
+}

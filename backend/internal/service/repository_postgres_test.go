@@ -57,6 +57,47 @@ func TestComposeNetworkServiceRoundTrip(t *testing.T) {
 	require.Equal(t, "none", connectTo(), "its last deploy routed none")
 }
 
+// An environment has one service per network alias, and the database holds
+// it: the service layer reads then writes, so two creates at once both
+// passed its check. Another environment may use the same alias.
+func TestAliasIsUniqueInAnEnvironment(t *testing.T) {
+	db := testdb.New(t)
+	ctx := context.Background()
+	repo := service.NewPostgresRepository(db, crypto.NewKeys("test-encryption-key", ""))
+	q := func(sql string, dst *string, args ...any) {
+		t.Helper()
+		require.NoError(t, db.QueryRow(ctx, sql, args...).Scan(dst))
+	}
+	var userID, projectID, prod, staging string
+	q(`INSERT INTO users (email, name, password_hash) VALUES ('dev@toft.test', 'Dev', 'x') RETURNING id::text`, &userID)
+	q(`INSERT INTO projects (user_id, name) VALUES ($1, 'Shop') RETURNING id::text`, &projectID, userID)
+	q(`INSERT INTO environments (project_id, name) VALUES ($1, 'production') RETURNING id::text`, &prod, projectID)
+	q(`INSERT INTO environments (project_id, name) VALUES ($1, 'staging') RETURNING id::text`, &staging, projectID)
+	create := func(envID, name, alias string) (*service.Service, error) {
+		return repo.Create(ctx, envID, service.CreateInput{Name: name, Type: service.TypeWeb, SourceType: service.SourceTypeDockerImage,
+			DockerImage: "nginx", Port: 80, NetworkAlias: alias})
+	}
+	_, err := create(prod, "api", "api")
+	require.NoError(t, err)
+	_, err = create(prod, "api-b", "api")
+	require.ErrorIs(t, err, service.ErrAliasTaken)
+	_, err = create(staging, "api", "api")
+	require.NoError(t, err, "another environment")
+	_, err = create(prod, "api", "api-2")
+	require.ErrorIs(t, err, service.ErrDuplicateName, "a taken name is still a taken name")
+
+	// No alias is not an alias: any number of services have none.
+	_, err = create(prod, "job-a", "")
+	require.NoError(t, err)
+	_, err = create(prod, "job-b", "")
+	require.NoError(t, err)
+
+	worker, err := create(prod, "worker", "worker")
+	require.NoError(t, err)
+	_, err = repo.UpdateConfig(ctx, worker.ID, service.UpdateConfigInput{Port: 80, NetworkAlias: "api"})
+	require.ErrorIs(t, err, service.ErrAliasTaken)
+}
+
 // live_since is when the active deployment finished, on the lists and on
 // one service alike, and an explicit null without one.
 func TestLiveSince(t *testing.T) {

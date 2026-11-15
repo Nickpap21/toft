@@ -41,6 +41,11 @@ describe("a Settings save", () => {
     expect(auditAction("service.domain_removed")?.phrase).toBe("removed a domain from");
     expect(auditAction("service.config_file_saved")?.phrase).toBe("saved a config file for");
     expect(auditDetail(entry({ action: "service.domain_added", detail: { hostname: "shop.example.com" } }))).toEqual({ text: "", code: "shop.example.com" });
+    expect(auditAction("service.alias_renamed")?.phrase).toBe("renamed the network alias of");
+    expect(auditDetail(entry({ action: "service.alias_renamed", detail: { name: "api-b", from: "api", to: "api-68c5a071" } }))).toEqual({
+      text: "An older service has api. From its next deploy:",
+      code: "api-68c5a071",
+    });
     expect(auditDetail(entry({ action: "service.config_file_deleted", detail: { path: "/etc/app.conf" } }))).toEqual({ text: "", code: "/etc/app.conf" });
     expect(auditDetail(entry({ action: "service.volume_purged", detail: { mount: "data" } }))).toEqual({ text: "", code: "data" });
     expect(auditDetail(entry({ action: "service.shared_volumes_changed", detail: { mounts: [{ name: "images", target: "/data", read_only: true }, { name: "cache", target: "/cache", read_only: false }] } })).text)

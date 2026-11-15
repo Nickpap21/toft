@@ -448,7 +448,7 @@ func (r *PostgresRepository) Create(ctx context.Context, environmentID string, i
 	).Scan(&newID)
 	if err != nil {
 		if isDuplicateNameError(err) {
-			return nil, ErrDuplicateName
+			return nil, duplicateError(err)
 		}
 		return nil, fmt.Errorf("Create service: %w", err)
 	}
@@ -841,7 +841,7 @@ func (r *PostgresRepository) UpdateConfig(ctx context.Context, id string, input 
 		input.ComposeRouteService, input.DeployStrategy,
 	); err != nil {
 		if isDuplicateNameError(err) {
-			return nil, ErrDuplicateName
+			return nil, duplicateError(err)
 		}
 		return nil, fmt.Errorf("UpdateConfig: %w", err)
 	}
@@ -1175,6 +1175,16 @@ func (r *PostgresRepository) AliasUserInWorkspace(ctx context.Context, orgID, id
 func isDuplicateNameError(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// duplicateError names what a unique violation on services took: the
+// environment's network alias (uq_services_alias_env), or else a name.
+func duplicateError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "uq_services_alias_env" {
+		return ErrAliasTaken
+	}
+	return ErrDuplicateName
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

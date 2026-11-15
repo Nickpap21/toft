@@ -91,6 +91,8 @@ export const AUDIT_ACTIONS: AuditAction[] = [
   { action: "service.shared_volumes_changed", label: "Changed a service’s shared volumes", phrase: "changed the shared volumes of", group: "Services" },
   { action: "service.server_changed", label: "Changed a service’s server", phrase: "changed the server of", group: "Services" },
   { action: "service.moved_to_workspace", label: "Moved a service to the workspace", phrase: "moved to the workspace:", group: "Services" },
+  // An upgrade's, where two services of an environment shared one (0083).
+  { action: "service.alias_renamed", label: "Renamed a service’s network alias", phrase: "renamed the network alias of", group: "Services" },
   { action: "service.volume_purged", label: "Destroyed a volume’s data", phrase: "destroyed the data in a volume of", group: "Services" },
   {
     action: "service.compose_limits.updated",
@@ -756,6 +758,8 @@ export function auditDetail(e: AuditEntry, workspace = ""): {
     case "service.config_file_saved":
     case "service.config_file_deleted":
       return { text: "", code: str(d.path) };
+    case "service.alias_renamed":
+      return { text: `An older service has ${str(d.from)}. From its next deploy:`, code: str(d.to) };
     case "service.volume_purged":
       return { text: "", code: str(d.mount) };
     case "service.shared_volumes_changed": {
