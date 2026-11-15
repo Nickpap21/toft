@@ -72,9 +72,13 @@ deploy_git() {
 	echo "$id"
 }
 
+# The git app is the second on the panel's server, and since 1.0.2 (D-166)
+# a 4 GB server has room for one at the default 512 MiB limit: the second is
+# refused (409 capacity_exceeded) until the operator deploys anyway, which
+# force is.
 redeploy() { # ID KIND
 	if [ "$2" = git ]; then
-		api POST "/services/$1/deployments" "{\"git_ref\":\"$GIT_TAG\",\"git_ref_type\":\"tag\"}" >/dev/null
+		api POST "/services/$1/deployments?force=true" "{\"git_ref\":\"$GIT_TAG\",\"git_ref_type\":\"tag\"}" >/dev/null
 	else
 		api POST "/services/$1/deployments" '{}' >/dev/null
 	fi
