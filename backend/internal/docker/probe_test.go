@@ -1,6 +1,9 @@
 package docker
 
 import (
+	"os/exec"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Nickpap21/toft/backend/internal/rollout"
@@ -35,6 +38,42 @@ func TestProbeVerdict(t *testing.T) {
 		_, _, ran, _ = probeVerdict(code, "")
 		assert.False(t, ran, "exit %d", code)
 	}
+}
+
+// The probe's time is the request's, in milliseconds, whatever unit the
+// kernel's adjtimex reports: an NTP-synced kernel (STA_NANO) gives nanoseconds
+// in tv_usec, and the probe showed 1,000 times the real time there. The
+// busybox the script calls is wrapped here to report adjtimex as such a
+// kernel does, and the endpoint takes 0.2 s.
+func TestProbeScriptTimesTheRequestInMilliseconds(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("needs docker")
+	}
+	const setup = `mkdir -p ` + rollout.ProbeMountPath + `/bin /www/cgi-bin
+cat > ` + rollout.ProbeMountPath + `/bin/busybox <<'WRAP'
+#!/bin/sh
+[ "$1" = adjtimex ] || exec /bin/busybox "$@"
+/bin/busybox adjtimex | /bin/busybox awk '/tv_usec/{$2=$2*1000} {print}'
+WRAP
+cat > /www/cgi-bin/slow <<'CGI'
+#!/bin/sh
+sleep 0.2
+echo "Content-type: text/plain"
+echo
+echo ok
+CGI
+chmod +x ` + rollout.ProbeMountPath + `/bin/busybox /www/cgi-bin/slow
+httpd -p 8080 -h /www
+exec ` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /cgi-bin/slow 5`
+	out, err := exec.Command("docker", "run", "--rm", rollout.ProbeToolImage, "sh", "-c", setup, probeScript).Output()
+	require.NoError(t, err, "%s", out)
+	f := strings.Fields(string(out))
+	require.Len(t, f, 3, "%s", out)
+	assert.Equal(t, "200", f[1])
+	ms, err := strconv.Atoi(f[2])
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, ms, 200)
+	assert.Less(t, ms, 1000)
 }
 
 // A container gets the probe's tool on a Docker API with image mounts, and
