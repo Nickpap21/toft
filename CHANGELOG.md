@@ -6,6 +6,80 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.0.3 (2026-11-15)
+
+Deploys and deletes that no longer drop requests or leave a container
+behind, an idle app that costs a quarter of the CPU it did, and a faster
+install and upgrade. No migration: a failed upgrade starts 1.0.2 again
+without restoring the database. Upgrade from 1.0.2.
+
+### Deploys
+
+- **Deleting a service stops its deploys first.** A delete answered 204
+  while a deploy of the service was still building; the build went on,
+  rolled out, and left a running, routed container that nothing owned. A
+  delete now cancels every deploy of the service, wherever it is (in
+  line, cloning, building, rolling out), waits for it to end and only then
+  removes the containers, the images and the routes. The deploy is recorded
+  as "cancelled by the service's delete", and raises no alert, no failed
+  commit check and no failed-deploy issue. A deploy started while the
+  delete runs is refused with 404. A rollout a server's agent already runs
+  can't be stopped: the delete waits for it to end.
+- **A deploy that changes one of several domains drops no requests.**
+  When a deploy changed the routing (domains, port or access control) the
+  previous container was stopped at once, while Traefik still sent it
+  requests for the domains the change left alone, and 1 or 2 in 100 failed
+  during the switch. Where a route is left to both containers, the
+  previous one now leaves Traefik's rotation first, as in any other deploy.
+  Where none is (another port, another password, every domain changed) it
+  still stops at once, since those routes only come back when it is gone.
+- **The first deploy after a temporary name's certificate drops no
+  requests.** Toft redeploys a service once the certificate of its
+  `sslip.io` name is out; that deploy counted as a routing change and
+  failed 2 or 3 requests in 100.
+- **An idle app costs about a quarter of the CPU.** Every routed
+  container has a health check that lets a deploy take it out of Traefik's
+  rotation before it stops. It ran every 5 seconds for the container's
+  whole life; it now runs every 5 seconds only while a container starts or
+  is switched out, and about every 30 seconds once it is healthy. A
+  drained container is still reported within about a second. Measured on a
+  2-vCPU server with ten idle containers, over two runs of five minutes
+  each: 2.0 % of a core per app before, 0.5 % after. A container keeps the
+  check it was created with, so each service gets the new one at its next
+  deploy; servers that connect through their agent, once the agent has
+  upgraded.
+
+### Install and upgrade
+
+- **The Loki log driver installs on Rocky Linux and AlmaLinux.** Its
+  architecture was read with `dpkg`, which RPM systems don't have, so the
+  plugin was never installed there and a container using the driver failed
+  to start. Checked on Rocky 9 (x86-64) and AlmaLinux 9 (arm64).
+- **`toft upgrade` fails as soon as an image can't be pulled.** It waited
+  for the other image's download to finish first.
+- The release's images download side by side, and the ones the later steps
+  need (Atlas, Postgres, Traefik) in the background while the database is
+  saved and migrated.
+- Docker installs with one `apt-get update` and isn't restarted for its
+  address pool, which is written only where the installer installs Docker.
+
+### Panel
+
+- **An idle panel leaves Docker alone.** The panel read every panel
+  container's stats every 5 seconds; it now does only while an Instance
+  tab is open. The panel's own health checks are lighter, and run each
+  second until they first pass, so a start or an upgrade doesn't wait for
+  the first 5-second check.
+- A request soon after an Instance tab closed could get the panel's
+  containers without their CPU and memory.
+
+### API
+
+- `POST /environments/{environmentID}/services` and
+  `PUT /services/{serviceID}/config` answer `409 alias_taken` when another
+  service of the environment has the network alias, which a new service
+  with a taken name runs into. They answered 500.
+
 ## 1.0.2 (2026-11-14)
 
 Memory on the panel's own server: a service killed for memory there is
