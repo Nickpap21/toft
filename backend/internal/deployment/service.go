@@ -2932,17 +2932,24 @@ func (s *Service) leaveForRecovery(ctx context.Context, deploymentID, errMsg str
 // publishFailed emits a deployment.failed event if a publisher is wired, and
 // a deploy-failed alert. Every failed deploy passes here, webhook ones too,
 // so it is also where an image service's saved image goes back to what was
-// live (followLive).
+// live (followLive). A deploy that ends while its service is being deleted
+// (StopDeploys cancelled it) is reported to nobody: no failed commit check,
+// no alert and no failed-deploy issue for a service that is going away.
 func (s *Service) publishFailed(input TriggerInput, deploymentID, errMsg string) {
 	s.followLive(context.Background(), input)
-	s.reportDeploy(context.Background(), input, deploymentID, input.CommitSHA, "failure", errMsg)
-	if s.alerts != nil {
-		s.alerts.DeployFailed(input.ServiceID, deploymentID, errMsg)
-	}
-	if s.shipper != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		s.shipper.DeployFailed(ctx, input.ServiceID, deploymentID)
-		cancel()
+	s.turnMu.Lock()
+	deleting := s.deleting[input.ServiceID] > 0
+	s.turnMu.Unlock()
+	if !deleting {
+		s.reportDeploy(context.Background(), input, deploymentID, input.CommitSHA, "failure", errMsg)
+		if s.alerts != nil {
+			s.alerts.DeployFailed(input.ServiceID, deploymentID, errMsg)
+		}
+		if s.shipper != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			s.shipper.DeployFailed(ctx, input.ServiceID, deploymentID)
+			cancel()
+		}
 	}
 	if s.eventPublisher == nil || input.OrgID == "" {
 		return

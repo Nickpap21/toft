@@ -48,10 +48,35 @@ func (b *stoppableBuild) BuildFromGit(ctx context.Context, _, _, _, _ string, _ 
 	}
 }
 
+// failureReports counts what a failed deploy tells the outside: the alert,
+// and the failed-deploy issue (D-88).
+type failureReports struct {
+	mu            sync.Mutex
+	alerts, ships int
+}
+
+func (f *failureReports) DeployFailed(string, string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.alerts++
+}
+
+type failureShipper struct{ *failureReports }
+
+func (failureShipper) DeployLive(context.Context, string) {}
+func (f failureShipper) DeployFailed(context.Context, string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ships++
+}
+
 func TestDelete_CancelsTheServicesDeployAndWaitsForIt(t *testing.T) {
 	repo := &deadRepo{mockRepo: &mockRepo{createdID: "dep-build"}}
 	orch := &stoppableBuild{mockOrchestrator: &mockOrchestrator{}, building: make(chan struct{}), finish: make(chan struct{})}
 	deploys := newTestService(repo, &mockFactory{orch: orch}, &mockStatusUpdater{})
+	reports := &failureReports{}
+	deploys.WithAlerts(reports)
+	deploys.WithShipper(failureShipper{reports})
 	_, err := deploys.Trigger(context.Background(), deployment.TriggerInput{
 		ServiceID: "svc-1", SourceType: "git", GitRepoURL: "https://github.com/example/repo", GitBranch: "main",
 	})
@@ -81,4 +106,7 @@ func TestDelete_CancelsTheServicesDeployAndWaitsForIt(t *testing.T) {
 	assert.Equal(t, "cancelled by the service's delete (at the build step)", repo.lastSummary())
 	assert.True(t, repo.hasLog("✗ The deploy was cancelled by the service's delete"), "the log says why")
 	assert.Empty(t, repo.deadWrite, "how the deploy ended is recorded on a live context")
+	reports.mu.Lock()
+	defer reports.mu.Unlock()
+	assert.Zero(t, reports.alerts+reports.ships, "a deploy its service's delete ended raises no alert and opens no issue")
 }
