@@ -260,9 +260,13 @@ END $$;
 -- 0083: an environment has one service per network alias
 -- (uq_services_alias_env). Where two share one, from before the index, the
 -- oldest keeps it and each later one becomes <alias>-<first 8 of its id>,
--- within a DNS label's 63 characters. Runs only while the index is missing:
--- with it there is nothing to rename. Irreversible: the old alias of a
--- renamed service is in the NOTICE only.
+-- within a DNS label's 63 characters. Each rename goes in the workspace's
+-- audit log as Toft's own act (no actor), with the alias it had: the
+-- upgrade shows no NOTICE. Runs only while the index is missing: with it
+-- there is nothing to rename. Should the index still fail to build (a new
+-- alias that another service already has, or a duplicate the old release
+-- made between this step and Atlas), running the upgrade again clears it.
+-- Irreversible, short of setting the alias back by hand from the audit log.
 DO $$
 DECLARE
     r RECORD;
@@ -274,14 +278,23 @@ BEGIN
         UPDATE services s
         SET network_alias = rtrim(left(s.network_alias, 54), '-') || '-' || left(s.id::text, 8)
         FROM (
-            SELECT id, row_number() OVER (PARTITION BY environment_id, network_alias ORDER BY created_at, id) AS n
-            FROM services
-            WHERE environment_id IS NOT NULL AND network_alias <> ''
+            SELECT sv.id, sv.network_alias AS was, p.org_id,
+                   row_number() OVER (PARTITION BY sv.environment_id, sv.network_alias ORDER BY sv.created_at, sv.id) AS n
+            FROM services sv
+            JOIN environments e ON e.id = sv.environment_id
+            JOIN projects p ON p.id = e.project_id
+            WHERE sv.network_alias <> ''
         ) d
         WHERE d.id = s.id AND d.n > 1
-        RETURNING s.id, s.name, s.network_alias
+        RETURNING s.id, s.name, d.was, s.network_alias AS now, d.org_id
     LOOP
-        RAISE NOTICE 'service % (%) shared its network alias with an older service of its environment: it is now %, from its next deploy',
-            r.name, r.id, r.network_alias;
+        RAISE NOTICE 'service % (%) shared the network alias % with an older service of its environment: it is now %, from its next deploy',
+            r.name, r.id, r.was, r.now;
+        -- A project whose workspace was deleted has no log to write to.
+        IF r.org_id IS NOT NULL THEN
+            INSERT INTO audit_log (org_id, action, resource, metadata)
+            VALUES (r.org_id, 'service.alias_renamed', 'service:' || r.id,
+                    jsonb_build_object('name', r.name, 'from', r.was, 'to', r.now));
+        END IF;
     END LOOP;
 END $$;

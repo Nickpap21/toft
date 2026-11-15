@@ -86,6 +86,12 @@ func TestAliasIsUniqueInAnEnvironment(t *testing.T) {
 	_, err = create(prod, "api", "api-2")
 	require.ErrorIs(t, err, service.ErrDuplicateName, "a taken name is still a taken name")
 
+	// No alias is not an alias: any number of services have none.
+	_, err = create(prod, "job-a", "")
+	require.NoError(t, err)
+	_, err = create(prod, "job-b", "")
+	require.NoError(t, err)
+
 	worker, err := create(prod, "worker", "worker")
 	require.NoError(t, err)
 	_, err = repo.UpdateConfig(ctx, worker.ID, service.UpdateConfigInput{Port: 80, NetworkAlias: "api"})

@@ -516,7 +516,8 @@ func TestPremigrateRenamesDuplicateAliases(t *testing.T) {
 		return id
 	}
 	userID := q(`INSERT INTO users (email, name, password_hash) VALUES ('dev@toft.test', 'Dev', 'x') RETURNING id::text`)
-	projectID := q(`INSERT INTO projects (user_id, name) VALUES ($1, 'Shop') RETURNING id::text`, userID)
+	orgID := q(`INSERT INTO organizations (name) VALUES ('Acme') RETURNING id::text`)
+	projectID := q(`INSERT INTO projects (user_id, org_id, name) VALUES ($1, $2, 'Shop') RETURNING id::text`, userID, orgID)
 	prod := q(`INSERT INTO environments (project_id, name) VALUES ($1, 'production') RETURNING id::text`, projectID)
 	staging := q(`INSERT INTO environments (project_id, name) VALUES ($1, 'staging') RETURNING id::text`, projectID)
 	// As a release before the index left it.
@@ -545,8 +546,23 @@ func TestPremigrateRenamesDuplicateAliases(t *testing.T) {
 			t.Errorf("service %s: alias %q, want %q", id, got, want)
 		}
 	}
+	// Each rename is in the workspace's audit log, as Toft's own act: the
+	// upgrade shows no NOTICE.
+	if got, want := q(`SELECT count(*)::text FROM audit_log WHERE action = 'service.alias_renamed'`), "3"; got != want {
+		t.Errorf("%s audit entries, want %s", got, want)
+	}
+	if got, want := q(`SELECT concat_ws(' ', org_id, actor_id, metadata->>'name', metadata->>'from', metadata->>'to')
+		FROM audit_log WHERE action = 'service.alias_renamed' AND resource = 'service:' || $1`, later),
+		orgID+" api-b api api-"+later[:8]; got != want {
+		t.Errorf("audit entry %q, want %q", got, want)
+	}
 	if _, err := db.Exec(ctx, `CREATE UNIQUE INDEX uq_services_alias_env ON services (environment_id, network_alias)
 		WHERE environment_id IS NOT NULL AND network_alias <> ''`); err != nil {
 		t.Errorf("the index after premigrate: %v", err)
+	}
+	// With the index there is nothing to rename, and the step says so by
+	// leaving the table alone.
+	if _, err := db.Exec(ctx, string(sql)); err != nil {
+		t.Fatalf("with the index: %v", err)
 	}
 }

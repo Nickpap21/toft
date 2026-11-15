@@ -10,13 +10,14 @@
 -- check did.
 --
 -- Rows from before: premigrate.sql (step 0083) renames the later of two
--- services that share an alias to <alias>-<first 8 of its id>, and says so
--- in a NOTICE; the oldest keeps it. A renamed service answers to its new
--- alias from its next deploy. Production had none on 2026-11-15.
+-- services that share an alias to <alias>-<first 8 of its id>, and records
+-- each in the workspace's audit log (service.alias_renamed, no actor, the
+-- old and new alias); the oldest keeps it. A renamed service answers to its
+-- new alias from its next deploy. Production had none on 2026-11-15.
 --
--- Locks: the build takes SHARE on services (writes wait, reads don't) for
--- one scan of the table, inside Atlas's transaction, so not CONCURRENTLY;
--- services is hundreds of rows at most.
+-- Locks: the build takes SHARE on services (writes wait, reads don't) and
+-- scans the table once; the lock is held until Atlas's transaction commits,
+-- so not CONCURRENTLY. services is hundreds of rows at most.
 --
 -- The previous release runs on this schema: it never names the index. Of
 -- two of its requests racing for one alias, the loser now gets 409 with
@@ -28,5 +29,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_services_alias_env
     WHERE environment_id IS NOT NULL AND network_alias <> '';
 
 -- Rollback (reversible, and nothing to run for the previous release). The
--- aliases premigrate renamed stay renamed.
+-- aliases premigrate renamed stay renamed; the audit log has what each was.
 --   DROP INDEX IF EXISTS uq_services_alias_env;
