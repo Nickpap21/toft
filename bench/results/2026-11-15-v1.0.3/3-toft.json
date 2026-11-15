@@ -1,0 +1,71 @@
+{
+  "platform": "toft",
+  "round": "3",
+  "os": [
+    24.04
+  ],
+  "cpus": [
+    2
+  ],
+  "mem_total_kib": [
+    3911568
+  ],
+  "cpu_model": [
+    "AMD EPYC-Rome Processor"
+  ],
+  "cpu_loop_s": [
+    2.04
+  ],
+  "version": [
+    "v1.0.3"
+  ],
+  "install_s": [
+    56.5
+  ],
+  "role_apps_http": [
+    200
+  ],
+  "idle_mem_mib": [
+    376
+  ],
+  "idle_cpu_pct": [
+    1.31
+  ],
+  "disk_mib": [
+    2293
+  ],
+  "first_image_s": [
+    5.5
+  ],
+  "redeploy_image_s": [
+    4.8,
+    4.8,
+    4.1,
+    4.0,
+    4.1
+  ],
+  "redeploy_image_down_s": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "first_git_s": [
+    52.9
+  ],
+  "redeploy_git_s": [
+    5.6,
+    5.6,
+    4.1,
+    4.0,
+    4.1
+  ],
+  "redeploy_git_down_s": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

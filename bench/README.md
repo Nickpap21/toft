@@ -6,32 +6,52 @@ and check.
 
 ## Results
 
-2026-11-13: Toft v1.0.0, Coolify 4.5.3 and Dokploy v0.30.10, each on its own
-Hetzner Cloud `cx23`. Median of three rounds, range in brackets. The README
-shows six of these rows.
+Toft v1.0.3 on 2026-11-15; Coolify 4.5.3 and Dokploy v0.30.10 on 2026-11-13,
+the last time all three ran on one day. Each on its own Hetzner Cloud
+`cx23`. Median of three rounds, range in brackets. The README shows six of
+these rows.
 
-| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.0 |
+| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.3 |
 |---|---|---|---|
-| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 142.9 (141.5–143) |
-| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 403 (381–406) |
-| Idle CPU (% of 2 vCPU) | 5.9 (5.8–6.3) | 1.5 (1.3–2.6) | 3.5 (3.4–3.6) |
-| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2296 (2296–2296) |
-| First deploy, image (s) | 7.8 (7–8.4) | 5.7 (5.3–6) | 6.1 (5.8–6.6) |
-| First deploy, build (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 105.3 (105–108.5) |
-| Redeploy, image (s) | 6.9 (4.8–8.3) | 6.4 (5.6–6.6) | 5.2 (4.2–9.7) |
-| Redeploy, build (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 5.1 (4.3–9) |
+| Measured | 2026-11-13 | 2026-11-13 | 2026-11-15 |
+| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 56.5 (56.5–57.6) |
+| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 386 (376–393) |
+| Idle CPU (% of 2 vCPU) | 5.9 (5.8–6.3) | 1.5 (1.3–2.6) | 1.2 (1–1.3) |
+| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2293 (2293–2293) |
+| First deploy, image (s) | 7.8 (7–8.4) | 5.7 (5.3–6) | 5.5 (5.4–6) |
+| First deploy, build (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 52.9 (52.9–54.5) |
+| Redeploy, image (s) | 6.9 (4.8–8.3) | 6.4 (5.6–6.6) | 4.4 (4–5) |
+| Redeploy, build (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 4.1 (3.6–5.6) |
 | Seconds with failed requests per redeploy, image | 3 (0–3) | 0 (0–0) | 0 (0–0) |
-| Seconds with failed requests per redeploy, build | 3 (0–3) | 0 (0–0) | 0 (0–3) |
-| Dashboard load (ms) | 573.5 (501–630) | 346.5 (296–435) | 517.5 (362–855) |
-| Dashboard largest paint (ms) | 602 (516–652) | 458 (396–552) | 676 (524–1036) |
-| Dashboard transfer (KiB) | 3811 (3811–3925) | 1533 (1530–1578) | 476 (475–480) |
-| Dashboard requests | 18 (18–18) | 119 (119–119) | 41 (39–46) |
+| Seconds with failed requests per redeploy, build | 3 (0–3) | 0 (0–0) | 0 (0–0) |
+| Dashboard load (ms) | 573.5 (501–630) | 346.5 (296–435) | 210.5 (190–269) |
+| Dashboard largest paint (ms) | 602 (516–652) | 458 (396–552) | 360 (308–456) |
+| Dashboard transfer (KiB) | 3811 (3811–3925) | 1533 (1530–1578) | 480 (476–483) |
+| Dashboard requests | 18 (18–18) | 119 (119–119) | 46 (40–51) |
 
 A redeploy is the same commit again; failed seconds are counted over 15
-image and 15 build redeploys per platform. Toft is the slowest of the three
-to build an app the first time and to paint its dashboard. The readings are
-in [`results/2026-11-13-v1.0.0/`](results/2026-11-13-v1.0.0/), and earlier
-runs beside it.
+image and 15 build redeploys per platform.
+
+**The two dates are not one comparison.** Toft's three rounds of 2026-11-15
+ran at the same time on three servers with one CPU (AMD EPYC-Rome; the loop
+took 1.9 to 2.0 s on each). The rounds of 2026-11-13 didn't record the CPU
+under each server, and one `cx23` has been measured at less than half the
+speed of another. Every row in seconds or milliseconds depends on it, and so
+does idle CPU: across the two dates those rows are a rough guide, not a
+ranking. Memory, disk, transfer, requests and the seconds with failed
+requests don't depend on it. On 2026-11-13, with all three on one day, Toft
+v1.0.0 was the slowest to build an app the first time (105.3 s) and to
+paint its dashboard (676 ms); that column is in
+[`results/2026-11-13-v1.0.0/`](results/2026-11-13-v1.0.0/).
+
+Coolify and Dokploy were not run through on 2026-11-15. Their installs were
+timed once each that day, on the same CPU and at their releases of the day:
+Coolify 4.7.5 in 82.6 s, Dokploy v0.31.2 in 123.6 s. One reading each, so
+they are not in the table.
+
+The readings are in [`results/2026-11-15-v1.0.3/`](results/2026-11-15-v1.0.3/)
+and [`results/2026-11-13-v1.0.0/`](results/2026-11-13-v1.0.0/), and earlier
+runs beside them.
 
 ## Method
 
@@ -55,6 +75,11 @@ runs beside it.
   deployed two ways on every platform: from its published image, and built
   from its git tag with its own Dockerfile. It replies with its container's
   hostname, which is how a finished redeploy is detected.
+- **Toft's built app is deployed with `?force=true`** since v1.0.2. It is the
+  second app on the panel's own server, and a 4 GB server has room for one
+  at the default 512 MiB memory limit: Toft refuses the second
+  (`capacity_exceeded`) until an operator deploys anyway, which `force` is.
+  v1.0.0 had no such check.
 
 | Metric | How |
 |---|---|
@@ -151,7 +176,9 @@ install and the first build took about 20 % longer, and the dashboard,
 unchanged since v0.29.0, loaded more slowly. That folder's dashboard files
 are kept for the record and are not compared. `bench/results/2026-11-13-v1.0.0/`
 holds all three platforms' rounds of 2026-11-13 (Toft v1.0.0, Coolify
-4.5.3, Dokploy v0.30.10), the numbers above and in the README.
+4.5.3, Dokploy v0.30.10): Coolify's and Dokploy's numbers above and in the
+README. `bench/results/2026-11-15-v1.0.3/` holds Toft's three rounds on
+v1.0.3, Toft's numbers above and in the README.
 
 Each run writes the following to `bench/results/`:
 

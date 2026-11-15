@@ -232,20 +232,24 @@ Toft, Coolify and Dokploy, each on its own fresh Hetzner Cloud `cx23`
 (2 vCPU, 4 GB, Ubuntu 24.04), building and deploying the same app from its
 source. Median of three rounds, range in brackets.
 
-| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.0 |
+| | Coolify 4.5.3 | Dokploy v0.30.10 | Toft v1.0.3 |
 |---|---|---|---|
-| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 142.9 (141.5–143) |
-| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 403 (381–406) |
-| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2296 (2296–2296) |
-| First deploy (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 105.3 (105–108.5) |
-| Redeploy (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 5.1 (4.3–9) |
-| Seconds with failed requests per redeploy | 3 (0–3) | 0 (0–0) | 0 (0–3) |
+| Measured | 2026-11-13 | 2026-11-13 | 2026-11-15 |
+| Install (s) | 84.1 (83.6–84.4) | 248.1 (246.7–260.2) | 56.5 (56.5–57.6) |
+| Idle memory (MiB) | 663 (659–680) | 1020 (1016–1060) | 386 (376–393) |
+| Disk (MiB) | 3211 (3200–3215) | 5054 (5054–5054) | 2293 (2293–2293) |
+| First deploy (s) | 45.1 (44.2–48.4) | 84.1 (78.1–87.5) | 52.9 (52.9–54.5) |
+| Redeploy (s) | 8.4 (6.8–10.6) | 71.3 (67.3–81) | 4.1 (3.6–5.6) |
+| Seconds with failed requests per redeploy | 3 (0–3) | 0 (0–0) | 0 (0–0) |
 
-Measured 2026-11-13, all three platforms on the same day. A redeploy is the
-same commit again; failed seconds are counted over 15 redeploys per
-platform. Toft is the slowest of the three to build an app the first time.
-The servers were one type, but that run didn't record the CPU under each,
-and the timed rows depend on it; the scripts record it now.
+A redeploy is the same commit again; failed seconds are counted over 15
+redeploys per platform. The two dates are not one comparison: Toft's column
+was measured again on v1.0.3, on servers whose CPU was recorded, and
+Coolify's and Dokploy's are from the last day all three ran together, which
+didn't record the CPU under each server. The rows in seconds depend on it,
+so across the two dates they are a rough guide, not a ranking. On that day
+Toft v1.0.0 was the slowest of the three to build an app the first time
+(105.3 s).
 
 The method, the scripts to rerun it and the full table, with idle CPU,
 deploys from an image and each dashboard's load, are in [`bench/`](bench/).
