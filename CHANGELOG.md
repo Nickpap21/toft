@@ -6,6 +6,23 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.0.4 (2026-11-15)
+
+One fix, to the time shown for a service's last health check. No
+migration: a failed upgrade starts 1.0.3 again without restoring the
+database. Upgrade from 1.0.3.
+
+- **A service's last health check shows the time the request took.** On a
+  server whose clock is synchronised over NTP, which most are, it showed
+  1,000 times the real time (5.8 ms as 5,764 ms), and now and then a
+  negative one: the check read a kernel clock field that holds
+  nanoseconds there and microseconds elsewhere. Wrong since 1.0.0. The
+  panel runs the check, so the time is right from the first check after
+  the upgrade, on every server, with no redeploy and no agent upgrade.
+- 1.0.3's entry said that servers which connect through their agent get
+  its lighter health check once the agent has upgraded. Containers there
+  never had that check; the entry below is corrected.
+
 ## 1.0.3 (2026-11-15)
 
 Deploys and deletes that no longer drop requests or leave a container
