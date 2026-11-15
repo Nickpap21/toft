@@ -1218,6 +1218,11 @@ func (s *ServiceManager) Delete(ctx context.Context, id string) error {
 			return fmt.Errorf("stop the service's deploys: %w", err)
 		}
 		defer release()
+		// One that ended meanwhile may have moved the service to another
+		// server: tear down the service as it is now.
+		if svc, err = s.repo.GetByID(ctx, id); err != nil {
+			return fmt.Errorf("get service: %w", err)
+		}
 	}
 	if err := s.teardown(ctx, svc); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrTeardown, svc.Name, err)

@@ -155,6 +155,7 @@ type deployStopper struct {
 	err                 error
 	stopped, released   []string
 	stopSaw, releaseSaw int // len(orch.stopped), len(repo.deleted)
+	whileStopping       func()
 }
 
 func (d *deployStopper) StopDeploys(_ context.Context, id string) (func(), error) {
@@ -162,6 +163,9 @@ func (d *deployStopper) StopDeploys(_ context.Context, id string) (func(), error
 		return nil, d.err
 	}
 	d.stopped = append(d.stopped, id)
+	if d.whileStopping != nil {
+		d.whileStopping()
+	}
 	d.stopSaw = len(d.orch.stopped)
 	return func() {
 		d.released = append(d.released, id)
@@ -237,4 +241,22 @@ type forgetRepo struct {
 
 func (r *forgetRepo) ListIDsOnServer(context.Context, string) ([]string, error) {
 	return r.onServer, nil
+}
+
+// A deploy or a move that ends while the delete waits for it may have
+// changed the service (its server, a move): the teardown works from the
+// service as it is once the deploys have stopped.
+func TestDeleteTearsDownTheServiceAsItIsOnceItsDeploysStopped(t *testing.T) {
+	repo := &deleteRepo{byID: map[string]*Service{"s1": {ID: "s1", Name: "one", SourceType: SourceTypeDockerImage}}}
+	orch := &teardownOrch{}
+	deploys := &deployStopper{orch: orch, repo: repo, whileStopping: func() {
+		repo.byID["s1"] = &Service{ID: "s1", Name: "one", SourceType: SourceTypeDockerCompose}
+	}}
+	m := NewServiceManager(repo, zap.NewNop())
+	m.WithOrchestration(nil, teardownFactory{orch})
+	m.WithDeployStopper(deploys)
+
+	require.NoError(t, m.Delete(context.Background(), "s1"))
+	assert.Equal(t, []string{"s1"}, orch.compose)
+	assert.Empty(t, orch.stopped)
 }
