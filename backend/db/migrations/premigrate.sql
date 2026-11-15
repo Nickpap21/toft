@@ -256,3 +256,32 @@ BEGIN
       AND s.runtime_status = 'running' AND s.compose_network_service IS NULL
       AND EXISTS (SELECT 1 FROM domains d WHERE d.service_id = s.id);
 END $$;
+
+-- 0083: an environment has one service per network alias
+-- (uq_services_alias_env). Where two share one, from before the index, the
+-- oldest keeps it and each later one becomes <alias>-<first 8 of its id>,
+-- within a DNS label's 63 characters. Runs only while the index is missing:
+-- with it there is nothing to rename. Irreversible: the old alias of a
+-- renamed service is in the NOTICE only.
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    IF to_regclass('public.services') IS NULL OR to_regclass('public.uq_services_alias_env') IS NOT NULL THEN
+        RETURN;
+    END IF;
+    FOR r IN
+        UPDATE services s
+        SET network_alias = rtrim(left(s.network_alias, 54), '-') || '-' || left(s.id::text, 8)
+        FROM (
+            SELECT id, row_number() OVER (PARTITION BY environment_id, network_alias ORDER BY created_at, id) AS n
+            FROM services
+            WHERE environment_id IS NOT NULL AND network_alias <> ''
+        ) d
+        WHERE d.id = s.id AND d.n > 1
+        RETURNING s.id, s.name, s.network_alias
+    LOOP
+        RAISE NOTICE 'service % (%) shared its network alias with an older service of its environment: it is now %, from its next deploy',
+            r.name, r.id, r.network_alias;
+    END LOOP;
+END $$;

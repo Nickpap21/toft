@@ -1895,6 +1895,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_services_name_project
 CREATE UNIQUE INDEX IF NOT EXISTS uq_services_name_org
     ON services(scoped_org_id, name)
     WHERE scoped_org_id IS NOT NULL AND environment_id IS NULL;
+-- An environment has one service per network alias (0083): the alias is the
+-- name its other services reach it by.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_services_alias_env
+    ON services(environment_id, network_alias)
+    WHERE environment_id IS NOT NULL AND network_alias <> '';
 CREATE INDEX IF NOT EXISTS idx_deployments_service_id        ON deployments(service_id);
 CREATE INDEX IF NOT EXISTS idx_deployments_status            ON deployments(status);
 CREATE INDEX IF NOT EXISTS idx_deployment_logs_deployment_id ON deployment_logs(deployment_id);
