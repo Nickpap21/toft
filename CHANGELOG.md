@@ -46,8 +46,10 @@ without restoring the database. Upgrade from 1.0.2.
   2-vCPU server with ten idle containers, over two runs of five minutes
   each: 2.0 % of a core per app before, 0.5 % after. A container keeps the
   check it was created with, so each service gets the new one at its next
-  deploy; servers that connect through their agent, once the agent has
-  upgraded.
+  deploy. Nothing changes on a server that connects through its agent:
+  containers there never had this check (Traefik reads their routes from
+  files, and a deploy takes a container out of rotation by rewriting the
+  file).
 
 ### Install and upgrade
 

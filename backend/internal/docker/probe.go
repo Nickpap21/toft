@@ -32,15 +32,16 @@ import (
 // at deploy: below 400 is healthy (exit 0); 400 or more, or no answer, is
 // unhealthy (exit 1, the reason on the next line). Either way its first
 // line is "toft-probe <status> <ms>" (status 000: no answer), timed with
-// busybox's microsecond clock. Any other exit code means it did not run (no
-// mount: a container from before the probe).
+// the shell's $EPOCHREALTIME (seconds.microseconds; the dot dropped, it is
+// microseconds). Not adjtimex: its tv_usec is nanoseconds on a kernel whose
+// clock is NTP-synced. Any other exit code means it did not run (no mount: a
+// container from before the probe).
 const probeScript = `B=` + rollout.ProbeMountPath + `/bin/busybox
-now() { $B adjtimex | $B awk '/tv_sec/{s=$2} /tv_usec/{u=$2} END{printf "%.0f", s*1000+u/1000}'; }
-t0=$(now)
+t=$EPOCHREALTIME; t0=${t%.*}${t#*.}
 out=$($B wget -S -O /dev/null -T "$3" "http://localhost:$1$2" 2>&1)
-t1=$(now)
+t=$EPOCHREALTIME; t1=${t%.*}${t#*.}
 code=$(echo "$out" | $B sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | $B head -n 1)
-echo "toft-probe ${code:-000} $((t1-t0))"
+echo "toft-probe ${code:-000} $(((t1-t0+500)/1000))"
 [ -n "$code" ] && [ "$code" -lt 400 ] && exit 0
 if [ -n "$code" ]; then echo "HTTP $code"; else echo "$out" | $B tail -n 1; fi
 exit 1`
