@@ -18,6 +18,7 @@ type fakeHost struct {
 	// routingChanged is what Start reports; drains records FinishSwitch's
 	// drain argument per call.
 	routingChanged bool
+	routesShared   bool
 	drains         []bool
 	notHealthy     error // what AwaitHealthy returns
 }
@@ -43,7 +44,7 @@ func (h *fakeHost) RunOnce(_ context.Context, _ Spec, argv []string, resume bool
 
 func (h *fakeHost) Start(_ context.Context, _ Spec, sw *SlotSwitch) error {
 	h.calls = append(h.calls, "start")
-	sw.New, sw.Previous, sw.RoutingChanged = slotGreen, h.previous, h.routingChanged
+	sw.New, sw.Previous, sw.RoutingChanged, sw.RoutesShared = slotGreen, h.previous, h.routingChanged, h.routesShared
 	if sw.Chosen != nil {
 		sw.Chosen()
 	}
@@ -196,9 +197,11 @@ func TestRunRoutesTheNewSlotBeforeRetiringThePrevious(t *testing.T) {
 	assert.Equal(t, "abort "+slotGreen, h.calls[len(h.calls)-1])
 }
 
-// The previous slot drains only where it serves beside the new one through
-// its labels: not on a first deploy, nor when the routing changed (Traefik
-// serves neither), nor where the route moves in a file (D-113).
+// The previous slot drains wherever Traefik serves it beside the new one
+// from their labels, so also after a routing change that left a route to
+// both: not on a first deploy, nor where a routing change left none (the
+// routes come back when it is gone), nor where the route moves in a file
+// (D-113).
 func TestRunDrainsWhereBothSlotsServe(t *testing.T) {
 	spec := Spec{Slot: Slot{ServiceID: slotSvcID, Image: "app:2"}}
 	for _, c := range []struct {
@@ -209,7 +212,8 @@ func TestRunDrainsWhereBothSlotsServe(t *testing.T) {
 	}{
 		{"redeploy", &fakeHost{previous: []string{slotBlue}}, Hooks{}, []bool{true}},
 		{"first deploy", &fakeHost{}, Hooks{}, []bool{false}},
-		{"routing changed", &fakeHost{previous: []string{slotBlue}, routingChanged: true}, Hooks{}, []bool{false}},
+		{"routing changed, a route still shared", &fakeHost{previous: []string{slotBlue}, routingChanged: true, routesShared: true}, Hooks{}, []bool{true}},
+		{"routing changed, no route shared", &fakeHost{previous: []string{slotBlue}, routingChanged: true}, Hooks{}, []bool{false}},
 		{"file routes", &fakeHost{previous: []string{slotBlue}}, Hooks{Route: func(context.Context, string, func(string)) error { return nil }}, []bool{false}},
 	} {
 		res := Run(context.Background(), c.host, spec, c.hooks)

@@ -75,12 +75,17 @@ func (h handOffInput) trigger(serviceID string) TriggerInput {
 }
 
 // handOffHook is hooks.HandOff for deploymentID's rollout of imageTag. A
-// move stays with the panel: completing it changes two servers.
+// move stays with the panel: completing it changes two servers. A deploy
+// whose service's delete has begun (StopDeploys) is not handed off: the
+// agent would run it to its end, beyond the panel's cancellation.
 func (s *Service) handOffHook(ctx context.Context, deploymentID string, input TriggerInput, imageTag string, compose bool) func() error {
 	if input.MoveFrom != nil {
 		return nil
 	}
 	return func() error {
+		if errors.Is(context.Cause(ctx), errServiceDeleted) {
+			return errServiceDeleted
+		}
 		raw, err := json.Marshal(newHandOffInput(input, compose))
 		if err != nil {
 			return fmt.Errorf("encode the hand-off: %w", err)
@@ -115,7 +120,7 @@ func (s *Service) FollowHandedOff(ctx context.Context) (follow func()) {
 			each = append(each, func() { s.interruptHandedOff(ctx, h.Deployment) })
 			continue
 		}
-		_, done, err := s.takeTurn(h.Deployment.ServiceID, false)
+		_, _, done, err := s.takeTurn(h.Deployment.ServiceID, false)
 		if err != nil {
 			done = func() {}
 		}

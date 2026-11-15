@@ -38,14 +38,16 @@ func (o *RemoteOrchestrator) handOff(ctx context.Context, req rollout.Request, h
 		return rollout.Result{Step: rollout.StepConnect, Err: msg}
 	}
 	req.Epoch = o.epoch
-	follow := ctx
+	// Nothing the panel does stops the agent's rollout, so the panel follows
+	// it to its end rather than to the end of ctx: past its own deadline,
+	// and past the service's delete, which waits for the rollout rather
+	// than tearing down under it. Abandon and Gone still end the follow.
+	follow := context.WithoutCancel(ctx)
 	switch {
 	case hooks.TimeLeft == nil:
 	case o.deadlines:
-		// The agent ends the rollout at the limit and cleans up after it;
-		// the panel follows it to that end rather than stopping at its own.
+		// The agent ends the rollout at the limit and cleans up after it.
 		req.TimeLeft = hooks.TimeLeft()
-		follow = context.WithoutCancel(ctx)
 	default:
 		if hooks.NoLimit != nil {
 			hooks.NoLimit()
@@ -82,9 +84,8 @@ func (o *RemoteOrchestrator) handOff(ctx context.Context, req rollout.Request, h
 		logFn("✗ " + msg)
 		return rollout.Result{Step: rollout.StepConnect, Err: msg, Changed: true}
 	default:
-		// The panel stops following (it is shutting down, or the deploy's
-		// context ended); the agent carries on, and the next start picks
-		// the rollout up again.
+		// The panel stops following (it is shutting down); the agent
+		// carries on, and the next start picks the rollout up again.
 		return rollout.Result{Step: rollout.StepConnect, Err: err.Error(), Changed: true}
 	}
 }

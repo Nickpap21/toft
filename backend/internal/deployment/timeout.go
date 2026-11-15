@@ -157,5 +157,16 @@ func (s *Service) settled(ctx context.Context, deploymentID, errMsg, step string
 			s.log.Warn("failed to insert deployment log", zap.Error(err))
 		}
 	}
+	// Likewise when its service's delete cancelled it (StopDeploys).
+	if errMsg != "" && errors.Is(context.Cause(ctx), errServiceDeleted) {
+		errMsg = errServiceDeleted.Error()
+		if step != "" {
+			errMsg += " (at the " + step + " step)"
+		}
+		ctx = context.WithoutCancel(ctx)
+		if _, err := s.repo.InsertLog(ctx, deploymentID, "✗ The deploy was "+errMsg); err != nil {
+			s.log.Warn("failed to insert deployment log", zap.Error(err))
+		}
+	}
 	return context.WithoutCancel(ctx), errMsg // a nested call sees no cause
 }

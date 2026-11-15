@@ -189,10 +189,12 @@ var HealthInterval = 2 * time.Second
 // control) gives the two slots conflicting router, middleware or service
 // definitions instead, which Traefik drops while both run
 // (SlotSwitch.RoutingChanged). The previous slot is then retired as soon as
-// the new one passes its health check, so the service's routes are down for
-// the health check only, not for the post-deploy commands too; the price is
-// that a failing post-deploy command can no longer bring the previous slot
-// back.
+// the new one passes its health check, so the changed routes are down until
+// Traefik lets the previous slot go, not for the post-deploy commands too;
+// the price is that a failing post-deploy command can no longer bring the
+// previous slot back. Where the change left a route to both slots
+// (RoutesShared, one of several domains changed) it drains first, as in any
+// switch; where it left none, nothing reaches it and it stops at once.
 //
 // Where the agent writes Traefik's routes (Hooks.Route, D-113), none of
 // that applies: the previous slot keeps the route until the new one passed
@@ -462,8 +464,9 @@ func contains(list []string, v string) bool {
 // awaitHealthy waits until Traefik routes the new slot, where it serves
 // beside a previous one through labels: Traefik routes a slot with the
 // drain check once Docker reports it healthy, and until then the previous
-// one serves alone. Where the routing changed, Traefik serves neither once
-// the new one is healthy, so the switch goes on without waiting for Traefik.
+// one serves alone. Where the routing changed, Traefik drops the changed
+// routes once the new one is healthy, so the switch goes on without waiting
+// for Traefik.
 // A non-nil res ends the rollout: the new slot never got healthy.
 func (r *run) awaitHealthy(ctx context.Context) *Result {
 	sw := r.sw
@@ -498,10 +501,12 @@ func (r *run) retirePrevious(ctx context.Context) (retired bool, res *Result) {
 			return false, &failed
 		}
 	}
-	// Draining is for slots that serve beside the new one through their
-	// labels: not when the route moved in a file, nor when conflicting
-	// routes keep Traefik from serving either.
-	drain := r.hooks.Route == nil && !sw.RoutingChanged && len(sw.Previous) > 0 && len(sw.Stopped) == 0
+	// Draining is for slots Traefik serves from their labels beside the new
+	// one, not when the route moved in a file. After a routing change that
+	// is where a route was left to both (RoutesShared); where none was,
+	// nothing reaches the previous slot and the routes come back when it is
+	// gone, so it stops at once.
+	drain := r.hooks.Route == nil && len(sw.Previous) > 0 && len(sw.Stopped) == 0 && (!sw.RoutingChanged || sw.RoutesShared)
 	if drain {
 		r.log("→ Taking the previous container out of Traefik's rotation; it finishes the requests it has, then stops")
 	}

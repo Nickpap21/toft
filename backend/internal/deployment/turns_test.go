@@ -21,24 +21,24 @@ func TestTakeTurn(t *testing.T) {
 		}
 	}
 
-	ahead, first, err := s.takeTurn("web", false)
+	_, ahead, first, err := s.takeTurn("web", false)
 	require.NoError(t, err)
 	assert.Nil(t, ahead, "nothing is under way: no wait")
-	other, otherDone, err := s.takeTurn("api", false)
+	_, other, otherDone, err := s.takeTurn("api", false)
 	require.NoError(t, err)
 	assert.Nil(t, other, "another service's deploys are a line of their own")
 	otherDone()
 
-	second, secondDone, err := s.takeTurn("web", false)
+	_, second, secondDone, err := s.takeTurn("web", false)
 	require.NoError(t, err)
 	require.NotNil(t, second)
 	assert.True(t, open(second), "the second waits for the first")
 
 	// A move waits like any deploy, and nothing is let in behind it: a
 	// deploy asked for then was aimed at the server the service leaves.
-	move, moveDone, err := s.takeTurn("web", true)
+	_, move, moveDone, err := s.takeTurn("web", true)
 	require.NoError(t, err)
-	_, _, err = s.takeTurn("web", false)
+	_, _, _, err = s.takeTurn("web", false)
 	assert.ErrorIs(t, err, ErrServiceMoving)
 
 	first()
@@ -46,20 +46,20 @@ func TestTakeTurn(t *testing.T) {
 	assert.True(t, open(move), "the move still waits for the second")
 	secondDone()
 	assert.False(t, open(move))
-	_, _, err = s.takeTurn("web", false)
+	_, _, _, err = s.takeTurn("web", false)
 	assert.ErrorIs(t, err, ErrServiceMoving, "refused until the move has ended")
 	moveDone()
 
-	ahead, done, err := s.takeTurn("web", false)
+	_, ahead, done, err := s.takeTurn("web", false)
 	require.NoError(t, err)
 	assert.Nil(t, ahead, "the line is empty again")
 
 	// A turn given up while the deploy ahead still runs (a deploy refused
 	// after it took its turn) stays in the line until that one has ended.
-	_, refused, err := s.takeTurn("web", false)
+	_, _, refused, err := s.takeTurn("web", false)
 	require.NoError(t, err)
 	refused()
-	next, nextDone, err := s.takeTurn("web", false)
+	_, next, nextDone, err := s.takeTurn("web", false)
 	require.NoError(t, err)
 	require.NotNil(t, next)
 	assert.True(t, open(next), "it waits for the deploy that still runs")
@@ -67,6 +67,57 @@ func TestTakeTurn(t *testing.T) {
 	require.Eventually(t, func() bool { return !open(next) }, time.Second, time.Millisecond)
 	nextDone()
 	assert.Empty(t, s.turns)
+}
+
+// A delete cancels every deploy in the service's line and waits for the
+// last; meanwhile, and until it releases, the service takes no deploy. One
+// that gave up waiting leaves the next deploy a live context.
+func TestStopDeploys(t *testing.T) {
+	s := &Service{}
+	first, _, firstDone, err := s.takeTurn("web", false)
+	require.NoError(t, err)
+	second, _, secondDone, err := s.takeTurn("web", false)
+	require.NoError(t, err)
+
+	stopped := make(chan func())
+	go func() {
+		release, err := s.StopDeploys(context.Background(), "web")
+		assert.NoError(t, err)
+		stopped <- release
+	}()
+	require.Eventually(t, func() bool { return first.Err() != nil }, time.Second, time.Millisecond)
+	assert.ErrorIs(t, context.Cause(first), errServiceDeleted)
+	assert.ErrorIs(t, context.Cause(second), errServiceDeleted, "the deploy in line too")
+	_, _, _, err = s.takeTurn("web", false)
+	assert.ErrorIs(t, err, errServiceDeleting)
+	firstDone()
+	select {
+	case <-stopped:
+		t.Fatal("returned before the last deploy ended")
+	case <-time.After(20 * time.Millisecond):
+	}
+	secondDone()
+	release := <-stopped
+	_, _, _, err = s.takeTurn("other", false)
+	assert.NoError(t, err, "other services deploy")
+	release()
+	ctx, _, done, err := s.takeTurn("web", false)
+	require.NoError(t, err, "deployable again once released")
+	assert.NoError(t, ctx.Err())
+	done()
+
+	held, _, heldDone, err := s.takeTurn("web", false)
+	require.NoError(t, err)
+	gaveUp, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = s.StopDeploys(gaveUp, "web")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, context.Cause(held), errServiceDeleted)
+	next, _, nextDone, err := s.takeTurn("web", false)
+	require.NoError(t, err, "a delete that gave up released the service")
+	assert.NoError(t, next.Err(), "and the next deploy isn't cancelled with the one ahead")
+	heldDone()
+	nextDone()
 }
 
 // turnRepo is the part of Repository waitTurn uses: the deployment is there

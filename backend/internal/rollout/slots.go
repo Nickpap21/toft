@@ -77,19 +77,31 @@ func PickActiveSlot(running map[string]container.Summary, activeDeployment strin
 }
 
 // routingConflicts reports whether labels define a Traefik router,
-// middleware or service that one of serving defines differently. Traefik's
-// Docker provider drops such a definition while both containers run, so the
-// routes that use it stop working until one of them is gone.
-func routingConflicts(labels map[string]string, serving []container.Summary) bool {
+// middleware or service that one of serving defines differently (changed).
+// Traefik's Docker provider drops such a definition while both containers
+// run, so the routes that use it stop working until one of them is gone.
+// shared: a router they define alike still serves through both, which needs
+// every conflict to be a router's own: a service or a middleware that
+// differs takes down the routers that name it. A router that only redirects
+// to HTTPS reaches neither container, so it is not one.
+func routingConflicts(labels map[string]string, serving []container.Summary) (changed, shared bool) {
 	mine := traefikObjects(labels)
+	routersOnly := true
 	for _, c := range serving {
 		for name, def := range traefikObjects(c.Labels) {
-			if other, ok := mine[name]; ok && !maps.Equal(def, other) {
-				return true
+			other, ok := mine[name]
+			if !ok {
+				continue
+			}
+			router := strings.HasPrefix(name, "traefik.http.routers.")
+			if maps.Equal(def, other) {
+				shared = shared || router && def["middlewares"] != "redirect-to-https@file"
+			} else {
+				changed, routersOnly = true, routersOnly && router
 			}
 		}
 	}
-	return false
+	return changed, changed && shared && routersOnly
 }
 
 // traefikObjects groups Traefik labels by the object they define
@@ -498,6 +510,11 @@ type SlotSwitch struct {
 	// control). Traefik drops such a definition while both run, so the
 	// service's routes do not work until Previous is retired.
 	RoutingChanged bool
+	// RoutesShared: the routing changed, and a router New and Previous
+	// define alike still serves through both (one of several domains
+	// changed), so Previous drains as at any switch. False in a journal an
+	// older release wrote, which retires Previous at once.
+	RoutesShared bool
 	// Stopped are the previous slots StartSlot stops (Recreate), to be
 	// started again (RestorePrevious) when the deploy fails. They are listed
 	// before they stop, and StartSlot may fail after stopping some of them.

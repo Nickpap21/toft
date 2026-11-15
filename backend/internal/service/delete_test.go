@@ -147,6 +147,60 @@ func TestDeleteKeepsTheServiceWhenTheServerIsNotCleaned(t *testing.T) {
 	assert.Empty(t, repo.deleted)
 }
 
+// deployStopper records the deploys a delete stopped, and what the server
+// and the rows had seen of the delete when it did and when it released.
+type deployStopper struct {
+	orch                *teardownOrch
+	repo                *deleteRepo
+	err                 error
+	stopped, released   []string
+	stopSaw, releaseSaw int // len(orch.stopped), len(repo.deleted)
+	whileStopping       func()
+}
+
+func (d *deployStopper) StopDeploys(_ context.Context, id string) (func(), error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	d.stopped = append(d.stopped, id)
+	if d.whileStopping != nil {
+		d.whileStopping()
+	}
+	d.stopSaw = len(d.orch.stopped)
+	return func() {
+		d.released = append(d.released, id)
+		d.releaseSaw = len(d.repo.deleted)
+	}, nil
+}
+
+// A delete stops the service's deploys before it tears the service down,
+// and lets it be deployed again when the teardown fails.
+func TestDeleteStopsTheServicesDeploysFirst(t *testing.T) {
+	repo := &deleteRepo{byID: map[string]*Service{"s1": {ID: "s1", Name: "one", SourceType: SourceTypeDockerImage}}}
+	orch := &teardownOrch{}
+	deploys := &deployStopper{orch: orch, repo: repo}
+	m := NewServiceManager(repo, zap.NewNop())
+	m.WithOrchestration(nil, teardownFactory{orch})
+	m.WithDeployStopper(deploys)
+
+	require.NoError(t, m.Delete(context.Background(), "s1"))
+	assert.Equal(t, []string{"s1"}, deploys.stopped)
+	assert.Zero(t, deploys.stopSaw, "before the teardown")
+	assert.Equal(t, []string{"s1"}, deploys.released)
+	assert.Equal(t, 1, deploys.releaseSaw, "after the rows went")
+
+	orch.failStop = errors.New("ssh: connection refused")
+	err := m.Delete(context.Background(), "s1")
+	assert.ErrorIs(t, err, ErrTeardown)
+	assert.Equal(t, []string{"s1", "s1"}, deploys.released, "deployable again: the rows stay")
+
+	deploys.err = context.Canceled
+	err = m.Delete(context.Background(), "s1")
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Len(t, orch.stopped, 2, "nothing is torn down while a deploy may still run")
+	assert.Len(t, repo.deleted, 1)
+}
+
 type frozenServer struct{}
 
 func (frozenServer) GetServer(_ context.Context, id string) (*serverPkg.Server, error) {
@@ -187,4 +241,22 @@ type forgetRepo struct {
 
 func (r *forgetRepo) ListIDsOnServer(context.Context, string) ([]string, error) {
 	return r.onServer, nil
+}
+
+// A deploy or a move that ends while the delete waits for it may have
+// changed the service (its server, a move): the teardown works from the
+// service as it is once the deploys have stopped.
+func TestDeleteTearsDownTheServiceAsItIsOnceItsDeploysStopped(t *testing.T) {
+	repo := &deleteRepo{byID: map[string]*Service{"s1": {ID: "s1", Name: "one", SourceType: SourceTypeDockerImage}}}
+	orch := &teardownOrch{}
+	deploys := &deployStopper{orch: orch, repo: repo, whileStopping: func() {
+		repo.byID["s1"] = &Service{ID: "s1", Name: "one", SourceType: SourceTypeDockerCompose}
+	}}
+	m := NewServiceManager(repo, zap.NewNop())
+	m.WithOrchestration(nil, teardownFactory{orch})
+	m.WithDeployStopper(deploys)
+
+	require.NoError(t, m.Delete(context.Background(), "s1"))
+	assert.Equal(t, []string{"s1"}, orch.compose)
+	assert.Empty(t, orch.stopped)
 }

@@ -244,22 +244,26 @@ func TestRunContainerBlueGreenReportsARoutingChange(t *testing.T) {
 		port    int
 		ac      service.AccessControl
 		changed bool
+		shared  bool // a route is still served by both slots
 	}{
-		{"same routing", []string{"web.example.com"}, 3000, ac, false},
-		{"same routing, one more domain", []string{"web.example.com", "www.example.com"}, 3000, ac, false},
-		{"another domain", []string{"new.example.com"}, 3000, ac, true},
-		{"another port", []string{"web.example.com"}, 8080, ac, true},
-		{"another password", []string{"web.example.com"}, 3000, service.AccessControl{BasicAuthUser: "admin", BasicAuthPassword: "new"}, true},
-		{"basic auth removed", []string{"web.example.com"}, 3000, service.AccessControl{}, true},
+		{"same routing", []string{"web.example.com", "www.example.com"}, 3000, ac, false, false},
+		{"same routing, one more domain", []string{"web.example.com", "www.example.com", "more.example.com"}, 3000, ac, false, false},
+		{"one of two domains changed", []string{"web.example.com", "new.example.com"}, 3000, ac, true, true},
+		{"both domains changed", []string{"new.example.com", "other.example.com"}, 3000, ac, true, false},
+		{"another port", []string{"web.example.com", "www.example.com"}, 8080, ac, true, false},
+		{"another password", []string{"web.example.com", "www.example.com"}, 3000, service.AccessControl{BasicAuthUser: "admin", BasicAuthPassword: "new"}, true, false},
+		{"basic auth removed", []string{"web.example.com", "www.example.com"}, 3000, service.AccessControl{}, true, false},
+		{"one domain changed and another port", []string{"web.example.com", "new.example.com"}, 8080, ac, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := fakedocker.New(t)
-			f.Add(slotBlue, container.StateRunning, routeLabels(slotSvcID, []string{"web.example.com"}, 3000, ac))
+			f.Add(slotBlue, container.StateRunning, routeLabels(slotSvcID, []string{"web.example.com", "www.example.com"}, 3000, ac))
 			sw := &rollout.SlotSwitch{}
 			require.NoError(t, runContainerBlueGreen(sw, f.Client(), rollout.NetConfig{}, netplan.LegacyPlan(slotSvcID, "web", "", ""), slotSvcID, "web", "", "app:2",
 				tc.domains, nil, tc.port, "", "", nil, "", "", tc.ac, rollout.Security{}, nil))
 			assert.Equal(t, tc.changed, sw.RoutingChanged)
+			assert.Equal(t, tc.shared, sw.RoutesShared)
 		})
 	}
 }

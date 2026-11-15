@@ -212,7 +212,8 @@ func TestHandOffContainerCheck(t *testing.T) {
 
 // An agent that keeps the deploy time limit is handed the time left, and the
 // panel follows it to its end past the panel's own deadline; for one that
-// can't, the panel's limit ends at the hand-off (D-125).
+// can't, the panel's limit ends at the hand-off (D-125). Either way the panel
+// follows the rollout to its end.
 func TestHandOffCarriesTheDeployTimeLimit(t *testing.T) {
 	spec := rollout.Spec{DeploymentID: "dep-1", Slot: rollout.Slot{ServiceID: "svc"}}
 	for _, keeps := range []bool{true, false} {
@@ -235,10 +236,13 @@ func TestHandOffCarriesTheDeployTimeLimit(t *testing.T) {
 		})
 
 		assert.Equal(t, "green", res.New, "keeps=%v", keeps)
+		// Nothing stops the agent's rollout, so the panel follows it to its
+		// end whatever ends the deploy's context: its own deadline, or the
+		// service's delete, which must not tear down under a running rollout.
+		assert.False(t, h.recorded()[0].ctxEnded, "keeps=%v", keeps)
 		if keeps {
 			assert.Equal(t, 3*time.Minute, req.TimeLeft)
 			assert.False(t, lifted)
-			assert.False(t, h.recorded()[0].ctxEnded, "the panel follows past its own deadline")
 		} else {
 			assert.Zero(t, req.TimeLeft)
 			assert.True(t, lifted, "the panel's limit ends at the hand-off")

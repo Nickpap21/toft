@@ -12,6 +12,9 @@ import (
 // ErrDuplicateName is returned when a service name already exists within the same scope.
 var ErrDuplicateName = errors.New("a service with this name already exists in this scope")
 
+// ErrAliasTaken is returned when another service of the environment has the network alias.
+var ErrAliasTaken = errors.New("network alias is already used in this environment")
+
 type Type string
 type SourceType string
 
