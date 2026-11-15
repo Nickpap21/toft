@@ -54,6 +54,11 @@ const (
 	drainTimeout  = 5 * time.Second
 	// How long a check that passed before stays, looking for the flag.
 	drainHold = 25 * time.Second
+	// What Docker allows a holding check beyond the image's own timeout.
+	// The hold counts its passes, not the clock, so in a container short
+	// of CPU it runs long: each pass may take twice its second before
+	// Docker kills the check and counts it as failed.
+	drainHoldTimeout = 2*drainHold + drainTimeout
 	// A new slot is checked this often until it first passes.
 	drainStartInterval = 500 * time.Millisecond
 	drainStartPeriod   = 30 * time.Second
@@ -169,7 +174,7 @@ func drainHealthcheck(image *container.HealthConfig, shell []string) (hc *contai
 	if len(argv) == 0 {
 		return &container.HealthConfig{
 			Test:     []string{"CMD", busybox, "sh", "-c", flagScript},
-			Interval: drainInterval, Timeout: drainHold + drainTimeout, Retries: drainRetries,
+			Interval: drainInterval, Timeout: drainHoldTimeout, Retries: drainRetries,
 			StartPeriod: drainStartPeriod, StartInterval: drainStartInterval,
 		}, true
 	}
@@ -184,7 +189,7 @@ func drainHealthcheck(image *container.HealthConfig, shell []string) (hc *contai
 		secs(orDefault(image.StartInterval, dockerStartInterval)), secs(iv), strconv.Itoa(re), secs(to)}, argv...)
 	return &container.HealthConfig{
 		Test:     test,
-		Interval: drainInterval, Timeout: to + drainHold + drainTimeout, Retries: drainRetries,
+		Interval: drainInterval, Timeout: to + drainHoldTimeout, Retries: drainRetries,
 		// Until the image's check first passes, Docker reports starting, as
 		// it would have within the image's start period and retries.
 		StartPeriod: image.StartPeriod + iv*time.Duration(re), StartInterval: drainStartInterval,

@@ -24,14 +24,14 @@ func TestDrainHealthcheck(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, []string{"CMD", busybox, "sh", "-c", flagScript}, hc.Test, "no check of the image's own: the flag alone")
 		assert.Equal(t, drainInterval, hc.Interval)
-		assert.Equal(t, drainHold+drainTimeout, hc.Timeout, "a check that holds isn't killed for it")
+		assert.Equal(t, 2*drainHold+drainTimeout, hc.Timeout, "a check that holds isn't killed for it, slowed to half speed either")
 	}
 
 	hc, ok := drainHealthcheck(&container.HealthConfig{Test: []string{"CMD", "curl", "-f", "http://localhost/"}}, nil)
 	require.True(t, ok)
 	assert.Equal(t, []string{"CMD", busybox, "sh", "-c", drainScript, "toft-drain", "5", "30", "3", "30", "curl", "-f", "http://localhost/"}, hc.Test,
 		"Docker's defaults; the start interval until the check first passes, start period or not")
-	assert.Equal(t, 30*time.Second+drainHold+drainTimeout, hc.Timeout)
+	assert.Equal(t, 30*time.Second+2*drainHold+drainTimeout, hc.Timeout)
 	assert.Equal(t, 90*time.Second, hc.StartPeriod, "starting until the image's retries would have run out")
 
 	hc, _ = drainHealthcheck(&container.HealthConfig{Test: []string{"CMD-SHELL", "pg_isready || exit 1"},
