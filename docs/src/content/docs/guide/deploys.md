@@ -60,6 +60,13 @@ Settings → Source offers two builders:
 - **Nixpacks**: detects the language and builds it. You can replace the
   install, build and start commands it detects. Toft brings Nixpacks for the
   panel's own server; on a server you add, Nixpacks must be installed.
+  There it runs in a sandbox that sees the build's own files and nothing
+  else of the server, when the server is added with a root login and its
+  Nixpacks is the static build (the `musl` release, which Nixpacks' install
+  script fetches); otherwise it runs as the server's login and the deploy
+  log says so. A link in the repository that leads out of it fails a
+  Nixpacks build on any server, and so does a `nixpacks.toml` whose static
+  assets or `nixpkgsArchive` name a path outside Nixpacks' own folder.
 
 Builds run on BuildKit, and each service's builds are kept apart from every
 other service's on the server:

@@ -744,6 +744,157 @@ func TestRemoteNixpacksCommands(t *testing.T) {
 	assert.NotContains(t, build.cmd, "--install-cmd", "Nixpacks keeps what it detects")
 }
 
+// On a server that can, nixpacks runs as nobody in a unit that sees its own
+// binary and the build's folder only, for the plan and for the Dockerfile:
+// the whole folder even with a base directory, whose name is the
+// repository's and is no part of the unit's settings.
+func TestRemoteNixpacksRunsInItsSandbox(t *testing.T) {
+	h := &fakeHost{exec: func(_ context.Context, cmd string) (string, error) {
+		switch {
+		case strings.Contains(cmd, "mktemp -d /tmp/paas-docker-"):
+			return "/tmp/paas-docker-abc\n", nil
+		case strings.HasPrefix(cmd, "mktemp"):
+			return "/tmp/paas-build-abc", nil
+		case strings.Contains(cmd, "--version"):
+			return "/usr/local/bin/nixpacks", nil
+		case strings.Contains(cmd, "' plan '"):
+			return `{"variables":{}}`, nil
+		}
+		return "", nil
+	}}
+	var logs []string
+	pass := "a$$b"
+	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "my $app", testImageTag,
+		deployment.NixpacksCommands{Build: "npm run build -- --base=${BASE}"}, map[string]*string{"PASS": &pass}, nil, func(l string) { logs = append(logs, l) })
+	require.NoError(t, err)
+
+	const sandbox = "systemd-run --quiet --wait --pipe --collect --description=nixpacks -p User=65534 -p Group=65534" +
+		" -p TemporaryFileSystem=/:ro -p TemporaryFileSystem=/proc:ro -p BindReadOnlyPaths='/usr/local/bin/nixpacks'" +
+		" -p BindPaths='/tmp/paas-build-abc' -p PrivateNetwork=yes -p PrivateDevices=yes -p NoNewPrivileges=yes" +
+		` -p RuntimeMaxSec=300 -E "TOFT_EXEC=$TOFT_EXEC" '/usr/local/bin/nixpacks'`
+	// systemd expands ${VAR} and $VAR in a unit's command line and reads $$
+	// as $: every $ of the service's goes in doubled.
+	const dir, flags = `'/tmp/paas-build-abc/my $$app'`, ` '--build-cmd' 'npm run build -- --base=$${BASE}' '--env' 'PASS=a$$$$b'`
+	probe, ok := h.find("--version")
+	require.True(t, ok)
+	assert.Equal(t, `n=$(realpath -e -- "$(command -v nixpacks)") && [ "$(id -u)" = 0 ] && `+
+		strings.ReplaceAll(sandbox, "'/usr/local/bin/nixpacks'", `"$n"`)+
+		` --version >/dev/null 2>&1 && chown -hR 65534:65534 '/tmp/paas-build-abc' && printf %s "$n"`, probe.cmd)
+	plan, ok := h.find("' plan '")
+	require.True(t, ok)
+	assert.Equal(t, `e=$(mktemp) && { `+sandbox+` plan `+dir+flags+` 2>"$e"; s=$?; [ $s = 0 ] || cat "$e"; rm -f "$e"; exit $s; }`, plan.cmd)
+	build, ok := h.find("' build '")
+	require.True(t, ok)
+	// The folder is root's again before docker reads the Dockerfile in it.
+	assert.Equal(t, sandbox+" build "+dir+" --out "+dir+" --cache-key "+testServiceID+flags+" 2>&1 && chown -hR 0:0 '/tmp/paas-build-abc'", build.cmd)
+	assert.NotContains(t, strings.Join(logs, "\n"), "sandbox")
+}
+
+// A server that can't (no root login, no systemd, a nixpacks that needs the
+// server's libraries) runs nixpacks as its login, with the clean
+// environment compose gets and none of the login's own, and says so.
+func TestRemoteNixpacksWithoutItsSandbox(t *testing.T) {
+	h := nixpacksHost(`{"variables":{}}`)
+	inner := h.exec
+	h.exec = func(ctx context.Context, cmd string) (string, error) {
+		if strings.Contains(cmd, "--version") {
+			return "", errors.New("exit status 1")
+		}
+		return inner(ctx, cmd)
+	}
+	var logs []string
+	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+		deployment.NixpacksCommands{Build: "echo ${BASE} $$"}, nil, nil, func(l string) { logs = append(logs, l) })
+	require.NoError(t, err)
+	for _, step := range []string{"nixpacks plan", "nixpacks build"} {
+		c, ok := h.find(step)
+		require.True(t, ok, step)
+		assert.Contains(t, c.cmd, remoteCleanEnvPrefix+step, step)
+		assert.NotContains(t, c.cmd, "systemd-run", step)
+		assert.Contains(t, c.cmd, "'--build-cmd' 'echo ${BASE} $$'", step+": a shell's quoting is all the login's command needs")
+		assert.NotContains(t, c.cmd, "chown", step)
+	}
+	assert.Contains(t, strings.Join(logs, "\n"), "not in a sandbox")
+}
+
+// A link in the repository that leaves the build folder (to another
+// deploy's files, say) fails the build before nixpacks reads through it.
+func TestRemoteNixpacksRefusesALinkOutOfTheBuildFolder(t *testing.T) {
+	h := nixpacksHost(`{"variables":{}}`)
+	inner, found := h.exec, "/Procfile\n/src/other"
+	h.exec = func(ctx context.Context, cmd string) (string, error) {
+		if strings.Contains(cmd, "find ") {
+			return found, nil
+		}
+		return inner(ctx, cmd)
+	}
+	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+		deployment.NixpacksCommands{}, nil, nil, func(string) {})
+	require.ErrorIs(t, err, service.ErrInvalidConfig)
+	assert.Contains(t, err.Error(), "Procfile is a link")
+
+	// A link named with spaces only: the SSH client trims a reply, and the
+	// slash each line starts with is what is left of this one.
+	found = "/"
+	_, err = newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+		deployment.NixpacksCommands{}, nil, nil, func(string) {})
+	require.ErrorIs(t, err, service.ErrInvalidConfig)
+	for _, c := range h.recorded() {
+		assert.NotContains(t, c.cmd, "nixpacks plan")
+		assert.NotContains(t, c.cmd, "systemd-run")
+	}
+}
+
+// nixpacks writes a plan's static assets and its Nix files where their
+// names say, as the login where it has no sandbox: a plan that names one
+// outside nixpacks' own folder (a repository's nixpacks.toml can) writes
+// nothing.
+func TestRemoteNixpacksRefusesAPlanThatWritesOutsideItsFolder(t *testing.T) {
+	build := func(plan string) (*fakeHost, error) {
+		h := nixpacksHost(plan)
+		_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+			deployment.NixpacksCommands{}, nil, nil, func(string) {})
+		return h, err
+	}
+	for name, plan := range map[string]string{
+		"an asset above the folder":     `{"staticAssets":{"../../../../etc/cron.d/x":"* * * * * root id\n"}}`,
+		"an asset by its full path":     `{"staticAssets":{"ok.conf":"","/root/.ssh/authorized_keys":"ssh-ed25519 AAAA"}}`,
+		"a nixpkgs archive with a path": `{"phases":{"setup":{"nixpkgsArchive":"/../../../../etc/x"}}}`,
+	} {
+		h, err := build(plan)
+		require.ErrorIs(t, err, service.ErrInvalidConfig, name)
+		_, wrote := h.find("nixpacks build")
+		assert.False(t, wrote, name)
+	}
+	h, err := build(`{"staticAssets":{"nginx/site.conf":"server {}"},"phases":{"setup":{"nixpkgsArchive":"5148520bfab61f99fd25fb9ff7bfbb50dad3c9db"},"build":{}}}`)
+	require.NoError(t, err)
+	_, wrote := h.find("nixpacks build")
+	assert.True(t, wrote)
+}
+
+// NIXPACKS_CONFIG_FILE is read from the repository's folder as it is
+// written: one with a full path, or through "..", is a file of the
+// server's, and nixpacks doesn't start for it.
+func TestRemoteNixpacksConfigFileStaysInTheRepository(t *testing.T) {
+	build := func(file string) (*fakeHost, error) {
+		h := nixpacksHost(`{"variables":{}}`)
+		_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+			deployment.NixpacksCommands{}, map[string]*string{"NIXPACKS_CONFIG_FILE": &file}, nil, func(string) {})
+		return h, err
+	}
+	for _, file := range []string{"/tmp/paas-build-other/nixpacks.toml", "../paas-build-other/nixpacks.toml", "deploy/../../x.toml"} {
+		h, err := build(file)
+		require.ErrorIs(t, err, service.ErrInvalidConfig, file)
+		assert.ErrorContains(t, err, "NIXPACKS_CONFIG_FILE", file)
+		_, ran := h.find("nixpacks plan")
+		assert.False(t, ran, file)
+	}
+	h, err := build("deploy/nixpacks.toml")
+	require.NoError(t, err)
+	plan, _ := h.find("nixpacks plan")
+	assert.Contains(t, plan.cmd, "'--env' 'NIXPACKS_CONFIG_FILE=deploy/nixpacks.toml'")
+}
+
 // nixpacksHost is a server whose `nixpacks plan` prints plan.
 func nixpacksHost(plan string) *fakeHost {
 	return &fakeHost{exec: func(_ context.Context, cmd string) (string, error) {
@@ -772,6 +923,8 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 		deployment.NixpacksCommands{}, map[string]*string{"TOFT_GIT_SHA": &sha}, nil, func(string) {})
 	require.NoError(t, err)
 
+	probe, ok := h.find("--version")
+	require.True(t, ok, "the sandbox was tried")
 	var seq []string
 	for _, c := range h.recorded() {
 		if strings.Contains(c.cmd, "nixpacks") || strings.Contains(c.cmd, "docker") {
@@ -779,8 +932,10 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{
-		"rm -rf '/tmp/paas-build-abc/.nixpacks' && e=$(mktemp) && { nixpacks plan '/tmp/paas-build-abc' '--env' 'TOFT_GIT_SHA=abc' 2>\"$e\"; s=$?; [ $s = 0 ] || cat \"$e\"; rm -f \"$e\"; exit $s; }",
-		"nixpacks build '/tmp/paas-build-abc' --out '/tmp/paas-build-abc' --cache-key " + testServiceID + " '--env' 'TOFT_GIT_SHA=abc' 2>&1",
+		"rm -rf '/tmp/paas-build-abc/.nixpacks' && " + linksOutCmd("/tmp/paas-build-abc"),
+		probe.cmd,
+		"e=$(mktemp) && { " + remoteCleanEnvPrefix + "nixpacks plan '/tmp/paas-build-abc' '--env' 'TOFT_GIT_SHA=abc' 2>\"$e\"; s=$?; [ $s = 0 ] || cat \"$e\"; rm -f \"$e\"; exit $s; }",
+		remoteCleanEnvPrefix + "nixpacks build '/tmp/paas-build-abc' --out '/tmp/paas-build-abc' --cache-key " + testServiceID + " '--env' 'TOFT_GIT_SHA=abc' 2>&1",
 		`d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`,
 		"DOCKER_CONFIG='/tmp/paas-docker-abc' BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build -t " + testImageTag +
 			` --build-arg 'FOO=it'\''s $HOME' --build-arg 'NODE_ENV=production'` +
