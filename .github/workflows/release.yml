@@ -209,4 +209,7 @@ jobs:
           awk -v h="## ${TAG#v} (" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
           notes=(--generate-notes)
           if grep -q '[^[:space:]]' notes.md; then notes=(--notes-file notes.md); fi
+          # A tag with a "-" (v1.1.0-rc.1) is a pre-release: never "Latest",
+          # which the README's install command follows.
+          if [[ $TAG == *-* ]]; then notes+=(--prerelease); fi
           gh release create "$TAG" dist/install.sh dist/toft-agent-linux-* images/toft-images images/toft-images.sig --title "Toft $TAG" "${notes[@]}"

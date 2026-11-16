@@ -89,6 +89,10 @@ alias). Upgrade from 1.0.4.
 - A Compose service with a route, on a server that connects through its
   agent, pulls its image with the service's credentials. *(Agent 1.1.0 for
   Docker Hub credentials saved with `docker.io` as the registry.)*
+- A server that connects through its agent no longer keeps, in its
+  journal, the command line of every command Toft runs there. No password
+  or token was in them; a build's `--build-arg` values were. Lines already
+  written stay until the journal rotates. *(Agent 1.1.0.)*
 - A preview opened with an API key refuses a Nixpacks service for the
   reason that holds: its Dockerfile is written during the build.
 
