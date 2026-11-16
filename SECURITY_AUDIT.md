@@ -21,7 +21,7 @@ Notes from 2026-11-16:
 - npm audit --omit=dev (frontend): 0 vulnerabilities.
 - Secret scan over all 48 commits on master: only test fixtures, UI placeholders and AWS's documented example key (AKIAIOSFODNN7EXAMPLE). Nothing to rotate.
 - Baseline `go test ./...` on master in the audit container: `internal/docker` TestProbeScriptTimesTheRequestInMilliseconds fails (environment); TestRouteAccess and TestLogHub_SlowViewerIsCutOff failed once and passed on re-run (flaky).
-- Branch policy: this session could push only to `claude/optimistic-bell-x49nj2`; pushes to `security/*` and `security-audit-state` were refused. PR #24 therefore has that head branch. Low findings without PRs are marked `open-no-pr`.
+- Branch policy: pushes to `security/*` branches were refused by the session's permission policy (pushes to `claude/optimistic-bell-x49nj2` and `security-audit-state` were allowed). PR #24 therefore has head `claude/optimistic-bell-x49nj2`. The two low findings got no PR this run (`open-no-pr`); next run should open them (batched) if `security/*` pushes are allowed.
 
 ## Coverage map
 
