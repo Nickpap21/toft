@@ -6,6 +6,92 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.1.0 (2026-11-16)
+
+Builds run on BuildKit with a build cache per service, a deploy's registry
+login is its own, a cancelled command on a server you added stops there,
+and Nixpacks comes with Toft on the panel's server. One migration (0083, a
+unique index, with a rename of the later of two services that share an
+alias). Upgrade from 1.0.4.
+
+### Breaking
+
+- **A `docker login` made on a server is used by no deploy.** Until 1.0.4
+  a login someone ran on a server was every deploy's to pull with. Now a
+  deploy pulls with the credentials of its own service (Settings →
+  Credentials) and nothing else. **Before upgrading:** a service that pulls
+  a private image, or builds from a private base image, and has no
+  credentials of its own needs them added, or its next deploy fails at the
+  pull ("pull access denied"). Running containers are not touched.
+- **A compose file Toft can't read fails the deploy**, with the reason.
+  Before, the deploy went on without the platform's checks of the file.
+- **Builds on the panel's own server apply `.dockerignore`.** They sent
+  the whole repository before. A `.dockerignore` that hides a file the
+  Dockerfile copies now fails that build, as it already did on every
+  other server.
+- **`TOFT_EXEC` is a reserved variable name.** A compose file or its
+  `.env` that reads it is refused, and a service can't set it: it is the
+  mark a cancelled command is found by (below).
+
+### Builds
+
+- Git, Nixpacks and Compose builds run on BuildKit, with a pinned
+  Dockerfile frontend (a `# syntax=` line is not followed) and
+  `RUN --mount=type=cache` caches that belong to the service.
+- **A build pulls a private base image with the service's registry
+  login.** A Dockerfile whose `FROM` names a private image used to build
+  only where someone had logged the server in. A git or Nixpacks service
+  now has a Registry login under Settings → Credentials, and its builds
+  pull with it on the panel's server, on a server you add and on one that
+  connects through its agent. The login is in a Docker config made for
+  that build and removed after it; no `RUN` step can read it, and no other
+  service's build pulls with it.
+- Nixpacks comes with Toft for builds on the panel's own server (1.41.0).
+  A server you add still needs Nixpacks installed.
+- **Nixpacks on a server you add reads the build's files only.** It ran
+  there as the server's login and followed links in the repository: a
+  `Procfile` linked to another deploy's file put that file's line in the
+  plan and the deploy log. A repository with a link that leaves it now
+  fails a Nixpacks build, as on the panel's server, and Nixpacks runs in a
+  sandbox that sees its own binary and the build's files and nothing else
+  of the server. The sandbox takes a root login and the static Nixpacks
+  build (what its install script fetches); without them Nixpacks runs as
+  the login with none of its environment, and the deploy log says so.
+- **A `nixpacks.toml` can't have Nixpacks write outside its own folder.**
+  Nixpacks writes a plan's static assets, and a phase's Nix file, where
+  their names say, and a repository's `nixpacks.toml` chooses the names:
+  `"../../x"` as an asset's name was a file anywhere the build's user can
+  write. A plan that names one outside Nixpacks' folder now fails the
+  build before anything is written, on every server. Until 1.0.4 this
+  reached a server you added that has Nixpacks installed, as its login;
+  the panel's own server had no Nixpacks before this release.
+- A build on a server you add no longer has buildx run `git` in the
+  repository's files, as on the panel's server since this release.
+- Build and compose output arrive in the deploy log as they are written.
+- Wrong registry credentials fail at the pull, not at a login step.
+
+### Fixes
+
+- **A cancelled command stops on a server added over SSH.** OpenSSH passes
+  no signal on to a root login's command, so a cancelled deploy, a deleted
+  service or a deploy at its time limit left its build running on the
+  server (112 seconds in one test). Every command Toft runs there now
+  carries a mark, and a cancel ends the processes that carry it: a service
+  deleted mid-build answered after 2.6 and 4.0 seconds in the release's
+  tests, with nothing left on the server. If the panel itself goes away,
+  the command ends about 30 seconds after the deploy's time limit. A
+  server that connects through its agent is as before: its agent ends the
+  command.
+- A command on a server whose reply passes the 4 MB limit is stopped
+  there too; it was left running.
+- A deploy started by a push uses a registry login that has a token and no
+  username.
+- A Compose service with a route, on a server that connects through its
+  agent, pulls its image with the service's credentials. *(Agent 1.1.0 for
+  Docker Hub credentials saved with `docker.io` as the registry.)*
+- A preview opened with an API key refuses a Nixpacks service for the
+  reason that holds: its Dockerfile is written during the build.
+
 ## 1.0.4 (2026-11-15)
 
 One fix, to the time shown for a service's last health check. No
