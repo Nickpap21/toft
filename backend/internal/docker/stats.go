@@ -597,12 +597,11 @@ func newAttributor(targets []service.MetricsTarget) attributor {
 //
 // The platform's other containers from a tenant's image (slots, one-offs)
 // have their image's identity labels blanked (rollout.WithImageLabelsBlanked).
-// A build step of the control plane's builder (Docker's classic one) keeps
-// its base image's, so rule 2 skips a container created from a bare image
-// ID, as every such step is and as an image cannot change; compose names its
-// images. Remote servers build with BuildKit, whose steps are not
-// containers. (BuildKit on the control plane would share RUN --mount caches
-// across workspaces.)
+// A build step of Docker's classic builder (what a host whose docker has
+// no buildx builds with) keeps its base image's, so rule 2 skips a
+// container created from a bare image ID, as every such step is and as an
+// image cannot change; compose names its images. BuildKit's steps are not
+// containers.
 func (a attributor) owner(c hostContainer) string {
 	id, _ := a.attribute(c)
 	return id

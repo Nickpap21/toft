@@ -3,7 +3,6 @@ package docker
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,12 +34,6 @@ import (
 	"github.com/moby/go-archive"
 	"go.uber.org/zap"
 )
-
-// buildLogLine is the shape of a JSON line from the Docker build stream.
-type buildLogLine struct {
-	Stream string `json:"stream"`
-	Error  string `json:"error"`
-}
 
 // LocalOrchestrator manages Docker containers using the local Docker socket.
 // It implements deployment.Orchestrator.
@@ -126,16 +119,7 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 			dockerfilePath = filepath.Join(dir, "Dockerfile")
 		}
 		logFn(fmt.Sprintf("Building image %s...", imageTag))
-		// The stream can't be read twice: a copy for the retry, if there's room.
-		f, err := os.CreateTemp("", "paas-build-context-*")
-		if err != nil {
-			return o.buildFromContext(ctx, source, nil, dockerfilePath, imageTag, buildArgs, logFn)
-		}
-		defer os.Remove(f.Name())
-		defer f.Close()
-		sp := &spool{f: f}
-		again := func() (io.ReadCloser, error) { return sp.again(source) }
-		return o.buildFromContext(ctx, io.TeeReader(source, sp), again, dockerfilePath, imageTag, buildArgs, logFn)
+		return localBuild(ctx, source, dockerfilePath, imageTag, buildArgs, logFn)
 	}
 	tmpDir, err := os.MkdirTemp("", "paas-build-*")
 	if err != nil {
@@ -153,13 +137,7 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 		return err
 	}
 	logFn(fmt.Sprintf("Building %s with nixpacks...", imageTag))
-	args := append([]string{"build", buildDir, "--name", imageTag}, nixpacksCommandArgs(*nixpacks)...)
-	for k, v := range buildArgs {
-		if v != nil {
-			args = append(args, "--env", k+"="+*v)
-		}
-	}
-	return execStream(ctx, logFn, "nixpacks", args...)
+	return localNixpacks(ctx, buildDir, imageTag, *nixpacks, buildArgs, logFn)
 }
 
 // BuildFromGitNixpacks clones repoURL@branch locally, then builds via nixpacks.
@@ -182,13 +160,7 @@ func (o *LocalOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, b
 	}
 
 	logFn(fmt.Sprintf("[2/2] Building %s with nixpacks...", imageTag))
-	args := append([]string{"build", buildDir, "--name", imageTag}, nixpacksCommandArgs(cmds)...)
-	for k, v := range buildArgs {
-		if v != nil {
-			args = append(args, "--env", k+"="+*v)
-		}
-	}
-	return commit, execStream(ctx, logFn, "nixpacks", args...)
+	return commit, localNixpacks(ctx, buildDir, imageTag, cmds, buildArgs, logFn)
 }
 
 // Rollout runs a single-container deploy's rollout on the local Docker
@@ -404,17 +376,23 @@ func copyFile(src, dst string, perm fs.FileMode) error {
 func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceName, release, projectDir, composeFile string, envVars map[string]string, route *deployment.ComposeRoute, nets deployment.ComposeNetworks, limits map[string]deployment.ComposeLimit, auth *deployment.RegistryAuth, logFn func(string)) error {
 	projectName := rollout.ComposeProjectName(serviceID, serviceName)
 
-	if auth != nil && auth.Username != "" {
-		logFn(fmt.Sprintf("Logging in to registry %s...", auth.Server))
-		// The password goes on stdin: in an `echo <password> |` pipeline it would
-		// be on a command line, visible in the process list.
-		login := exec.CommandContext(ctx, "docker", "login", auth.Server, "-u", auth.Username, "--password-stdin")
-		login.Stdin = strings.NewReader(auth.Password)
-		if out, err := login.CombinedOutput(); err != nil {
-			return fmt.Errorf("docker login: %w: %s", err, string(out))
+	// The deploy has a Docker config of its own, holding its registry's
+	// credentials or nothing, not a `docker login` on the host: a login
+	// there is every other deploy's to pull with, and Toft's own would be
+	// for as long as the deploy runs, its logout ending theirs.
+	var raw []byte
+	if auth != nil && auth.Password != "" {
+		var err error
+		if raw, err = registryConfig(*auth, auth.Server); err != nil {
+			return err
 		}
-		defer exec.Command("docker", "logout", auth.Server).Run() //nolint:errcheck
 	}
+	cfg, cleanup, err := dockerConfigDir(raw)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	dockerCfg := []string{"DOCKER_CONFIG=" + cfg}
 
 	serviceEnv, dropped := composespec.ServiceEnv(envVars)
 	logDroppedEnv(dropped, logFn)
@@ -464,8 +442,12 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 		base := append([]string{"--project-directory", projectDir}, files...)
 		base = append(base, "--project-name", projectName)
 		out, err := localCompose(ctx, projectDir, serviceEnv, append(base, "config", "--images", route.Service)...).Output()
-		if image := singleImage(string(out)); err == nil && image != "" &&
-			exec.CommandContext(ctx, "docker", "pull", "--quiet", image).Run() == nil {
+		pull := func(image string) error {
+			cmd := exec.CommandContext(ctx, "docker", "pull", "--quiet", image)
+			cmd.Env = append(os.Environ(), dockerCfg...)
+			return cmd.Run()
+		}
+		if image := singleImage(string(out)); err == nil && image != "" && pull(image) == nil {
 			if keys, ok := routedImageViolations(ctx, o.dockerClient, image, allowed); ok && len(keys) > 0 {
 				err := routedImageError(route.Service, image, keys)
 				logFn("✗ " + err.Error())
@@ -478,13 +460,9 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 	base := append([]string{"--project-directory", projectDir}, files...)
 	base = append(base, "--project-name", projectName)
 	run := func(args ...string) error {
-		out, err := localCompose(ctx, projectDir, serviceEnv, append(slices.Clone(base), args...)...).CombinedOutput()
-		for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-			if line != "" {
-				logFn(line)
-			}
-		}
-		return err
+		cmd := localCompose(ctx, projectDir, serviceEnv, append(slices.Clone(base), args...)...)
+		cmd.Env = append(cmd.Env, dockerCfg...)
+		return runStream(cmd, logFn)
 	}
 	// The stack's routes are checked on its created containers, which
 	// carry their images' labels, before any starts, and again after up,
@@ -779,99 +757,107 @@ func (o *LocalOrchestrator) buildImage(ctx context.Context, buildContextDir, doc
 		return fmt.Errorf("create build context archive: %w", err)
 	}
 	defer buildContextTar.Close()
-	again := func() (io.ReadCloser, error) { return archive.TarWithOptions(buildContextDir, &archive.TarOptions{}) }
-	return o.buildFromContext(ctx, buildContextTar, again, dockerfilePath, imageTag, buildArgs, logFn)
+	return localBuild(ctx, buildContextTar, dockerfilePath, imageTag, buildArgs, logFn)
 }
 
-// buildFromContext builds imageTag from a build context given as a tar.
-// The classic builder's cache lists an image's children, then reads each:
-// one removed in between (another service's teardown, a prune) fails the
-// build with "unable to find image". That build runs again, once, from the
-// context again gives (nil: no retry).
-// ponytail: one retry; a removal racing both builds still fails the
-// deploy. Upgrade path: BuildKit for local builds, whose cache has no
-// such window.
-func (o *LocalOrchestrator) buildFromContext(ctx context.Context, buildContextTar io.Reader, again func() (io.ReadCloser, error), dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
-	err := o.buildOnce(ctx, buildContextTar, dockerfilePath, imageTag, buildArgs, logFn)
-	if err == nil || again == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "unable to find image") {
-		return err
-	}
-	retry, aerr := again()
-	if aerr != nil {
-		return err
-	}
-	defer retry.Close()
-	logFn(fmt.Sprintf("%v: an image it reused was removed meanwhile; building again...", err))
-	return o.buildOnce(ctx, retry, dockerfilePath, imageTag, buildArgs, logFn)
-}
-
-// spool keeps a copy of a build context as the build reads it, for its
-// retry. A write that fails (a full disk) drops the copy, never the build.
-type spool struct {
-	f   *os.File
-	err error
-}
-
-func (s *spool) Write(p []byte) (int, error) {
-	if s.err == nil {
-		_, s.err = s.f.Write(p)
-	}
-	return len(p), nil
-}
-
-// again is the whole context: what the build didn't read, then all of it.
-func (s *spool) again(rest io.Reader) (io.ReadCloser, error) {
-	if _, err := io.Copy(s, rest); err != nil {
-		return nil, err
-	}
-	if s.err != nil {
-		return nil, s.err
-	}
-	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	return io.NopCloser(s.f), nil
-}
-
-// buildOnce runs one build of imageTag, streaming its output to logFn.
-func (o *LocalOrchestrator) buildOnce(ctx context.Context, buildContextTar io.Reader, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
-	buildResponse, err := o.dockerClient.ImageBuild(ctx, buildContextTar, types.ImageBuildOptions{
-		Tags:           []string{imageTag},
-		Dockerfile:     dockerfilePath,
-		Remove:         true,
-		ForceRemove:    true,
-		SuppressOutput: false,
-		BuildArgs:      buildArgs,
-	})
+// localBuild runs docker build of imageTag on the local Docker, from a
+// build context given as a tar, with the Dockerfile at dockerfilePath
+// inside it: BuildKit where the CLI has buildx (the backend's image does),
+// the classic builder where it doesn't. buildArgs are followed by the two
+// arguments that keep the build to its service (buildArgList). The build
+// has the clean environment compose gets and a Docker config of its own,
+// empty: a registry login on this host is not this build's to pull with.
+func localBuild(ctx context.Context, contextTar io.Reader, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
+	kvs, err := buildArgList(imageTag, buildArgs)
 	if err != nil {
-		return fmt.Errorf("ImageBuild: %w", err)
+		return err
 	}
-	defer buildResponse.Body.Close()
-
-	if err := streamBuildOutput(buildResponse.Body, logFn); err != nil {
-		return fmt.Errorf("build failed: %w", err)
+	cfg, cleanup, err := dockerConfigDir(nil)
+	if err != nil {
+		return err
 	}
-
+	defer cleanup()
+	args := []string{"build", "-t", imageTag, "-f", dockerfilePath}
+	for _, kv := range kvs {
+		args = append(args, "--build-arg", kv)
+	}
+	cmd := exec.CommandContext(ctx, "docker", append(args, "-")...)
+	cmd.Stdin = contextTar
+	cmd.Env = append(localComposeEnv(nil), "DOCKER_CONFIG="+cfg)
+	// Cancelled (a deleted service, the deploy's time limit), the CLI gets
+	// to tell the builder to stop.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 30 * time.Second
+	if err := runStream(cmd, logFn); err != nil {
+		return fmt.Errorf("docker build: %w", err)
+	}
 	logFn(fmt.Sprintf("Image built: %s", imageTag))
 	return nil
 }
 
-// ─── Build-arg helpers ────────────────────────────────────────────────────────
-
-// buildArgsCLI returns a string of "--build-arg KEY=VALUE" flags for use in shell commands
-// (remote docker build). Values containing spaces or special characters are shell-quoted.
-func buildArgsCLI(buildArgs map[string]*string) string {
-	if len(buildArgs) == 0 {
-		return ""
+// dockerConfigDir makes a docker CLI config directory for one build or
+// deploy, holding config (a config.json; nil for none), and returns it
+// with what removes it. The link in it: the CLI's plugins (buildx,
+// compose) installed for this user, not system-wide, are found through
+// the config directory.
+func dockerConfigDir(config []byte) (string, func(), error) {
+	cfg, err := os.MkdirTemp("", "paas-docker-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create a docker config dir: %w", err)
 	}
-	var parts []string
-	for k, v := range buildArgs {
-		if v != nil {
-			parts = append(parts, fmt.Sprintf("--build-arg %s=%s", k, shellescape(*v)))
+	cleanup := func() { os.RemoveAll(cfg) }
+	if home, err := os.UserHomeDir(); err == nil {
+		_ = os.Symlink(filepath.Join(home, ".docker", "cli-plugins"), filepath.Join(cfg, "cli-plugins"))
+	}
+	if config != nil {
+		if err := os.WriteFile(filepath.Join(cfg, "config.json"), config, 0o600); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("write the registry credentials: %w", err)
 		}
 	}
-	return strings.Join(parts, " ")
+	return cfg, cleanup, nil
 }
+
+// localNixpacks builds imageTag from dir with Nixpacks, as
+// RemoteOrchestrator.nixpacksBuild does on a server: nixpacks plans and
+// writes the Dockerfile, localBuild runs it.
+func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+	serviceID, err := builtService(imageTag)
+	if err != nil {
+		return err
+	}
+	// nixpacks writes into dir/.nixpacks: one the repository brought (a
+	// link out of it, say) goes first.
+	if err := os.RemoveAll(filepath.Join(dir, ".nixpacks")); err != nil {
+		return fmt.Errorf("clear the nixpacks folder: %w", err)
+	}
+	flags := nixpacksArgs(cmds, buildArgs)
+	plan, err := exec.CommandContext(ctx, "nixpacks", append([]string{"plan", dir}, flags...)...).Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			logFn(strings.TrimSpace(string(exit.Stderr)))
+		}
+		return fmt.Errorf("nixpacks plan: %w", err)
+	}
+	vars, err := nixpacksVariables(plan)
+	if err != nil {
+		return err
+	}
+	write := exec.CommandContext(ctx, "nixpacks", append([]string{"build", dir, "--out", dir, "--cache-key", serviceID}, flags...)...)
+	write.WaitDelay = 30 * time.Second // a child that keeps the output open doesn't keep the deploy
+	if err := runStream(write, logFn); err != nil {
+		return fmt.Errorf("nixpacks build: %w", err)
+	}
+	contextTar, err := archive.TarWithOptions(dir, &archive.TarOptions{})
+	if err != nil {
+		return fmt.Errorf("create build context archive: %w", err)
+	}
+	defer contextTar.Close()
+	return localBuild(ctx, contextTar, ".nixpacks/Dockerfile", imageTag, vars, logFn)
+}
+
+// ─── Build-arg helpers ────────────────────────────────────────────────────────
 
 // nixpacksCommandArgs are the flags that replace Nixpacks' detected install
 // and build commands; none for "".
@@ -884,27 +870,6 @@ func nixpacksCommandArgs(cmds deployment.NixpacksCommands) []string {
 		args = append(args, "--build-cmd", c)
 	}
 	return args
-}
-
-// nixpacksEnvCLI returns a string of "--env KEY=VALUE" flags for nixpacks build.
-func nixpacksEnvCLI(buildArgs map[string]*string) string {
-	if len(buildArgs) == 0 {
-		return ""
-	}
-	var parts []string
-	for k, v := range buildArgs {
-		if v != nil {
-			parts = append(parts, fmt.Sprintf("--env %s=%s", k, shellescape(*v)))
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// shellescape wraps a value in single quotes for safe shell embedding.
-// Single quotes inside the value are handled by ending the quote, inserting a
-// literal single quote, and starting a new quoted string.
-func shellescape(v string) string {
-	return "'" + strings.ReplaceAll(v, "'", "'\\''") + "'"
 }
 
 // ─── Blue/Green slot helpers ──────────────────────────────────────────────────
@@ -1129,31 +1094,6 @@ func clonedCommit(branch string, logFn func(string), head func() (string, error)
 	return c
 }
 
-func streamBuildOutput(body io.Reader, logFn func(string)) error {
-	var buildErr error
-	err := lines.Read(body, func(raw string) {
-		if buildErr != nil {
-			return
-		}
-		var line buildLogLine
-		if err := json.Unmarshal([]byte(raw), &line); err != nil {
-			logFn(raw)
-			return
-		}
-		if line.Error != "" {
-			buildErr = errors.New(line.Error)
-			return
-		}
-		if msg := strings.TrimSpace(line.Stream); msg != "" {
-			logFn(msg)
-		}
-	})
-	if buildErr != nil {
-		return buildErr
-	}
-	return err
-}
-
 // dnsResolver is the ACME resolver for wildcard certificates (DNS-01), which
 // Traefik on a remote server has when the server has a DNS provider
 // (server.provision).
@@ -1251,19 +1191,26 @@ func traefikServiceName(serviceID string) string {
 	return fmt.Sprintf("paas-svc-%s", serviceID[:8])
 }
 
-// execStream runs a command and forwards combined stdout/stderr line-by-line to logFn.
-func execStream(ctx context.Context, logFn func(string), name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		if line != "" {
-			logFn(line)
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("command failed: %w", err)
-	}
-	return nil
+// runStream runs cmd and hands logFn each line it writes, stdout and
+// stderr, as it is written: a build's log is followed while it runs.
+func runStream(cmd *exec.Cmd, logFn func(string)) error {
+	pr, pw := io.Pipe()
+	cmd.Stdout, cmd.Stderr = pw, pw
+	read := make(chan struct{})
+	// Ends when pw closes, which is right after cmd does.
+	go func() {
+		defer close(read)
+		_ = lines.Read(pr, func(line string) {
+			if line != "" {
+				logFn(line)
+			}
+		})
+		_, _ = io.Copy(io.Discard, pr) // a failed read never blocks the command's writes
+	}()
+	err := cmd.Run()
+	pw.Close()
+	<-read
+	return err
 }
 
 // shellEscape wraps a string in single quotes, escaping any existing single quotes.

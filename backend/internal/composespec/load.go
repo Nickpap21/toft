@@ -216,6 +216,30 @@ func Inspect(ctx context.Context, src Source) (violations []Violation, services 
 	return violations, services
 }
 
+// BuiltServices returns the names of the file's services that have a
+// build, sorted, including those in profiles that are not enabled. A file
+// that was not loaded is an error: its builds are unknown.
+func BuiltServices(ctx context.Context, src Source) ([]string, error) {
+	project, vs, err := Load(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+	if project == nil {
+		return nil, fmt.Errorf("%w: %d violations", ErrInvalid, len(vs))
+	}
+	built := []string{}
+	for _, name := range sortedServiceNames(project) {
+		s, ok := project.Services[name]
+		if !ok {
+			s = project.DisabledServices[name]
+		}
+		if s.Build != nil {
+			built = append(built, name)
+		}
+	}
+	return built, nil
+}
+
 // InspectLimits is Inspect that also returns each service's memory limit
 // from the file in MiB, rounded up (0 when the file sets none): mem_limit,
 // else deploy.resources.limits.memory. It covers the same services as the

@@ -105,6 +105,22 @@ func TestAgentRunsAComposeUp(t *testing.T) {
 	}
 }
 
+// Without credentials the up still runs with a docker config of its own,
+// holding none: a login made on the server is not the deploy's to pull with.
+func TestAgentComposeWithoutCredentialsHasAnEmptyConfig(t *testing.T) {
+	out, release := fakeCompose(t)
+	m := testRollouts(fakedocker.New(t))
+	req := composeRequest(release)
+	req.Compose.Auth = nil
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if cfg := read(t, out+"/config"); cfg != `{"auths":{}}` {
+		t.Fatalf("docker config %q", cfg)
+	}
+}
+
 // A stack whose images route themselves is taken down after up.
 func TestAgentTakesDownAStackThatRoutesItself(t *testing.T) {
 	out, release := fakeCompose(t)
@@ -252,8 +268,8 @@ func TestAgentResumesAComposeUpOnce(t *testing.T) {
 	if strings.Count(read(t, out+"/args"), "\n") != 2 { // create, then start
 		t.Fatalf("args %q", read(t, out+"/args"))
 	}
-	if _, err := os.Stat(out + "/config"); !os.IsNotExist(err) {
-		t.Fatal("the credentials were journaled")
+	if cfg := read(t, out+"/config"); cfg != `{"auths":{}}` {
+		t.Fatalf("the credentials were journaled: %q", cfg)
 	}
 
 	rec, _ = readRecord("dep-c")

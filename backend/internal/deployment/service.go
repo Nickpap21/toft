@@ -323,9 +323,13 @@ type ComposeNetworks struct {
 	// Services are the compose file's services. Every one but the routed
 	// service gets traefik.enable=false, so routers its image defines never
 	// go live on a network Traefik joins (the environment network, or the
-	// control plane's under legacy). Nil when the file could not be loaded;
-	// the check after up still takes such a stack down.
+	// control plane's under legacy).
 	Services []string
+	// Built are the ones of Services that have a build: an override gives
+	// each the build arguments that keep it to this service (D-167). Only
+	// those: build.args on a service without a build makes compose build
+	// it from the project directory and tag the result with its image's name.
+	Built []string
 }
 
 // PolicyChecker is the deploy policy (D-19), checked on every deploy.
@@ -2543,7 +2547,6 @@ func (s *Service) runComposePipeline(ctx context.Context, deploymentID string, i
 		if !ok {
 			return
 		}
-		warnUnlistedLimits(input, nets, appendLog)
 
 		input.clock.at("compose up")
 		appendLog("[2/2] Uploading repo and running docker compose up...")
@@ -2580,7 +2583,6 @@ func (s *Service) runComposePipeline(ctx context.Context, deploymentID string, i
 	if !ok {
 		return
 	}
-	warnUnlistedLimits(input, nets, appendLog)
 	input.clock.at("compose up")
 	err = orch.RunCompose(ctx, deploymentID, input.ServiceID, input.ServiceName, composeYAML, envMap, route, nets, input.ComposeLimits, input.RegistryAuth,
 		rollout.Hooks{Log: appendLog, HandOff: s.handOffHook(ctx, deploymentID, input, imageTag, true), Gone: s.agentGone(ctx, input.ServiceID),
@@ -2625,20 +2627,19 @@ func (s *Service) finishCompose(ctx context.Context, deploymentID string, input 
 // messages can quote interpolated values.
 func (s *Service) composeNetworks(ctx context.Context, deploymentID string, input TriggerInput, src composespec.Source, appendLog func(string)) (nets ComposeNetworks, ok bool) {
 	plan := input.netPlan
+	// A file whose builds can't be listed isn't deployed: a build no
+	// override names would share its cache mounts with every service on
+	// the server, and run the Dockerfile frontend it asks for (D-167).
+	built, err := composespec.BuiltServices(ctx, src)
+	if err != nil {
+		msg := "the compose file could not be read, so its builds can't be kept apart from other services'"
+		appendLog("✗ " + msg)
+		s.failAndPublish(ctx, deploymentID, input, "", msg)
+		return ComposeNetworks{}, false
+	}
 	if plan.Legacy {
 		_, services := composespec.Inspect(ctx, src)
-		if services == nil {
-			// Without the list no override names the stack's services, so
-			// none would get gVisor (D-95).
-			if input.security.Runtime != "" {
-				msg := "the compose file's services could not be listed, so they can't be given gVisor"
-				appendLog("✗ " + msg)
-				s.failAndPublish(ctx, deploymentID, input, "", msg)
-				return ComposeNetworks{}, false
-			}
-			appendLog("→ the compose file's services could not be listed; routes its images define are checked after up")
-		}
-		return ComposeNetworks{Home: plan.Home.Name, Services: services, Security: input.security}, true
+		return ComposeNetworks{Home: plan.Home.Name, Services: services, Built: built, Security: input.security}, true
 	}
 	override, keys, services, vs, err := composespec.IsolateNetworks(ctx, src, plan.Home.Name, s.legacyNetworks)
 	if err != nil || len(vs) > 0 {
@@ -2652,20 +2653,12 @@ func (s *Service) composeNetworks(ctx context.Context, deploymentID string, inpu
 		s.failAndPublish(ctx, deploymentID, input, "", msg)
 		return ComposeNetworks{}, false
 	}
-	nets = ComposeNetworks{Isolated: true, Home: plan.Home.Name, Override: override, Services: services, Security: input.security}
+	nets = ComposeNetworks{Isolated: true, Home: plan.Home.Name, Override: override, Services: services, Built: built, Security: input.security}
 	if len(keys) > 0 {
 		nets.RouteKey = keys[0]
 		appendLog(fmt.Sprintf("→ compose network %s points at %s", strings.Join(keys, ", "), plan.Home.Name))
 	}
 	return nets, true
-}
-
-// warnUnlistedLimits says so when the panel's limits cannot be applied
-// because the file's services are unknown (composeOverrides writes none).
-func warnUnlistedLimits(input TriggerInput, nets ComposeNetworks, appendLog func(string)) {
-	if len(input.ComposeLimits) > 0 && nets.Services == nil {
-		appendLog("warning: the compose file's services could not be listed; the memory limits set in the panel are not applied")
-	}
 }
 
 // publishCompose runs PrepareNetworks again once a compose stack is up, so

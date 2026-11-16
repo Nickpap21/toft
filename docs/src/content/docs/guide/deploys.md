@@ -60,6 +60,20 @@ Settings → Source offers two builders:
   install, build and start commands it detects. Nixpacks must be installed on
   the server.
 
+Builds run on BuildKit, and each service's builds are kept apart from every
+other service's on the server:
+
+- A `RUN --mount=type=cache` cache belongs to the service. Its next build
+  finds it; no other service's build can read it or write to it.
+- Every build uses the Dockerfile syntax Toft ships with (`docker/dockerfile:1`,
+  pinned). A `# syntax=` line in a Dockerfile is not followed.
+- A build has no secrets: `--mount=type=secret` and `--mount=type=ssh` get
+  nothing, and `--network=host` is refused.
+- A build pulls its base images without a login, even where someone ran
+  `docker login` on the server.
+
+The first two also hold for the images a Compose stack builds.
+
 Only variables with a public framework prefix (`NEXT_PUBLIC_`, `VITE_`,
 `REACT_APP_`, `NG_APP_`) are passed to the build as build arguments, since
 their values end up in the browser bundle anyway. Everything else, secrets
@@ -103,6 +117,11 @@ its generated password at the first start. Uptime Kuma, Plausible, n8n and
 Ghost make whoever opens them first their admin, so they start behind a
 temporary login (user `toft`): set up the app's admin account, then turn the
 login off in Settings → Access.
+
+A private registry's login in Settings → Credentials is used by that
+service's deploy only, for the images it pulls and the base images it
+builds from. A `docker login` someone ran on the server is used by no
+deploy: a service that pulls a private image needs its own credentials.
 
 Compose replaces containers in place, so a Compose deploy has no blue/green
 switch.
