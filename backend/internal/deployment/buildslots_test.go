@@ -75,3 +75,60 @@ func TestClockPausesWhileWaitingForABuildSlot(t *testing.T) {
 	require.True(t, errors.As(context.Cause(ctx), &timedOut))
 	assert.Equal(t, 5, timedOut.Minutes)
 }
+
+// The clock's context says when the limit falls (a command on a server is
+// started with it, pkg/sshclient): the end of the time left while the
+// clock runs, and no deadline of its own while it waits or after it stops.
+func TestClockContextDeadline(t *testing.T) {
+	ctx, clock := startClock(context.Background(), 5)
+	defer clock.stop()
+	end, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(5*time.Minute), end, time.Second)
+	again, _ := ctx.Deadline()
+	assert.Equal(t, end, again, "the same instant each time it is asked")
+
+	clock.pause()
+	_, ok = ctx.Deadline()
+	assert.False(t, ok, "paused")
+
+	time.Sleep(20 * time.Millisecond)
+	clock.resume()
+	resumed, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.True(t, resumed.After(end), "the wait moved the end")
+
+	clock.stop()
+	_, ok = ctx.Deadline()
+	assert.False(t, ok, "no limit any more")
+
+	// An earlier deadline of the parent's is the one that counts, and the
+	// parent's is all there is once the clock stops.
+	parent, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	want, _ := parent.Deadline()
+	ctx, clock = startClock(parent, 5)
+	got, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+	clock.stop()
+	got, ok = ctx.Deadline()
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+
+	// The cause of the limit still reaches what is derived from it.
+	old := timeoutUnit
+	timeoutUnit = time.Millisecond
+	defer func() { timeoutUnit = old }()
+	ctx, clock = startClock(context.Background(), 5)
+	defer clock.stop()
+	child, cancelChild := context.WithTimeout(ctx, time.Hour)
+	defer cancelChild()
+	select {
+	case <-child.Done():
+	case <-time.After(time.Second):
+		t.Fatal("the limit never reached a derived context")
+	}
+	var timedOut *TimedOutError
+	assert.True(t, errors.As(context.Cause(child), &timedOut))
+}

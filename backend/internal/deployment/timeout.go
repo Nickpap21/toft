@@ -44,7 +44,37 @@ func startClock(parent context.Context, minutes int) (context.Context, *deployCl
 	limit := time.Duration(minutes) * timeoutUnit
 	c := &deployClock{left: limit, since: time.Now(), running: true}
 	c.timer = time.AfterFunc(limit, func() { cancel(&TimedOutError{Minutes: minutes}) })
-	return ctx, c
+	return clockContext{ctx, c}, c
+}
+
+// clockContext is the clock's context with the limit as its deadline, so
+// what a deploy starts knows when it falls: a command on a server is
+// started under `timeout` with it (pkg/sshclient) and ends there when the
+// panel is no longer around to cancel it. A paused or stopped clock has no
+// deadline of its own.
+//
+// ponytail: context.WithTimeout on this context sets no timer of its own
+// when the clock ends sooner, and leans on the clock's cancel. A timeout
+// made while the clock runs and still in use after stop() (no caller today:
+// the agent hand-off that stops it follows context.WithoutCancel) would
+// never fire; give those a context from before startClock if one appears.
+type clockContext struct {
+	context.Context
+	clock *deployClock
+}
+
+func (c clockContext) Deadline() (time.Time, bool) {
+	parent, ok := c.Context.Deadline()
+	c.clock.mu.Lock()
+	defer c.clock.mu.Unlock()
+	if !c.clock.running {
+		return parent, ok
+	}
+	end := c.clock.since.Add(c.clock.left)
+	if ok && parent.Before(end) {
+		return parent, true
+	}
+	return end, true
 }
 
 // pause stops the clock until resume.

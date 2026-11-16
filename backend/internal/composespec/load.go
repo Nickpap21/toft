@@ -391,7 +391,8 @@ var RunEnv = []string{"PATH", "HOME", "DOCKER_HOST", "XDG_RUNTIME_DIR"}
 // plugin. Every one of those is either a reserved CLI name (IsReservedCLIEnv)
 // or OTEL_RESOURCE_ATTRIBUTES, which the docker CLI rewrites even when the
 // service sets it. COMPOSE_PROJECT_NAME is set by compose itself, to the
-// project name the check uses too, so reading it is fine.
+// project name the check uses too, so reading it is fine. On a server added
+// over SSH the command also carries TOFT_EXEC (reservedCLIEnvNames).
 func IsPlatformEnv(name string) bool {
 	if name == consts.ComposeProjectName {
 		return false
@@ -508,6 +509,11 @@ var reservedCLIEnvNames = map[string]bool{
 	"GIT_ASKPASS": true, "GIT_EXEC_PATH": true, "GIT_DIR": true, "GIT_WORK_TREE": true,
 	"GIT_PROXY_COMMAND": true, "GIT_EXTERNAL_DIFF": true, "GIT_TEMPLATE_DIR": true,
 	"GIT_INDEX_FILE": true, "GIT_OBJECT_DIRECTORY": true, "GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
+	// Not a CLI setting: the mark a command on a server added over SSH is
+	// ended by when it is cancelled (pkg/sshclient), random per command and
+	// in compose's environment there (docker's remoteCleanEnvPrefix). A
+	// compose file must not read it, nor a service set it.
+	"TOFT_EXEC": true,
 }
 
 // IsReservedCLIEnv reports whether an environment variable name is one the

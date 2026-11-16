@@ -26,13 +26,14 @@ const testServiceID = "0a1b2c3d-1111-2222-3333-444455556666"
 
 func TestRemoteCompose_ExactCommand(t *testing.T) {
 	got := remoteCompose("--project-directory '/tmp/paas-compose-Ab12' -f '/tmp/paas-compose-Ab12/docker-compose.yml' --project-name 'paas-web-0a1b2c3d' up -d 2>&1")
-	want := `env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ` +
+	want := `env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ${TOFT_EXEC:+"TOFT_EXEC=$TOFT_EXEC"} ` +
 		`docker compose --project-directory '/tmp/paas-compose-Ab12' -f '/tmp/paas-compose-Ab12/docker-compose.yml' --project-name 'paas-web-0a1b2c3d' up -d 2>&1`
 	assert.Equal(t, want, got)
 }
 
 // The prefix, run by a real POSIX shell with an SSH-like environment, leaves
-// exactly PATH, HOME and (when set) DOCKER_HOST and XDG_RUNTIME_DIR.
+// exactly PATH, HOME and (when set) DOCKER_HOST, XDG_RUNTIME_DIR and the
+// mark a cancelled command is found by (TOFT_EXEC, pkg/sshclient).
 func TestRemoteCleanEnv_InAShell(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -63,6 +64,10 @@ func TestRemoteCleanEnv_InAShell(t *testing.T) {
 	t.Run("empty docker variables are left out", func(t *testing.T) {
 		assert.Equal(t, []string{"HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin"},
 			run(t, append(sshSession, "DOCKER_HOST=", "XDG_RUNTIME_DIR=")))
+	})
+	t.Run("the command's mark stays", func(t *testing.T) {
+		assert.Equal(t, []string{"HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin", "TOFT_EXEC=MARK"},
+			run(t, append(sshSession, "TOFT_EXEC=MARK")))
 	})
 	t.Run("with docker variables, one with a space", func(t *testing.T) {
 		got := run(t, append(sshSession, "DOCKER_HOST=unix:///run/user/1000/docker.sock", "XDG_RUNTIME_DIR=/run/user/1000 x"))
