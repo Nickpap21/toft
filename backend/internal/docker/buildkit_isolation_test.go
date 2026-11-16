@@ -213,9 +213,11 @@ func privateRegistry(t *testing.T, user, password string) string {
 	name := "toft-test-registry-" + strings.ToLower(rand.Text())
 	// On the Docker host's own loopback (the daemon pulls from there, and a
 	// registry on 127.0.0.1 may speak plain HTTP), at a port picked at
-	// random. Its storage is a tmpfs, so no volume is left behind.
+	// random. Its storage is a tmpfs, so no volume is left behind. Without
+	// its debug server: that one takes the host's port 5001, and the
+	// registry exits where something else has it.
 	host := fmt.Sprintf("127.0.0.1:%d", 20000+mrand.IntN(40000))
-	docker("create", "--name", name, "--network", "host", "--tmpfs", "/var/lib/registry", "-e", "REGISTRY_HTTP_ADDR="+host,
+	docker("create", "--name", name, "--network", "host", "--tmpfs", "/var/lib/registry", "-e", "REGISTRY_HTTP_ADDR="+host, "-e", "REGISTRY_HTTP_DEBUG_ADDR=",
 		"-e", "REGISTRY_AUTH=htpasswd", "-e", "REGISTRY_AUTH_HTPASSWD_REALM=test", "-e", "REGISTRY_AUTH_HTPASSWD_PATH=/htpasswd", "registry:3")
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 	docker("cp", htpasswd, name+":/htpasswd")
