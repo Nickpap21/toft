@@ -104,13 +104,11 @@ func (m *rollouts) composeUp(ctx context.Context, id string, c rollout.ComposeUp
 			env = append(env, k+"="+v)
 		}
 	}
-	if c.Auth != nil && c.Auth.Password != "" {
-		cfg, err := dockerConfig(dir, *c.Auth)
-		if err != nil {
-			return fail("write the registry credentials: " + err.Error())
-		}
-		env = append(env, "DOCKER_CONFIG="+cfg)
+	cfg, err := dockerConfig(dir, c.Auth)
+	if err != nil {
+		return fail("write the registry credentials: " + err.Error())
 	}
+	env = append(env, "DOCKER_CONFIG="+cfg)
 
 	logf, err := os.OpenFile(logFile(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -215,19 +213,22 @@ func waitForUp(ctx context.Context, pid int, project string) {
 }
 
 // dockerConfig writes a docker CLI config in dir with the registry's
-// credentials, so they never reach the host's own; the CLI plugins
+// credentials (none without a), so they never reach the host's own and a
+// login made on the host is not the deploy's to pull with; the CLI plugins
 // (compose among them) are linked from the host's.
-func dockerConfig(dir string, a rollout.RegistryAuth) (string, error) {
-	server, user := a.Server, a.Username
-	if server == "" {
-		server = "https://index.docker.io/v1/"
+func dockerConfig(dir string, a *rollout.RegistryAuth) (string, error) {
+	auths := map[string]any{}
+	if a != nil && a.Password != "" {
+		server, user := a.Server, a.Username
+		if server == "" {
+			server = "https://index.docker.io/v1/"
+		}
+		if user == "" {
+			user = "token"
+		}
+		auths[server] = map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + a.Password))}
 	}
-	if user == "" {
-		user = "token"
-	}
-	raw, err := json.Marshal(map[string]any{"auths": map[string]any{
-		server: map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + a.Password))},
-	}})
+	raw, err := json.Marshal(map[string]any{"auths": auths})
 	if err != nil {
 		return "", err
 	}

@@ -603,3 +603,34 @@ func TestInspectLimits_MemoryFromTheFile(t *testing.T) {
 	_, svcs := composespec.Inspect(context.Background(), src)
 	assert.Equal(t, services, svcs)
 }
+
+// A build a service gets from another file (extends, include) or keeps in
+// a profile that is off is one of the stack's builds: a deploy gives each
+// its build arguments by name, and one it missed would build without them.
+func TestBuiltServicesFollowsExtendsIncludesAndProfiles(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"docker-compose.yml": `
+include:
+  - ./extra.yml
+services:
+  web:
+    extends:
+      file: base.yml
+      service: base
+  db:
+    image: postgres:16
+  tools:
+    build: ./tools
+    profiles: [debug]
+`,
+		"base.yml":  "services:\n  base:\n    build: .\n",
+		"extra.yml": "services:\n  worker:\n    build:\n      context: ./worker\n",
+	})
+	built, err := composespec.BuiltServices(context.Background(), composespec.Source{Root: root, File: "docker-compose.yml", ProjectName: "paas-test-12345678"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tools", "web", "worker"}, built)
+
+	_, err = composespec.BuiltServices(context.Background(), composespec.Source{Root: root, File: "missing.yml", ProjectName: "paas-test-12345678"})
+	assert.Error(t, err, "a file that can't be read has unknown builds")
+}

@@ -8,7 +8,8 @@ on:
   pull_request:
   # release.yml runs these first: a release is gated like every merge.
   workflow_call:
-  # Daily, for the accessibility check's slowest pass (the frontend job).
+  # Daily, for the accessibility check's slowest pass (the frontend job)
+  # and the Dockerfile frontend's pin.
   schedule:
     - cron: "41 4 * * *"
 
@@ -104,6 +105,16 @@ jobs:
       # is most of the step's time: a release and the daily run only.
       - run: npx playwright install --with-deps chromium
       - run: npm run a11y -- ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/')) && '--each-read' || '' }}
+
+  # Daily only: a new docker/dockerfile release fails this run, never a
+  # push that has nothing to do with it.
+  dockerfile-frontend:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Dockerfile frontend (docker/dockerfile:1 newer than the pin in backend/internal/docker/buildkit.go fails)
+        run: scripts/dockerfile-frontend.sh
 
   # Every commit of a pull request is signed off (DCO, CONTRIBUTING.md).
   # Dependabot signs its commits off too.

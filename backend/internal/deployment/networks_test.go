@@ -162,6 +162,36 @@ func TestPipeline_LegacyComposeListsItsServicesForTheGuard(t *testing.T) {
 	assert.Equal(t, []string{"compose"}, orch.recorded())
 	orch.mu.Lock()
 	defer orch.mu.Unlock()
-	assert.Equal(t, deployment.ComposeNetworks{Home: "paas-network", Services: []string{"web"}}, orch.nets,
+	assert.Equal(t, deployment.ComposeNetworks{Home: "paas-network", Services: []string{"web"}, Built: []string{}}, orch.nets,
 		"networks unchanged; services listed so unrouted ones get traefik.enable=false")
+}
+
+// The services that have a build are listed for the override that keeps
+// their builds to this service (D-167), under either kind of app network;
+// a file whose builds can't be listed is not deployed.
+func TestPipeline_ComposeListsItsBuiltServices(t *testing.T) {
+	const content = "services:\n  web:\n    build: .\n  db:\n    image: postgres\n  job:\n    build: ./job\n    profiles: [manual]\n"
+	for name, isolated := range map[string]bool{"legacy": false, "isolated": true} {
+		t.Run(name, func(t *testing.T) {
+			repo := &mockRepo{createdID: "dep-compose-built"}
+			orch := &mockOrchestrator{}
+			svc := newTestService(repo, &mockFactory{orch: orch}, &mockStatusUpdater{})
+			if isolated {
+				svc.WithAppNetworks(true, "paas-network", stubPlanner{plan: isolatedPlan()})
+			}
+			runDeploy(t, svc, repo, composeInput(content), deployment.StatusRunning)
+			orch.mu.Lock()
+			defer orch.mu.Unlock()
+			assert.Equal(t, []string{"job", "web"}, orch.nets.Built)
+		})
+	}
+
+	repo := &mockRepo{createdID: "dep-compose-unread"}
+	orch := &mockOrchestrator{}
+	svc := newTestService(repo, &mockFactory{orch: orch}, &mockStatusUpdater{})
+	runDeploy(t, svc, repo, composeInput("services:\n  web:\n    build: .\n    no_such_key: 1\n"), deployment.StatusFailed)
+	assert.NotContains(t, orch.recorded(), "compose")
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	assert.Contains(t, strings.Join(repo.logMessages, "\n"), "its builds can't be kept apart")
 }

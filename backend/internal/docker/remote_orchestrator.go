@@ -111,8 +111,6 @@ func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, 
 
 	// Always use the repo root as build context. When baseDir is set, point -f at the
 	// Dockerfile inside that subdirectory so monorepo root-level files are accessible.
-	buildArgFlags := buildArgsCLI(buildArgs)
-	dockerfileFlag := ""
 	// -f must be absolute: each ExecStream call is a fresh SSH session with no
 	// guaranteed cwd, so a path relative to tmpDir (e.g. "api/Dockerfile") resolves
 	// against the session's home directory instead of the cloned repo.
@@ -124,17 +122,81 @@ func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, 
 	if err := o.insideBuild(ctx, tmpDir, dockerfilePath); err != nil {
 		return commit, err
 	}
-	if baseDir != "" {
-		dockerfileFlag = fmt.Sprintf("-f %s ", shellEscape(dockerfilePath))
+	if baseDir == "" {
+		dockerfilePath = ""
 	}
 	logFn("Building Docker image on remote...")
-	buildCmd := fmt.Sprintf("docker build -t %s %s %s%s 2>&1", imageTag, buildArgFlags, dockerfileFlag, tmpDir)
-	if err := o.streamRetry(ctx, buildCmd, logFn); err != nil {
-		return commit, fmt.Errorf("remote docker build: %w", err)
+	if err := o.dockerBuild(ctx, imageTag, buildArgs, dockerfilePath, tmpDir, logFn); err != nil {
+		return commit, err
 	}
 
 	logFn(fmt.Sprintf("Image built: %s", imageTag))
 	return commit, nil
+}
+
+// dockerBuild runs docker build of imageTag from dir on the server, with
+// dockerfile ("" is dir's own) and buildArgs, then the two arguments that
+// keep the build to its service (buildArgList). The build has a Docker
+// config of its own, empty: a registry login on the server (a compose
+// deploy's, or one made by hand) is not this build's to pull with, and a
+// builder someone selected there is not the one it runs on.
+func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, buildArgs map[string]*string, dockerfile, dir string, logFn func(string)) error {
+	args, err := buildArgList(imageTag, buildArgs)
+	if err != nil {
+		return err
+	}
+	cfg, cleanup, err := o.dockerConfigDir(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	cmd := cfg + "docker build -t " + imageTag
+	for _, a := range args {
+		cmd += " --build-arg " + shellEscape(a)
+	}
+	if dockerfile != "" {
+		cmd += " -f " + shellEscape(dockerfile)
+	}
+	if err := o.streamRetry(ctx, cmd+" "+shellEscape(dir)+" 2>&1", logFn); err != nil {
+		return fmt.Errorf("remote docker build: %w", err)
+	}
+	return nil
+}
+
+// nixpacksBuild builds imageTag from dir on the server with Nixpacks:
+// nixpacks plans and writes the Dockerfile (dir/.nixpacks), and Toft runs
+// the docker build nixpacks would have run, with the plan's variables as
+// its build arguments (nixpacksVariables). The cache key is the service's,
+// so its builds reuse their cache mounts. nixpacks must be installed on
+// the server.
+func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+	serviceID, err := builtService(imageTag)
+	if err != nil {
+		return err
+	}
+	flags := ""
+	for _, a := range nixpacksArgs(cmds, buildArgs) {
+		flags += " " + shellEscape(a) // the commands are user input
+	}
+	out := shellEscape(dir + "/.nixpacks")
+	// nixpacks writes into dir/.nixpacks: one the repository brought (a
+	// link out of it, say) goes first.
+	// The plan is nixpacks' stdout; what it says beside it is logged when it fails.
+	plan, err := o.host.Exec(ctx, "rm -rf "+out+` && e=$(mktemp) && { nixpacks plan `+shellEscape(dir)+flags+` 2>"$e"; s=$?; [ $s = 0 ] || cat "$e"; rm -f "$e"; exit $s; }`)
+	if err != nil {
+		logFn(plan)
+		return fmt.Errorf("remote nixpacks plan: %w", err)
+	}
+	vars, err := nixpacksVariables([]byte(plan))
+	if err != nil {
+		return err
+	}
+	logFn(fmt.Sprintf("Building %s with nixpacks on remote...", imageTag))
+	write := fmt.Sprintf("nixpacks build %s --out %s --cache-key %s%s 2>&1", shellEscape(dir), shellEscape(dir), serviceID, flags)
+	if err := o.streamRetry(ctx, write, logFn); err != nil {
+		return fmt.Errorf("remote nixpacks build: %w", err)
+	}
+	return o.dockerBuild(ctx, imageTag, vars, dir+"/.nixpacks/Dockerfile", dir, logFn)
 }
 
 // BuildFromArchive unpacks source, a commit's tree as a tar (D-77), into a
@@ -167,24 +229,17 @@ func (o *RemoteOrchestrator) BuildFromArchive(ctx context.Context, source io.Rea
 		return err
 	}
 	if nixpacks != nil {
-		logFn(fmt.Sprintf("Building %s with nixpacks on remote...", imageTag))
-		cmdFlags := ""
-		for _, a := range nixpacksCommandArgs(*nixpacks) {
-			cmdFlags += " " + shellEscape(a)
-		}
-		buildCmd := fmt.Sprintf("nixpacks build %s --name %s%s %s 2>&1", shellEscape(dir), imageTag, cmdFlags, nixpacksEnvCLI(buildArgs))
-		if err := o.streamRetry(ctx, buildCmd, logFn); err != nil {
-			return fmt.Errorf("remote nixpacks build: %w", err)
+		if err := o.nixpacksBuild(ctx, dir, imageTag, *nixpacks, buildArgs, logFn); err != nil {
+			return err
 		}
 	} else {
-		dockerfileFlag := ""
+		dockerfile := ""
 		if baseDir != "" {
-			dockerfileFlag = fmt.Sprintf("-f %s ", shellEscape(filepath.Join(dir, "Dockerfile")))
+			dockerfile = filepath.Join(dir, "Dockerfile")
 		}
 		logFn("Building Docker image on remote...")
-		buildCmd := fmt.Sprintf("docker build -t %s %s %s%s 2>&1", imageTag, buildArgsCLI(buildArgs), dockerfileFlag, shellEscape(tmpDir))
-		if err := o.streamRetry(ctx, buildCmd, logFn); err != nil {
-			return fmt.Errorf("remote docker build: %w", err)
+		if err := o.dockerBuild(ctx, imageTag, buildArgs, dockerfile, tmpDir, logFn); err != nil {
+			return err
 		}
 	}
 	logFn(fmt.Sprintf("Image built: %s", imageTag))
@@ -260,15 +315,8 @@ func (o *RemoteOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, 
 		return commit, err
 	}
 
-	logFn(fmt.Sprintf("Building %s with nixpacks on remote...", imageTag))
-	nixpacksEnvFlags := nixpacksEnvCLI(buildArgs)
-	cmdFlags := ""
-	for _, a := range nixpacksCommandArgs(cmds) {
-		cmdFlags += " " + shellEscape(a) // the commands are user input
-	}
-	buildCmd := fmt.Sprintf("nixpacks build %s --name %s%s %s 2>&1", shellEscape(buildDir), imageTag, cmdFlags, nixpacksEnvFlags)
-	if err := o.streamRetry(ctx, buildCmd, logFn); err != nil {
-		return commit, fmt.Errorf("remote nixpacks build: %w", err)
+	if err := o.nixpacksBuild(ctx, buildDir, imageTag, cmds, buildArgs, logFn); err != nil {
+		return commit, err
 	}
 
 	logFn(fmt.Sprintf("Image built: %s", imageTag))
@@ -313,26 +361,20 @@ func (h tunnelHost) Pull(ctx context.Context, image string, auth *rollout.Regist
 func (o *RemoteOrchestrator) pull(ctx context.Context, imageRef string, auth *rollout.RegistryAuth, logFn func(string)) error {
 	o.log.Info("pulling image (remote)", zap.String("image", imageRef))
 
-	if auth != nil && auth.Password != "" {
-		server := auth.Server
-		if server == "" {
+	server := ""
+	if auth != nil {
+		if server = auth.Server; server == "" {
 			server = registryFromImageRef(imageRef)
 		}
-		logFn(fmt.Sprintf("Logging in to registry %s...", server))
-		// docker login requires a username; fall back to "token" for token-only credentials.
-		username := auth.Username
-		if username == "" {
-			username = "token"
-		}
-		logout, err := o.registryLogin(ctx, server, username, auth.Password, logFn)
-		if err != nil {
-			return err
-		}
-		defer logout()
 	}
+	cfg, cleanup, err := o.registryConfigDir(ctx, auth, server)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	logFn(fmt.Sprintf("Pulling %s...", imageRef))
-	return o.streamRetry(ctx, fmt.Sprintf("docker pull %s 2>&1", shellEscape(imageRef)), logFn)
+	return o.streamRetry(ctx, cfg+fmt.Sprintf("docker pull %s 2>&1", shellEscape(imageRef)), logFn)
 }
 
 // Stop removes all slot containers for the service on the remote server via SSH-tunnelled Docker.
@@ -423,27 +465,44 @@ func (o *RemoteOrchestrator) cloneOnRemote(ctx context.Context, repoURL, branch,
 	return nil
 }
 
-// registryLogin runs `docker login` on the remote host with the password on
-// stdin, and returns the matching logout. In an `echo <password> | docker
-// login` pipeline the password would sit on the remote shell's command line,
-// readable by any user in the process list. An empty server means Docker Hub.
-func (o *RemoteOrchestrator) registryLogin(ctx context.Context, server, username, password string, logFn func(string)) (logout func(), err error) {
-	serverArg := ""
-	if server != "" {
-		serverArg = " " + shellEscape(server)
+// dockerConfigDir makes a docker CLI config directory on the server for
+// one build or deploy, holding config (a config.json; nil for none), and
+// returns the `DOCKER_CONFIG=<dir> ` a docker command there starts with,
+// and what removes the directory. The link in it: the CLI's plugins
+// (buildx, compose) installed for the SSH user, not system-wide, are found
+// through the config directory.
+func (o *RemoteOrchestrator) dockerConfigDir(ctx context.Context, config []byte) (prefix string, cleanup func(), err error) {
+	cfg, err := o.host.Exec(ctx, `d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`)
+	if err != nil {
+		return "", nil, fmt.Errorf("create a docker config dir: %w", err)
 	}
-	out, err := o.host.ExecInput(ctx,
-		fmt.Sprintf("docker login%s -u %s --password-stdin 2>&1", serverArg, shellEscape(username)),
-		strings.NewReader(password))
-	for _, line := range strings.Split(out, "\n") {
-		if line != "" {
-			logFn(line)
+	if cfg = strings.TrimSpace(cfg); !strings.HasPrefix(cfg, "/tmp/paas-docker-") {
+		return "", nil, fmt.Errorf("create a docker config dir: got %q", cfg)
+	}
+	cleanup = func() { o.cleanup(ctx, "rm -rf "+shellEscape(cfg)) }
+	if config != nil {
+		if err := o.uploadPrivate(ctx, cfg+"/config.json", config); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("write the registry credentials: %w", err)
 		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("docker login: %w", err)
+	return "DOCKER_CONFIG=" + shellEscape(cfg) + " ", cleanup, nil
+}
+
+// registryConfigDir is a dockerConfigDir holding auth's credentials for
+// server, empty without credentials. A deploy pulls with a config of its
+// own, not a `docker login` on the server: a login there is every other
+// deploy's to pull with, and Toft's own would be for as long as the deploy
+// runs, its logout ending theirs.
+func (o *RemoteOrchestrator) registryConfigDir(ctx context.Context, auth *rollout.RegistryAuth, server string) (prefix string, cleanup func(), err error) {
+	if auth == nil || auth.Password == "" {
+		return o.dockerConfigDir(ctx, nil)
 	}
-	return func() { o.cleanup(ctx, "docker logout"+serverArg) }, nil
+	raw, err := registryConfig(*auth, server)
+	if err != nil {
+		return "", nil, err
+	}
+	return o.dockerConfigDir(ctx, raw)
 }
 
 // newComposeRelease creates an empty, private directory for this deploy's
@@ -549,17 +608,20 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 		defer o.cleanup(ctx, "rm -f "+shellEscape(projectDir+"/.env"))
 	}
 
-	if auth != nil && auth.Password != "" && !onAgent {
-		logFn(fmt.Sprintf("Logging in to registry %s...", auth.Server))
-		username := auth.Username
-		if username == "" {
-			username = "token"
+	// The registry's credentials, for the pulls and builds below (an
+	// agent makes its own, from auth).
+	dockerCfg := ""
+	if !onAgent {
+		server := ""
+		if auth != nil {
+			server = auth.Server
 		}
-		logout, err := o.registryLogin(ctx, auth.Server, username, auth.Password, logFn)
-		if err != nil {
+		var cleanup func()
+		var err error
+		if dockerCfg, cleanup, err = o.registryConfigDir(ctx, auth, server); err != nil {
 			return err
 		}
-		defer logout()
+		defer cleanup()
 	}
 
 	if !nets.Isolated {
@@ -610,7 +672,7 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 			"--project-directory %s %s --project-name %s config --images %s 2>/dev/null",
 			shellEscape(projectDir), files, shellEscape(projectName), shellEscape(route.Service))))
 		if image := singleImage(out); err == nil && image != "" {
-			if _, err := o.host.Exec(ctx, "docker pull --quiet "+shellEscape(image)+" >/dev/null 2>&1"); err == nil {
+			if _, err := o.host.Exec(ctx, dockerCfg+"docker pull --quiet "+shellEscape(image)+" >/dev/null 2>&1"); err == nil {
 				if dc, err := o.host.DockerClient(); err == nil {
 					keys, ok := routedImageViolations(ctx, dc, image, allowed)
 					dc.Close()
@@ -649,8 +711,8 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 	}
 	defer dc.Close()
 	up := func(flags string) error {
-		return o.host.ExecStream(ctx, remoteCompose(fmt.Sprintf(
-			"--project-directory %s %s --project-name %s up %s --remove-orphans 2>&1",
+		return o.host.ExecStream(ctx, remoteCleanEnv(dockerCfg+fmt.Sprintf(
+			"docker compose --project-directory %s %s --project-name %s up %s --remove-orphans 2>&1",
 			shellEscape(projectDir), files, shellEscape(projectName), flags,
 		)), logFn)
 	}

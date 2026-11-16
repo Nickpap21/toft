@@ -1017,6 +1017,9 @@ func TestPipeline_ComposeRepoRemoteStagesDotEnvBeforeTheCheck(t *testing.T) {
 		"envs/dev/docker-compose.yml": "include:\n  - svc.yml\n",
 		"envs/dev/svc.yml":            "services:\n  app:\n    image: alpine\n    privileged: ${LOCK:-true}\n",
 		"envs/dev/.env":               "LOCK=false\n",
+		// A local deploy's project directory is the repository's root,
+		// where its include is then read from.
+		"svc.yml": "services:\n  app:\n    image: alpine\n",
 	})
 	for name, srv := range map[string]*server.Server{"remote": {ID: "srv-1"}, "local": nil} {
 		t.Run(name, func(t *testing.T) {

@@ -2,7 +2,7 @@ package docker
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/base64"
 	"errors"
 	"io"
 	"strings"
@@ -66,11 +66,18 @@ func (f *fakeHost) Exec(ctx context.Context, cmd string) (string, error) {
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
+	// Every pull, build and compose deploy makes a docker config directory
+	// of its own first.
+	if strings.Contains(cmd, "mktemp -d /tmp/paas-docker-") {
+		return testDockerConfig + "\n", nil
+	}
 	if f.exec == nil {
 		return "", nil
 	}
 	return f.exec(ctx, cmd)
 }
+
+const testDockerConfig = "/tmp/paas-docker-abc"
 
 func (f *fakeHost) ExecInput(ctx context.Context, cmd string, stdin io.Reader) (string, error) {
 	in, _ := io.ReadAll(stdin)
@@ -189,23 +196,6 @@ func TestLocalStreamLogsKeepsGoingPastALongLine(t *testing.T) {
 	require.Len(t, lines, 2)
 	assert.True(t, strings.HasSuffix(lines[0], "… (line cut at 1 MiB)"), "the cut line says so")
 	assert.Equal(t, "2026-11-09T10:00:01Z after", lines[1])
-}
-
-// A long line of a build's output used to fail the build (bufio.Scanner's 64 KiB).
-func TestStreamBuildOutput_KeepsGoingPastALongLine(t *testing.T) {
-	msg := strings.Repeat("x", 70_000)
-	long, err := json.Marshal(map[string]string{"stream": msg})
-	require.NoError(t, err)
-	overCap := `{"stream":"` + strings.Repeat("y", 1<<20+10) + `"}`
-
-	logged := make([]string, 0, 3)
-	err = streamBuildOutput(strings.NewReader(string(long)+"\n"+overCap+"\n"+`{"stream":"next\n"}`+"\n"+`{"error":"boom"}`+"\n"+`{"stream":"after the error\n"}`+"\n"), func(l string) { logged = append(logged, l) })
-
-	require.EqualError(t, err, "boom", "an error line still fails the build")
-	require.Len(t, logged, 3)
-	assert.Equal(t, msg, logged[0])
-	assert.True(t, strings.HasSuffix(logged[1], "… (line cut at 1 MiB)"), "a JSON line past the cap reads as plain text")
-	assert.Equal(t, "next", logged[2])
 }
 
 func TestRemoteBuildCleansUpAfterCancel(t *testing.T) {
@@ -526,21 +516,94 @@ func TestFactoryForServer(t *testing.T) {
 	})
 }
 
-func TestRemoteRegistryLoginSendsThePasswordOnStdin(t *testing.T) {
-	h := &fakeHost{}
-	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
-	auth := &rollout.RegistryAuth{Server: "ghcr.io", Username: "bot", Password: "hunter2"}
-	require.NoError(t, o.pull(context.Background(), "ghcr.io/acme/app:1", auth, func(string) {}))
+// dockerConfigHost is a fakeHost whose server makes cfg as the docker
+// config directory of a build or a deploy, and release as a compose
+// release directory.
+func dockerConfigHost(cfg, release string) *fakeHost {
+	return &fakeHost{exec: func(_ context.Context, cmd string) (string, error) {
+		switch {
+		case strings.Contains(cmd, "mktemp -d /tmp/paas-docker-"):
+			return cfg + "\n", nil
+		case strings.Contains(cmd, "mktemp -d"):
+			return release + "\n", nil
+		}
+		return "", nil
+	}}
+}
 
+// A pull with credentials uses a docker config of its own, uploaded
+// privately and removed afterwards: there is no `docker login` on the
+// server, which every other deploy there would pull with meanwhile.
+func TestRemotePullKeepsItsCredentialsToItself(t *testing.T) {
+	const cfg = "/tmp/paas-docker-abc"
+	h := dockerConfigHost(cfg, "")
+	auth := &rollout.RegistryAuth{Server: "ghcr.io", Username: "bot", Password: "hunter2"}
+	require.NoError(t, newTestRemote(h).pull(context.Background(), "ghcr.io/acme/app:1", auth, func(string) {}))
+
+	var seq []string
 	for _, c := range h.recorded() {
 		assert.NotContains(t, c.cmd, "hunter2", "the password reached a command line: %s", c.cmd)
+		assert.NotContains(t, c.cmd, base64.StdEncoding.EncodeToString([]byte("bot:hunter2")), "the password reached a command line: %s", c.cmd)
+		assert.NotContains(t, c.cmd, "docker login")
+		seq = append(seq, c.kind+" "+c.cmd)
 	}
-	assert.Equal(t, []string{"hunter2"}, h.inputs)
-	login, ok := h.find("docker login")
+	assert.Empty(t, h.inputs)
+	assert.Equal(t, []string{
+		`exec d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`,
+		"exec umask 077 && rm -f '" + cfg + "/config.json' && : > '" + cfg + "/config.json'",
+		"upload '" + cfg + "/config.json'",
+		"exec chmod 600 '" + cfg + "/config.json'",
+		"stream DOCKER_CONFIG='" + cfg + "' docker pull 'ghcr.io/acme/app:1' 2>&1",
+		"exec rm -rf '" + cfg + "'",
+	}, seq)
+
+	// Without credentials the config is empty: a login someone made on the
+	// server is not this pull's either.
+	h = &fakeHost{}
+	require.NoError(t, newTestRemote(h).pull(context.Background(), "nginx:1", nil, func(string) {}))
+	require.Len(t, h.recorded(), 3)
+	assert.Equal(t, "DOCKER_CONFIG='"+cfg+"' docker pull 'nginx:1' 2>&1", h.recorded()[1].cmd)
+	assert.Equal(t, "rm -rf '"+cfg+"'", h.recorded()[2].cmd)
+}
+
+// A compose deploy with credentials runs its pulls and its up with them in
+// a docker config of its own.
+func TestRemoteRunComposeKeepsItsCredentialsToItself(t *testing.T) {
+	const cfg = "/tmp/paas-docker-abc"
+	h := dockerConfigHost(cfg, "/var/paas/compose/"+slotSvcID+"/r-abc")
+	h.docker = fakedocker.New(t)
+	auth := &rollout.RegistryAuth{Server: "ghcr.io", Password: "hunter2"}
+	route := &deployment.ComposeRoute{Service: "web", Port: 8080, Domains: []string{"app.example.com"}}
+	h.exec = func(next func(context.Context, string) (string, error)) func(context.Context, string) (string, error) {
+		return func(ctx context.Context, cmd string) (string, error) {
+			if strings.Contains(cmd, "config --images") {
+				return "ghcr.io/acme/web:1\n", nil
+			}
+			return next(ctx, cmd)
+		}
+	}(h.exec)
+	err := newTestRemote(h).RunCompose(context.Background(), "dep-1", slotSvcID, "web", "services: {web: {image: ghcr.io/acme/web:1}}\n",
+		nil, route, deployment.ComposeNetworks{Home: "paas-network"}, nil, auth, rollout.Hooks{Log: func(string) {}})
+	require.NoError(t, err)
+
+	ups := 0
+	for _, c := range h.recorded() {
+		assert.NotContains(t, c.cmd, "hunter2")
+		assert.NotContains(t, c.cmd, "docker login")
+		if strings.Contains(c.cmd, " up ") {
+			ups++
+			assert.Contains(t, c.cmd, ` DOCKER_CONFIG='`+cfg+`' docker compose --project-directory `, "inside the clean environment")
+			assert.True(t, strings.HasPrefix(c.cmd, "env -i "), c.cmd)
+		}
+	}
+	assert.Equal(t, 2, ups, "the create and the start")
+	_, ok := h.find("umask 077 && rm -f '" + cfg + "/config.json'")
+	assert.True(t, ok, "the credentials are uploaded privately")
+	pull, ok := h.find("docker pull --quiet")
 	require.True(t, ok)
-	assert.Equal(t, "docker login 'ghcr.io' -u 'bot' --password-stdin 2>&1", login.cmd)
-	_, ok = h.find("docker logout 'ghcr.io'")
-	assert.True(t, ok, "logged out afterwards")
+	assert.Equal(t, "DOCKER_CONFIG='"+cfg+"' docker pull --quiet 'ghcr.io/acme/web:1' >/dev/null 2>&1", pull.cmd)
+	_, ok = h.find("rm -rf '" + cfg + "'")
+	assert.True(t, ok, "the credentials are removed after the deploy")
 }
 
 // User input (image, base directory, health-check path, container name)
@@ -600,10 +663,14 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 		h := &fakeHost{
 			exec: func(_ context.Context, cmd string) (string, error) {
 				switch {
+				case strings.Contains(cmd, "mktemp -d /tmp/paas-docker-"):
+					return "/tmp/paas-docker-abc", nil
 				case strings.HasPrefix(cmd, "mktemp"):
 					return "/tmp/paas-build-abc", nil
 				case strings.HasPrefix(cmd, "git -C "):
 					return sha + "\nFix nil pointer in cart totals", nil
+				case strings.Contains(cmd, "nixpacks plan"):
+					return `{"variables":{}}`, nil
 				}
 				return "", nil
 			},
@@ -622,9 +689,9 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 				return o.BuildFromGitNixpacks(ctx, repo, branch, dir, tag, deployment.NixpacksCommands{}, args, logFn)
 			}
 		}
-		c, err := build(context.Background(), "https://example.com/r.git", "main", "", "img:1", nil, func(l string) { lines = append(lines, l) })
+		c, err := build(context.Background(), "https://example.com/r.git", "main", "", testImageTag, nil, func(l string) { lines = append(lines, l) })
 
-		assert.Error(t, err, "the build failed")
+		assert.ErrorContains(t, err, "exit status 1", "the build failed")
 		assert.Equal(t, deployment.Commit{SHA: sha, Subject: "Fix nil pointer in cart totals"}, c)
 		assert.Contains(t, lines, "Cloned main at ddddddd")
 		head, ok := h.find("git -C ")
@@ -648,31 +715,81 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 }
 
 // Nixpacks gets the service's install and build commands, quoted, and none
-// when they are empty.
+// when they are empty, for its plan and for the Dockerfile it writes.
 func TestRemoteNixpacksCommands(t *testing.T) {
-	newHost := func() *fakeHost {
-		return &fakeHost{exec: func(_ context.Context, cmd string) (string, error) {
-			if strings.HasPrefix(cmd, "mktemp") {
-				return "/tmp/paas-build-abc", nil
-			}
-			return "", nil
-		}}
-	}
-	h := newHost()
-	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
-	_, _ = o.BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", "img:1",
+	h := nixpacksHost(`{"variables":{}}`)
+	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
 		deployment.NixpacksCommands{Install: "npm ci", Build: "npm run build"}, nil, func(string) {})
-	build, ok := h.find("nixpacks build")
-	require.True(t, ok)
-	assert.Contains(t, build.cmd, "'--install-cmd' 'npm ci'")
-	assert.Contains(t, build.cmd, "'--build-cmd' 'npm run build'")
+	require.NoError(t, err)
+	for _, step := range []string{"nixpacks plan", "nixpacks build"} {
+		c, ok := h.find(step)
+		require.True(t, ok, step)
+		assert.Contains(t, c.cmd, "'--install-cmd' 'npm ci'", step)
+		assert.Contains(t, c.cmd, "'--build-cmd' 'npm run build'", step)
+	}
 
-	h = newHost()
-	o = newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
-	_, _ = o.BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", "img:1",
+	h = nixpacksHost(`{"variables":{}}`)
+	_, err = newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
 		deployment.NixpacksCommands{}, nil, func(string) {})
-	build, _ = h.find("nixpacks build")
+	require.NoError(t, err)
+	build, _ := h.find("nixpacks build")
 	assert.NotContains(t, build.cmd, "--install-cmd", "Nixpacks keeps what it detects")
+}
+
+// nixpacksHost is a server whose `nixpacks plan` prints plan.
+func nixpacksHost(plan string) *fakeHost {
+	return &fakeHost{exec: func(_ context.Context, cmd string) (string, error) {
+		switch {
+		case strings.Contains(cmd, "mktemp -d /tmp/paas-docker-"):
+			return "/tmp/paas-docker-abc\n", nil
+		case strings.HasPrefix(cmd, "mktemp"):
+			return "/tmp/paas-build-abc", nil
+		case strings.Contains(cmd, "nixpacks plan"):
+			return plan, nil
+		}
+		return "", nil
+	}}
+}
+
+// Nixpacks only writes the Dockerfile; the docker build is Toft's (D-167).
+// A repository's nixpacks.toml can name BUILDKIT_SYNTAX and
+// BUILDKIT_CACHE_MOUNT_NS as variables, which nixpacks' own docker build
+// would pass on: they are dropped, the plan's other variables are the
+// build's arguments, and the service's two come last. A .nixpacks the
+// repository brought is removed before nixpacks writes there.
+func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
+	h := nixpacksHost(`{"variables":{"NODE_ENV":"production","FOO":"it's $HOME","BUILDKIT_SYNTAX":"example.invalid/nope:1","BUILDKIT_CACHE_MOUNT_NS":"paas/other"}}`)
+	sha := "abc"
+	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+		deployment.NixpacksCommands{}, map[string]*string{"TOFT_GIT_SHA": &sha}, func(string) {})
+	require.NoError(t, err)
+
+	var seq []string
+	for _, c := range h.recorded() {
+		if strings.Contains(c.cmd, "nixpacks") || strings.Contains(c.cmd, "docker") {
+			seq = append(seq, c.cmd)
+		}
+	}
+	assert.Equal(t, []string{
+		"rm -rf '/tmp/paas-build-abc/.nixpacks' && e=$(mktemp) && { nixpacks plan '/tmp/paas-build-abc' '--env' 'TOFT_GIT_SHA=abc' 2>\"$e\"; s=$?; [ $s = 0 ] || cat \"$e\"; rm -f \"$e\"; exit $s; }",
+		"nixpacks build '/tmp/paas-build-abc' --out '/tmp/paas-build-abc' --cache-key " + testServiceID + " '--env' 'TOFT_GIT_SHA=abc' 2>&1",
+		`d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`,
+		"DOCKER_CONFIG='/tmp/paas-docker-abc' docker build -t " + testImageTag +
+			` --build-arg 'FOO=it'\''s $HOME' --build-arg 'NODE_ENV=production'` +
+			" --build-arg 'BUILDKIT_SYNTAX=" + dockerfileFrontend + "' --build-arg 'BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID + "'" +
+			" -f '/tmp/paas-build-abc/.nixpacks/Dockerfile' '/tmp/paas-build-abc' 2>&1",
+		"rm -rf '/tmp/paas-docker-abc'",
+	}, seq)
+}
+
+// A plan Toft can't read builds nothing.
+func TestRemoteNixpacksRefusesAnUnreadablePlan(t *testing.T) {
+	h := nixpacksHost("not json")
+	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+		deployment.NixpacksCommands{}, nil, func(string) {})
+	require.ErrorContains(t, err, "read the nixpacks plan")
+	_, built := h.find("docker build")
+	assert.False(t, built)
 }
 
 func TestRemoteStatsReadsStartAndRestarts(t *testing.T) {
@@ -720,13 +837,16 @@ func TestRemoteCloneEndsOptionsBeforeTheURL(t *testing.T) {
 // credential file.
 func TestRemoteBuildFromArchive(t *testing.T) {
 	h := &fakeHost{exec: func(_ context.Context, cmd string) (string, error) {
+		if strings.Contains(cmd, "mktemp -d /tmp/paas-docker-") {
+			return "/tmp/paas-docker-abc\n", nil
+		}
 		if strings.HasPrefix(cmd, "mktemp") {
 			return "/tmp/paas-build-abc123\n", nil
 		}
 		return "", nil
 	}}
 	sha := "abc"
-	err := newTestRemote(h).BuildFromArchive(context.Background(), strings.NewReader("TAR"), "services/api", "paas/x:1", nil,
+	err := newTestRemote(h).BuildFromArchive(context.Background(), strings.NewReader("TAR"), "services/api", testImageTag, nil,
 		map[string]*string{"TOFT_GIT_SHA": &sha}, func(string) {})
 	if err != nil {
 		t.Fatal(err)
@@ -738,7 +858,12 @@ func TestRemoteBuildFromArchive(t *testing.T) {
 	all := strings.Join(cmds, "\n")
 	for _, want := range []string{
 		"tar -x -o -f - -C '/tmp/paas-build-abc123'",
-		"docker build -t paas/x:1 --build-arg TOFT_GIT_SHA='abc' -f '/tmp/paas-build-abc123/services/api/Dockerfile' '/tmp/paas-build-abc123'",
+		// The build's own arguments, then the two that keep it to its
+		// service (D-167), with a Docker config of its own.
+		"DOCKER_CONFIG='/tmp/paas-docker-abc' docker build -t " + testImageTag + " --build-arg 'TOFT_GIT_SHA=abc'" +
+			" --build-arg 'BUILDKIT_SYNTAX=" + dockerfileFrontend + "' --build-arg 'BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID + "'" +
+			" -f '/tmp/paas-build-abc123/services/api/Dockerfile' '/tmp/paas-build-abc123' 2>&1",
+		"rm -rf '/tmp/paas-docker-abc'",
 		"rm -rf '/tmp/paas-build-abc123'",
 	} {
 		if !strings.Contains(all, want) {
@@ -753,13 +878,15 @@ func TestRemoteBuildFromArchive(t *testing.T) {
 	}
 }
 
-func TestRemotePullImageLogsOutAfterCancel(t *testing.T) {
-	h := &fakeHost{stream: func(ctx context.Context, cmd string) error {
-		if strings.HasPrefix(cmd, "docker pull") {
+func TestRemotePullRemovesItsCredentialsAfterCancel(t *testing.T) {
+	const cfg = "/tmp/paas-docker-abc"
+	h := dockerConfigHost(cfg, "")
+	h.stream = func(ctx context.Context, cmd string) error {
+		if strings.Contains(cmd, "docker pull") {
 			return blockUntilDone(ctx, cmd)
 		}
 		return nil
-	}}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	auth := &rollout.RegistryAuth{Server: "ghcr.io", Username: "u", Password: "p"}
@@ -768,9 +895,9 @@ func TestRemotePullImageLogsOutAfterCancel(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 
-	logout, ok := h.find("docker logout 'ghcr.io'")
+	rm, ok := h.find("rm -rf '" + cfg + "'")
 	require.True(t, ok)
-	assert.False(t, logout.ctxEnded)
+	assert.False(t, rm.ctxEnded)
 }
 
 // A pull cut off by a lost connection (an agent reconnecting, D-106) runs
@@ -795,10 +922,11 @@ func TestPullRetriesOnceWhenTheConnectionDrops(t *testing.T) {
 }
 
 // A remote rollout pulls on the server's docker CLI (tunnelHost), so the
-// login stays on stdin and a dropped connection retries the pull.
+// credentials stay off its command line and a dropped connection retries
+// the pull.
 func TestRemoteRolloutPullsOnTheServer(t *testing.T) {
 	h := &fakeHost{docker: fakedocker.New(t), stream: func(_ context.Context, cmd string) error {
-		if strings.HasPrefix(cmd, "docker pull") {
+		if strings.Contains(cmd, " docker pull ") {
 			return errors.New("manifest unknown")
 		}
 		return nil

@@ -45,7 +45,9 @@ COPY --from=agent-build /agent/ /
 # alpine 3.24 for git 2.54, the oldest toft-git runs on (D-71).
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 # docker-cli-compose: deploys to the control-plane server run `docker compose`.
-RUN apk add --no-cache ca-certificates tzdata git docker-cli docker-cli-compose
+# docker-cli-buildx: builds there run on BuildKit (D-167); without it
+# `docker build` is the classic builder, which has no cache mounts.
+RUN apk add --no-cache ca-certificates tzdata git docker-cli docker-cli-compose docker-cli-buildx
 # The paas-git container runs this image as git (uid 10001): the
 # repositories' volume and the socket's directory start out owned by it.
 RUN adduser -D -H -u 10001 -s /sbin/nologin git && \
