@@ -19,4 +19,7 @@ func TestScopedKeepsTheCommandLineOutOfTheDescription(t *testing.T) {
 	if !slices.ContainsFunc(got[:sep], func(a string) bool { return strings.HasPrefix(a, "--description=") }) {
 		t.Fatalf("no --description, so systemd describes the scope by its command line: %q", got)
 	}
+	if slices.ContainsFunc(got[:sep], func(a string) bool { return strings.Contains(a, "build-arg") }) {
+		t.Fatalf("the command line is in the scope's own arguments: %q", got[:sep])
+	}
 }
