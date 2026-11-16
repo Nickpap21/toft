@@ -67,11 +67,14 @@ func localComposeEnv(envVars map[string]string) []string {
 
 // remoteCleanEnvPrefix runs the rest of a remote shell command with only
 // PATH and HOME from the SSH session, plus DOCKER_HOST and XDG_RUNTIME_DIR
-// when they are set and not empty. The quotes inside ${VAR:+"..."} keep a
+// when they are set and not empty, and TOFT_EXEC, the mark the SSH client
+// ends a cancelled command by (pkg/sshclient): without it a cancelled
+// compose command would run on. The quotes inside ${VAR:+"..."} keep a
 // value with spaces in one word.
 const remoteCleanEnvPrefix = `env -i PATH="$PATH" HOME="$HOME" ` +
 	`${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ` +
-	`${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} `
+	`${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ` +
+	`${TOFT_EXEC:+"TOFT_EXEC=$TOFT_EXEC"} `
 
 // remoteCleanEnv returns the remote shell command that runs command in the
 // clean environment of remoteCleanEnvPrefix.

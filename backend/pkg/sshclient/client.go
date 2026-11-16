@@ -9,9 +9,11 @@ package sshclient
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -86,6 +88,13 @@ type Client struct {
 	conn    *ssh.Client
 	hostKey ssh.PublicKey
 	done    chan struct{}
+	// agent: the connection is a server's agent's (Config.Conn), which ends
+	// a cancelled command itself.
+	agent bool
+	// reaping lets one reaper at a time open its session: sshd counts a
+	// closed session against MaxSessions until its command has exited, so
+	// each reaper is a session past the caller's own.
+	reaping sync.Mutex
 }
 
 // SessionOpenError reports that a session could not be opened, so the remote
@@ -147,6 +156,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		conn:    ssh.NewClient(h.conn, h.chans, h.reqs),
 		hostKey: check.presented,
 		done:    make(chan struct{}),
+		agent:   cfg.Conn != nil,
 	}
 	go func() {
 		_ = c.conn.Wait()
@@ -365,9 +375,92 @@ func wait(ctx context.Context, sess *ssh.Session) error {
 	}
 }
 
+// reapGrace is how long a cancelled command has to end at SIGTERM before
+// SIGKILL; timeoutMargin how long past its call's deadline a command may
+// run before `timeout` ends it on the server. Variables for the tests.
+var (
+	reapGrace     = 5 * time.Second
+	timeoutMargin = 30 * time.Second
+)
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// mark returns what a new command on this connection is found by on the
+// server: a TOFT_EXEC value of its own. Empty on an agent's connection.
+func (c *Client) mark() string {
+	if c.agent {
+		return ""
+	}
+	return rand.Text()
+}
+
+// limitOf is how long a command started now may run on the server: until
+// ctx's deadline and timeoutMargin more. Zero without a deadline.
+func limitOf(ctx context.Context) time.Duration {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return max(time.Until(d), 0) + timeoutMargin
+}
+
+// wrap is cmd as it is sent for a command with a mark. sshd passes no
+// signal on to a root login's command and a closed session ends only a
+// command that writes, so the command and everything it starts carry
+// TOFT_EXEC=mark in their environment, which reap finds them by. With a
+// limit the command also runs under `timeout` (where the server has one
+// that takes -k), which ends it when no panel is left to. cmd itself runs
+// as before, in the login shell sshd would have given it.
+func wrap(cmd, mark string, limit time.Duration) string {
+	if mark == "" {
+		return cmd
+	}
+	s := "export TOFT_EXEC=" + mark + `; set -- "${SHELL:-sh}" -c ` + shellQuote(cmd) + "; "
+	if limit > 0 {
+		s += fmt.Sprintf(`timeout -k 1 1 true 2>/dev/null && set -- timeout -k 10 %d "$@"; `, int64(math.Ceil(limit.Seconds())))
+	}
+	return s + `exec "$@"`
+}
+
+// reap ends every process on the server that carries mark: SIGTERM, then
+// SIGKILL to what is left after reapGrace. It runs in a session of its own
+// past ctx's end and returns when the processes are gone; it is best
+// effort, and without a connection `timeout` is what ends the command.
+// Nothing found is looked for once more: a command cancelled as it starts
+// has not put the mark on yet.
+func (c *Client) reap(ctx context.Context, mark string) {
+	if mark == "" {
+		return
+	}
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	c.reaping.Lock()
+	defer c.reaping.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reapGrace+10*time.Second)
+	defer cancel()
+	sess, err := c.newSession(ctx)
+	if err != nil {
+		return
+	}
+	defer func() { _ = sess.Close() }()
+	script := "m=TOFT_EXEC=" + mark + `; l() { grep -lzxF -- "$m" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3; }
+p=$(l); [ -n "$p" ] || { sleep 0.5; p=$(l); }
+[ -n "$p" ] || exit 0
+kill -TERM $p 2>/dev/null
+i=0; while [ $i -lt ` + strconv.Itoa(int(reapGrace/(200*time.Millisecond))) + ` ]; do sleep 0.2; p=$(l); [ -n "$p" ] || exit 0; i=$((i+1)); done
+kill -KILL $p 2>/dev/null; sleep 0.2; p=$(l); [ -z "$p" ] || kill -KILL $p 2>/dev/null`
+	if err := sess.Start("sh -c " + shellQuote(script)); err != nil {
+		return
+	}
+	_ = wait(ctx, sess)
+}
+
 // lockedBuffer is a bytes.Buffer safe for concurrent stdout/stderr writes. It
 // holds at most MaxReplyBytes: the write that would pass it is refused and
-// calls onOver once, which run uses to close the session.
+// calls onOver once, which run uses to end its wait and close the session.
 type lockedBuffer struct {
 	mu     sync.Mutex
 	buf    bytes.Buffer
@@ -406,24 +499,33 @@ func (b *lockedBuffer) String() string {
 
 // run executes cmd with stdin (nil for none) and returns the combined,
 // trimmed stdout and stderr. A reply over MaxReplyBytes closes the session
-// and fails with ErrReplyTooLarge.
-func (c *Client) run(ctx context.Context, cmd string, stdin io.Reader) (string, error) {
+// and fails with ErrReplyTooLarge. With a mark, a command whose session was
+// closed under it (ctx ended, or the reply) is reaped before run returns.
+func (c *Client) run(ctx context.Context, cmd string, stdin io.Reader, mark string) (string, error) {
 	sess, err := c.newSession(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = sess.Close() }()
 
-	out := lockedBuffer{onOver: func() { _ = sess.Close() }}
+	// A reply over the limit ends the wait as a cancel does. Closing the
+	// session alone would not: sshd answers the close only once the command
+	// has exited, and what the command left running never writes again.
+	waitCtx, over := context.WithCancel(ctx)
+	defer over()
+	out := lockedBuffer{onOver: over}
 	sess.Stdout = &out
 	sess.Stderr = &out
 	if stdin != nil {
 		sess.Stdin = stdin
 	}
-	if err := sess.Start(cmd); err != nil {
+	if err := sess.Start(wrap(cmd, mark, limitOf(ctx))); err != nil {
 		return "", fmt.Errorf("start: %w", err)
 	}
-	err = wait(ctx, sess)
+	err = wait(waitCtx, sess)
+	if out.tooLarge() || (err != nil && ctx.Err() != nil) {
+		c.reap(ctx, mark)
+	}
 	if out.tooLarge() {
 		return "", fmt.Errorf("%w: over %d bytes", ErrReplyTooLarge, MaxReplyBytes)
 	}
@@ -432,8 +534,8 @@ func (c *Client) run(ctx context.Context, cmd string, stdin io.Reader) (string, 
 
 // ExecContext runs cmd on the remote host and returns combined stdout+stderr.
 // A non-zero exit code is wrapped as an error. When ctx ends first, the
-// remote process is signalled and its session closed, and ctx's error is
-// returned with the output so far.
+// remote process is signalled, its session closed and what is left of it
+// ended (reap), and ctx's error is returned with the output so far.
 func (c *Client) ExecContext(ctx context.Context, cmd string) (string, error) {
 	return c.ExecInputContext(ctx, cmd, nil)
 }
@@ -441,7 +543,7 @@ func (c *Client) ExecContext(ctx context.Context, cmd string) (string, error) {
 // ExecInputContext is ExecContext with stdin fed to the remote command; the
 // remote side sees EOF once stdin is exhausted.
 func (c *Client) ExecInputContext(ctx context.Context, cmd string, stdin io.Reader) (string, error) {
-	text, err := c.run(ctx, cmd, stdin)
+	text, err := c.run(ctx, cmd, stdin, c.mark())
 	if err != nil {
 		var openErr *SessionOpenError
 		if ctx.Err() != nil || errors.As(err, &openErr) {
@@ -457,7 +559,7 @@ func (c *Client) ExecInputContext(ctx context.Context, cmd string, stdin io.Read
 // sent as an exec of the request's reserved name, which the agent serves
 // itself: x/crypto's RequestSubsystem wires neither stdin nor stdout.
 func (c *Client) SubsystemContext(ctx context.Context, name string, stdin io.Reader) (string, error) {
-	text, err := c.run(ctx, name, stdin)
+	text, err := c.run(ctx, name, stdin, "")
 	if err != nil && ctx.Err() == nil {
 		return text, fmt.Errorf("%s: %w: %s", name, err, text)
 	}
@@ -468,15 +570,19 @@ func (c *Client) SubsystemContext(ctx context.Context, name string, stdin io.Rea
 // of output (stdout and stderr merged). logFn is never called concurrently,
 // and never after ExecStreamContext returns. It returns the exit error, if
 // any (an *ssh.ExitError for a non-zero status). When ctx ends first, the
-// remote process is signalled and its session closed, and ctx's error is
-// returned.
+// remote process is signalled, its session closed and what is left of it
+// ended (reap), and ctx's error is returned.
 func (c *Client) ExecStreamContext(ctx context.Context, cmd string, logFn func(string)) error {
-	return c.ExecStreamInputContext(ctx, cmd, nil, logFn)
+	return c.stream(ctx, cmd, nil, logFn, c.mark())
 }
 
-// ExecStreamInputContext is ExecStreamContext with stdin (nil: none). An
-// agent's typed request is run this way by its exact name.
-func (c *Client) ExecStreamInputContext(ctx context.Context, cmd string, stdin io.Reader, logFn func(string)) error {
+// ExecStreamInputContext runs an agent's typed request by its exact name,
+// with stdin (nil: none) and its output as ExecStreamContext delivers it.
+func (c *Client) ExecStreamInputContext(ctx context.Context, name string, stdin io.Reader, logFn func(string)) error {
+	return c.stream(ctx, name, stdin, logFn, "")
+}
+
+func (c *Client) stream(ctx context.Context, cmd string, stdin io.Reader, logFn func(string), mark string) error {
 	sess, err := c.newSession(ctx)
 	if err != nil {
 		return err
@@ -492,7 +598,7 @@ func (c *Client) ExecStreamInputContext(ctx context.Context, cmd string, stdin i
 	if err != nil {
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
-	if err := sess.Start(cmd); err != nil {
+	if err := sess.Start(wrap(cmd, mark, limitOf(ctx))); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
 
@@ -532,6 +638,7 @@ func (c *Client) ExecStreamInputContext(ctx context.Context, cmd string, stdin i
 		mu.Lock()
 		stopped = true
 		mu.Unlock()
+		c.reap(ctx, mark)
 		return ctx.Err()
 	}
 }
@@ -548,7 +655,7 @@ func scanLines(r io.Reader, emit func(string), wg *sync.WaitGroup) {
 // command verbatim: the caller quotes it. The remote file is created or
 // overwritten.
 func (c *Client) UploadContext(ctx context.Context, remotePath string, content []byte) error {
-	out, err := c.run(ctx, "cat > "+remotePath, bytes.NewReader(content))
+	out, err := c.run(ctx, "cat > "+remotePath, bytes.NewReader(content), c.mark())
 	if err != nil {
 		var openErr *SessionOpenError
 		if ctx.Err() != nil || errors.As(err, &openErr) {

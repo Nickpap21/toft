@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,7 +34,14 @@ import (
 
 // Session is one exec request as the handler sees it.
 type Session struct {
+	// Command is the command the caller ran, without what sshclient wraps
+	// it in; Raw is what arrived. Mark is the TOFT_EXEC value the command
+	// was started with ("" for none) and Timeout the limit of the `timeout`
+	// a call with a deadline runs under (0 for none).
 	Command string
+	Raw     string
+	Mark    string
+	Timeout time.Duration
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -71,6 +79,52 @@ func WithExec(h ExecHandler) Option {
 	return func(s *Server) { s.exec = h }
 }
 
+// WithShell runs every command, sshclient's wrapping and its reaper
+// included, with a real `sh -c`. Like sshd for a root login it passes no
+// signal on and leaves the command running when the session closes.
+func WithShell() Option {
+	return func(s *Server) { s.shell = true; s.exec = shellExec }
+}
+
+// shellExec is WithShell's handler.
+func shellExec(sess *Session) int {
+	cmd := exec.Command("sh", "-c", sess.Raw)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = sess.Stdin, sess.Stdout, sess.Stderr
+	// What the command leaves holding its output doesn't hold the handler.
+	cmd.WaitDelay = 100 * time.Millisecond
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() >= 0 {
+			return exit.ExitCode()
+		}
+		return 1
+	}
+	return 0
+}
+
+// unwrap undoes what sshclient wraps a command in (its wrap): the mark it
+// exports and, for a call with a deadline, the `timeout` it runs under.
+// reaped is the mark of the command a reaper (its reap) was sent to end.
+func unwrap(raw string) (cmd, mark string, limit time.Duration, reaped string) {
+	if m, ok := strings.CutPrefix(raw, "sh -c 'm=TOFT_EXEC="); ok {
+		reaped, _, _ = strings.Cut(m, ";")
+		return raw, "", 0, reaped
+	}
+	rest, ok := strings.CutPrefix(raw, "export TOFT_EXEC=")
+	if !ok {
+		return raw, "", 0, ""
+	}
+	mark, rest, _ = strings.Cut(rest, "; ")
+	rest = strings.TrimPrefix(rest, `set -- "${SHELL:-sh}" -c '`)
+	rest = strings.TrimSuffix(rest, `'; exec "$@"`)
+	if i := strings.LastIndex(rest, "'; timeout -k 1 1 true 2>/dev/null && set -- timeout -k 10 "); i >= 0 {
+		var secs int
+		_, _ = fmt.Sscanf(rest[strings.LastIndex(rest, " -k 10 ")+len(" -k 10 "):], "%d", &secs)
+		rest, limit = rest[:i], time.Duration(secs)*time.Second
+	}
+	return strings.ReplaceAll(rest, `'\''`, "'"), mark, limit, ""
+}
+
 // WithStreamLocal serves direct-streamlocal channels with h. Without it
 // they are rejected.
 func WithStreamLocal(h StreamLocalHandler) Option {
@@ -93,12 +147,14 @@ type Server struct {
 	streamLocal StreamLocalHandler
 	maxSessions atomic.Int64
 	keepalive   atomic.Bool
+	shell       bool
 
 	mu       sync.Mutex
 	hostKeys []ssh.Signer
 	conns    map[net.Conn]*connState
 	signals  []string
 	commands []string
+	reaps    []string
 	files    map[string][]byte
 	closed   bool
 
@@ -289,11 +345,20 @@ func (s *Server) Signals() []string {
 	return append([]string(nil), s.signals...)
 }
 
-// Commands returns the exec commands received, in order.
+// Commands returns the exec commands received, in order, as their callers
+// ran them (Session.Command). A reaper is not among them.
 func (s *Server) Commands() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.commands...)
+}
+
+// Reaps returns the marks of the commands a reaper was sent to end, in
+// order.
+func (s *Server) Reaps() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.reaps...)
 }
 
 // File returns what DefaultExec's `cat > path` stored at path.
@@ -530,16 +595,28 @@ func (s *Server) serveSession(cs *connState, nch ssh.NewChannel) {
 				continue
 			}
 			started = true
+			cmd, mark, limit, reaped := unwrap(msg.Command)
 			s.mu.Lock()
-			s.commands = append(s.commands, msg.Command)
+			if reaped != "" {
+				s.reaps = append(s.reaps, reaped)
+			} else {
+				s.commands = append(s.commands, cmd)
+			}
 			s.mu.Unlock()
 			_ = req.Reply(true, nil)
+			if reaped != "" && !s.shell {
+				finish(ch, 0)
+				continue
+			}
 			running.Add(1)
 			untrack := s.track()
 			go func() {
 				defer running.Done()
 				code := s.exec(&Session{
-					Command: msg.Command,
+					Command: cmd,
+					Raw:     msg.Command,
+					Mark:    mark,
+					Timeout: limit,
 					Stdin:   ch,
 					Stdout:  ch,
 					Stderr:  ch.Stderr(),
