@@ -177,8 +177,12 @@ func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, b
 // the docker build nixpacks would have run, with the plan's variables as
 // its build arguments (nixpacksVariables). The cache key is the service's,
 // so its builds reuse their cache mounts. nixpacks must be installed on
-// the server.
-func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
+// the server. It reads what the repository names, on the server, and puts
+// what it reads in its plan, so as on the panel's host (localNixpacks) a
+// link in dir that leaves it is refused, and nixpacks runs with nothing of
+// the login's: in its sandbox over root, the build's own folder (dir or
+// above it), where the server can (nixpacksRunner).
+func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, root, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	serviceID, err := builtService(imageTag)
 	if err != nil {
 		return err
@@ -190,8 +194,16 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag st
 	out := shellEscape(dir + "/.nixpacks")
 	// nixpacks writes into dir/.nixpacks: one the repository brought (a
 	// link out of it, say) goes first.
+	links, err := o.host.Exec(ctx, "rm -rf "+out+" && "+linksOutCmd(dir))
+	if err != nil {
+		return fmt.Errorf("check the build folder: %w", err)
+	}
+	if link, _, _ := strings.Cut(strings.TrimSpace(links), "\n"); link != "" {
+		return fmt.Errorf("%w: %s is a link that doesn't stay in the build folder", service.ErrInvalidConfig, link)
+	}
+	nix := o.nixpacksRunner(ctx, root, logFn)
 	// The plan is nixpacks' stdout; what it says beside it is logged when it fails.
-	plan, err := o.host.Exec(ctx, "rm -rf "+out+` && e=$(mktemp) && { nixpacks plan `+shellEscape(dir)+flags+` 2>"$e"; s=$?; [ $s = 0 ] || cat "$e"; rm -f "$e"; exit $s; }`)
+	plan, err := o.host.Exec(ctx, `e=$(mktemp) && { `+nix+` plan `+shellEscape(dir)+flags+` 2>"$e"; s=$?; [ $s = 0 ] || cat "$e"; rm -f "$e"; exit $s; }`)
 	if err != nil {
 		logFn(plan)
 		return fmt.Errorf("remote nixpacks plan: %w", err)
@@ -201,11 +213,55 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag st
 		return err
 	}
 	logFn(fmt.Sprintf("Building %s with nixpacks on remote...", imageTag))
-	write := fmt.Sprintf("nixpacks build %s --out %s --cache-key %s%s 2>&1", shellEscape(dir), shellEscape(dir), serviceID, flags)
+	write := fmt.Sprintf("%s build %s --out %s --cache-key %s%s 2>&1", nix, shellEscape(dir), shellEscape(dir), serviceID, flags)
 	if err := o.streamRetry(ctx, write, logFn); err != nil {
 		return fmt.Errorf("remote nixpacks build: %w", err)
 	}
 	return o.dockerBuild(ctx, imageTag, vars, auth, dir+"/.nixpacks/Dockerfile", dir, logFn)
+}
+
+// linksOutCmd prints each link under dir that, followed, leaves dir or
+// leads nowhere, by its path in dir: noLinksOut for a folder on a server. A
+// failed realpath of dir fails the command, so nothing passes unchecked.
+func linksOutCmd(dir string) string {
+	return "r=$(realpath -e -- " + shellEscape(dir) + `) || exit 1; find "$r" -type l -exec sh -c ` +
+		shellEscape(`r=$1; shift; for p; do q=$(realpath -e -- "$p" 2>/dev/null) || q=; case "$q/" in "$r"/*) ;; *) printf '%s\n' "${p#"$r"/}" ;; esac; done`) +
+		` sh "$r" {} +`
+}
+
+// nixpacksSandbox is the start of a remote command that runs nix, the
+// server's nixpacks binary, as nobody in a systemd unit of its own that
+// sees that binary and root, the build's folder, and nothing else of the
+// server: no other deploy's files, no home, no Docker socket, no network,
+// and an empty /proc (another process of the same user would show its
+// files there). nixpacks only reads the repository and writes its
+// Dockerfile. The unit outlives systemd-run, so the cancel mark goes in
+// with it (pkg/sshclient) and RuntimeMaxSec ends one nothing cancelled.
+// root is mktemp's name, never the repository's: systemd reads spaces and
+// colons in a path its own way.
+func nixpacksSandbox(root, nix string) string {
+	return "systemd-run --quiet --wait --pipe --collect -p User=65534 -p Group=65534" +
+		" -p TemporaryFileSystem=/:ro -p TemporaryFileSystem=/proc:ro -p BindReadOnlyPaths=" + nix +
+		" -p BindPaths=" + shellEscape(root) + " -p PrivateNetwork=yes -p PrivateDevices=yes -p NoNewPrivileges=yes" +
+		` -p RuntimeMaxSec=300 ${TOFT_EXEC:+-E "TOFT_EXEC=$TOFT_EXEC"} ` + nix
+}
+
+// nixpacksRunner is how nixpacks starts on the server for the build in
+// root: in nixpacksSandbox when one runs there, which takes a root login,
+// systemd and a nixpacks that needs no library of the server's (the
+// release's own build is static); root is then handed to the sandbox's
+// user. Otherwise as the login, in the clean environment compose gets, and
+// the deploy log says so.
+func (o *RemoteOrchestrator) nixpacksRunner(ctx context.Context, root string, logFn func(string)) string {
+	probe := `n=$(realpath -e -- "$(command -v nixpacks)") && [ "$(id -u)" = 0 ] && ` + nixpacksSandbox(root, `"$n"`) +
+		` --version >/dev/null 2>&1 && chown -hR 65534:65534 ` + shellEscape(root) + ` && printf %s "$n"`
+	if n, err := o.host.Exec(ctx, probe); err == nil && strings.HasPrefix(n, "/") {
+		return nixpacksSandbox(root, shellEscape(strings.TrimSpace(n)))
+	}
+	if ctx.Err() == nil {
+		logFn("Nixpacks runs as the server's login here, not in a sandbox: that takes a root login, systemd and a statically linked nixpacks on the server.")
+	}
+	return remoteCleanEnv("nixpacks")
 }
 
 // BuildFromArchive unpacks source, a commit's tree as a tar (D-77), into a
@@ -238,7 +294,7 @@ func (o *RemoteOrchestrator) BuildFromArchive(ctx context.Context, source io.Rea
 		return err
 	}
 	if nixpacks != nil {
-		if err := o.nixpacksBuild(ctx, dir, imageTag, *nixpacks, buildArgs, auth, logFn); err != nil {
+		if err := o.nixpacksBuild(ctx, tmpDir, dir, imageTag, *nixpacks, buildArgs, auth, logFn); err != nil {
 			return err
 		}
 	} else {
@@ -324,7 +380,7 @@ func (o *RemoteOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, 
 		return commit, err
 	}
 
-	if err := o.nixpacksBuild(ctx, buildDir, imageTag, cmds, buildArgs, auth, logFn); err != nil {
+	if err := o.nixpacksBuild(ctx, tmpDir, buildDir, imageTag, cmds, buildArgs, auth, logFn); err != nil {
 		return commit, err
 	}
 
