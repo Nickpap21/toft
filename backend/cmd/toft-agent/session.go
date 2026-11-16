@@ -155,7 +155,7 @@ func command(cmdline string) *exec.Cmd {
 	if os.Geteuid() == 0 {
 		if _, err := os.Stat("/run/systemd/system"); err == nil {
 			if sr, err := exec.LookPath("systemd-run"); err == nil {
-				args = append([]string{sr, "--scope", "--quiet", "--collect", "--slice=toft-exec.slice", "--"}, args...)
+				args = scoped(sr, args)
 			}
 		}
 	}
@@ -167,6 +167,13 @@ func command(cmdline string) *exec.Cmd {
 		c.Dir = "/root"
 	}
 	return c
+}
+
+// scoped wraps args in a transient scope of toft-exec.slice. Its
+// description is fixed: systemd's own is the command line, which the
+// server's journal then keeps for every command ("Started …").
+func scoped(systemdRun string, args []string) []string {
+	return append([]string{systemdRun, "--scope", "--quiet", "--collect", "--slice=toft-exec.slice", "--description=A command from the Toft panel", "--"}, args...)
 }
 
 func start(cmdline string, pty *ptyReq, ch ssh.Channel) (*running, error) {
