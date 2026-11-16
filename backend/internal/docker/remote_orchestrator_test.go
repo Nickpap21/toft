@@ -774,7 +774,7 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 		"rm -rf '/tmp/paas-build-abc/.nixpacks' && e=$(mktemp) && { nixpacks plan '/tmp/paas-build-abc' '--env' 'TOFT_GIT_SHA=abc' 2>\"$e\"; s=$?; [ $s = 0 ] || cat \"$e\"; rm -f \"$e\"; exit $s; }",
 		"nixpacks build '/tmp/paas-build-abc' --out '/tmp/paas-build-abc' --cache-key " + testServiceID + " '--env' 'TOFT_GIT_SHA=abc' 2>&1",
 		`d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`,
-		"DOCKER_CONFIG='/tmp/paas-docker-abc' docker build -t " + testImageTag +
+		"DOCKER_CONFIG='/tmp/paas-docker-abc' BUILDX_GIT_INFO=false docker build -t " + testImageTag +
 			` --build-arg 'FOO=it'\''s $HOME' --build-arg 'NODE_ENV=production'` +
 			" --build-arg 'BUILDKIT_SYNTAX=" + dockerfileFrontend + "' --build-arg 'BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID + "'" +
 			" -f '/tmp/paas-build-abc/.nixpacks/Dockerfile' '/tmp/paas-build-abc' 2>&1",
@@ -860,7 +860,7 @@ func TestRemoteBuildFromArchive(t *testing.T) {
 		"tar -x -o -f - -C '/tmp/paas-build-abc123'",
 		// The build's own arguments, then the two that keep it to its
 		// service (D-167), with a Docker config of its own.
-		"DOCKER_CONFIG='/tmp/paas-docker-abc' docker build -t " + testImageTag + " --build-arg 'TOFT_GIT_SHA=abc'" +
+		"DOCKER_CONFIG='/tmp/paas-docker-abc' BUILDX_GIT_INFO=false docker build -t " + testImageTag + " --build-arg 'TOFT_GIT_SHA=abc'" +
 			" --build-arg 'BUILDKIT_SYNTAX=" + dockerfileFrontend + "' --build-arg 'BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID + "'" +
 			" -f '/tmp/paas-build-abc123/services/api/Dockerfile' '/tmp/paas-build-abc123' 2>&1",
 		"rm -rf '/tmp/paas-docker-abc'",
