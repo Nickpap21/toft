@@ -63,6 +63,11 @@ networks:
     external: true
 volumes:
   data: {}
+  scratch:
+    driver: local
+    driver_opts: {type: tmpfs, device: tmpfs, o: "size=64m"}
+  share:
+    driver_opts: {type: nfs, o: "addr=10.0.0.5,rw", device: ":/exports/data"}
 `, nil)
 	assert.Empty(t, vs)
 }
@@ -102,6 +107,8 @@ func TestValidate_OneCasePerRule(t *testing.T) {
 		{"home bind mount", "volumes: [\"~/.ssh:/root/.ssh\"]", "", composespec.RuleHostBindMount, "services.app.volumes[0]"},
 		{"relative escape", "volumes: [\"../../etc:/x\"]", "", composespec.RuleHostBindMount, "services.app.volumes[0]"},
 		{"volume driver bind", "volumes: [\"hostroot:/host\"]", "volumes:\n  hostroot:\n    driver: local\n    driver_opts: {type: none, o: bind, device: /}", composespec.RuleHostBindMount, "volumes.hostroot.driver_opts.device"},
+		{"volume driver host disk", "volumes: [\"disk:/host\"]", "volumes:\n  disk:\n    driver: local\n    driver_opts: {type: ext4, device: /dev/vda1}", composespec.RuleHostBindMount, "volumes.disk.driver_opts.type"},
+		{"volume driver overlay", "volumes: [\"ov:/host\"]", "volumes:\n  ov:\n    driver_opts: {type: overlay, device: overlay, o: \"lowerdir=/etc,upperdir=/tmp/u,workdir=/tmp/w\"}", composespec.RuleHostBindMount, "volumes.ov.driver_opts.type"},
 		{"external volume", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    external: true\n    name: paas-postgres-data", composespec.RuleExternalVolume, "volumes.pg.external"},
 		{"volume explicit name", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    name: control-panel-paas_postgres_data", composespec.RuleExternalVolume, "volumes.pg.name"},
 		{"secret file outside", "secrets: [creds]", "secrets:\n  creds:\n    file: /etc/shadow", composespec.RuleHostBindMount, "secrets.creds.file"},

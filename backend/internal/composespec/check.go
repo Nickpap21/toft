@@ -402,6 +402,11 @@ func (c *checker) build(service, field string, b *types.BuildConfig) {
 	c.labels(service, field+".labels", b.Labels)
 }
 
+// localVolumeTypes are the filesystem types a stack volume on the local
+// driver may mount: memory, or a network share. Any other type mounts a
+// device or directories of the host itself.
+var localVolumeTypes = map[string]bool{"tmpfs": true, "nfs": true, "nfs4": true, "cifs": true, "smb3": true}
+
 func (c *checker) volumes() {
 	for _, name := range sortedKeys(c.project.Volumes) {
 		v := c.project.Volumes[name]
@@ -418,11 +423,18 @@ func (c *checker) volumes() {
 			device := v.DriverOpts["device"]
 			o := strings.ToLower(v.DriverOpts["o"])
 			typ := strings.ToLower(v.DriverOpts["type"])
-			if device != "" && (strings.Contains(o, "bind") || typ == "none" || typ == "") {
+			switch {
+			case device != "" && (strings.Contains(o, "bind") || typ == "none" || typ == ""):
 				if !c.inside(device) {
 					rule := hostMountRule(device)
 					c.addValue(rule, "", field+".driver_opts.device", device, "a volume backed by host path %s is a bind mount", device)
 				}
+			case typ != "" && !localVolumeTypes[typ]:
+				// The local driver mounts device as this filesystem type on
+				// the host, as root: a host disk (ext4, xfs, btrfs...) or an
+				// overlay of host directories, which a container then reads
+				// and writes like any volume.
+				c.addValue(RuleHostBindMount, "", field+".driver_opts.type", v.DriverOpts["type"], "volume type %q can mount a host disk or host directories; only tmpfs, nfs and cifs volumes are allowed", v.DriverOpts["type"])
 			}
 		}
 		for _, key := range sortedKeys(v.Labels) {
