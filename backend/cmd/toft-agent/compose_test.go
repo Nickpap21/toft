@@ -121,6 +121,20 @@ func TestAgentComposeWithoutCredentialsHasAnEmptyConfig(t *testing.T) {
 	}
 }
 
+// Docker Hub's credentials go under the key the docker CLI looks Hub up
+// by, whichever of its names the service's registry was given as.
+func TestAgentDockerConfigKeysDockerHubAsTheCLIDoes(t *testing.T) {
+	for _, server := range []string{"", "docker.io", "index.docker.io", "registry-1.docker.io"} {
+		cfg, err := dockerConfig(t.TempDir(), &rollout.RegistryAuth{Server: server, Username: "u", Password: "hunter2"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, filepath.Join(cfg, "config.json")); got != `{"auths":{"https://index.docker.io/v1/":{"auth":"dTpodW50ZXIy"}}}` {
+			t.Fatalf("%q: docker config %q", server, got)
+		}
+	}
+}
+
 // A stack whose images route themselves is taken down after up.
 func TestAgentTakesDownAStackThatRoutesItself(t *testing.T) {
 	out, release := fakeCompose(t)

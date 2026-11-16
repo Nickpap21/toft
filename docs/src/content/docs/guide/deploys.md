@@ -57,8 +57,8 @@ Settings → Source offers two builders:
   the root. It holds the commit's files without `.git`, so a build can't run
   `git`, and redeploying the same commit builds from Docker's cache.
 - **Nixpacks**: detects the language and builds it. You can replace the
-  install, build and start commands it detects. Nixpacks must be installed on
-  the server.
+  install, build and start commands it detects. Toft brings Nixpacks for the
+  panel's own server; on a server you add, Nixpacks must be installed.
 
 Builds run on BuildKit, and each service's builds are kept apart from every
 other service's on the server:

@@ -169,3 +169,15 @@ func TestPreviewStatus(t *testing.T) {
 		t.Errorf("blocked: %s", got)
 	}
 }
+
+// A Nixpacks service is refused for what is true of it since each service
+// has a build cache of its own (D-167): its Dockerfile can't be checked.
+func TestUntrustedRefusalOfNixpacks(t *testing.T) {
+	got := untrustedRefusal(SourceService{Name: "web", BuildPack: "nixpacks"})
+	if want := "web builds with Nixpacks, whose Dockerfile is written during the build and can't be checked first: a preview opened with an API key needs a Dockerfile"; got != want {
+		t.Fatalf("untrustedRefusal = %q, want %q", got, want)
+	}
+	if untrustedRefusal(SourceService{Name: "web", BuildPack: "dockerfile"}) != "" {
+		t.Fatal("a Dockerfile service is not refused here")
+	}
+}

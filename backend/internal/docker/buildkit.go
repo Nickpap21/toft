@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -9,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/Nickpap21/toft/backend/internal/deployment"
-	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/google/uuid"
 )
 
@@ -99,25 +97,4 @@ func nixpacksVariables(plan []byte) (map[string]*string, error) {
 		out[k] = &v
 	}
 	return out, nil
-}
-
-// registryConfig is a docker CLI config.json holding a's credentials for
-// server ("" is Docker Hub) and nothing else: what `docker login` would
-// write into the host's own config, for a config directory one deploy
-// uses. A credential that is only a token still needs a username.
-func registryConfig(a rollout.RegistryAuth, server string) ([]byte, error) {
-	user := a.Username
-	if user == "" {
-		user = "token"
-	}
-	// The CLI looks a registry up by its host, and Docker Hub by its
-	// index's URL.
-	host, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(server, "https://"), "http://"), "/")
-	switch host {
-	case "", "docker.io", "index.docker.io", "registry-1.docker.io":
-		host = "https://index.docker.io/v1/"
-	}
-	return json.Marshal(map[string]any{"auths": map[string]any{
-		host: map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + a.Password))},
-	}})
 }
