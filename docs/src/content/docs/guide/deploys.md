@@ -66,8 +66,7 @@ Settings → Source offers two builders:
   script fetches); otherwise it runs as the server's login and the deploy
   log says so. A link in the repository that leads out of it fails a
   Nixpacks build on any server, and so does a `nixpacks.toml` whose static
-  assets or `nixpkgsArchive` name a path outside Nixpacks' own folder, or
-  a `NIXPACKS_CONFIG_FILE` outside the repository.
+  assets or `nixpkgsArchive` name a path outside Nixpacks' own folder.
 
 Builds run on BuildKit, and each service's builds are kept apart from every
 other service's on the server:
