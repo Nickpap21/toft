@@ -237,10 +237,12 @@ func linksOutCmd(dir string) string {
 // files there). nixpacks only reads the repository and writes its
 // Dockerfile. The unit outlives systemd-run, so the cancel mark goes in
 // with it (pkg/sshclient) and RuntimeMaxSec ends one nothing cancelled.
+// The description is what the server's journal names the unit by: without
+// one it is the command line, with the service's commands and variables.
 // root is mktemp's name, never the repository's: systemd reads spaces and
 // colons in a path its own way.
 func nixpacksSandbox(root, nix string) string {
-	return "systemd-run --quiet --wait --pipe --collect -p User=65534 -p Group=65534" +
+	return "systemd-run --quiet --wait --pipe --collect --description=nixpacks -p User=65534 -p Group=65534" +
 		" -p TemporaryFileSystem=/:ro -p TemporaryFileSystem=/proc:ro -p BindReadOnlyPaths=" + nix +
 		" -p BindPaths=" + shellEscape(root) + " -p PrivateNetwork=yes -p PrivateDevices=yes -p NoNewPrivileges=yes" +
 		` -p RuntimeMaxSec=300 ${TOFT_EXEC:+-E "TOFT_EXEC=$TOFT_EXEC"} ` + nix

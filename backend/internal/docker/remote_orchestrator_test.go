@@ -767,7 +767,7 @@ func TestRemoteNixpacksRunsInItsSandbox(t *testing.T) {
 		deployment.NixpacksCommands{}, nil, nil, func(l string) { logs = append(logs, l) })
 	require.NoError(t, err)
 
-	const sandbox = "systemd-run --quiet --wait --pipe --collect -p User=65534 -p Group=65534" +
+	const sandbox = "systemd-run --quiet --wait --pipe --collect --description=nixpacks -p User=65534 -p Group=65534" +
 		" -p TemporaryFileSystem=/:ro -p TemporaryFileSystem=/proc:ro -p BindReadOnlyPaths='/usr/local/bin/nixpacks'" +
 		" -p BindPaths='/tmp/paas-build-abc' -p PrivateNetwork=yes -p PrivateDevices=yes -p NoNewPrivileges=yes" +
 		` -p RuntimeMaxSec=300 ${TOFT_EXEC:+-E "TOFT_EXEC=$TOFT_EXEC"} '/usr/local/bin/nixpacks'`
