@@ -3469,7 +3469,11 @@ function Credentials({
           <Field
             id="set-rserver"
             labelText="Registry"
-            hint="For example ghcr.io."
+            hint={
+              service.source_type === "docker-image"
+                ? "For example ghcr.io."
+                : "For example ghcr.io. Empty is Docker Hub."
+            }
           >
             <input
               id="set-rserver"
