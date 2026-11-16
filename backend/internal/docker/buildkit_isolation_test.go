@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"maps"
 	"os"
 	"os/exec"
@@ -60,7 +61,7 @@ func buildAs(t *testing.T, serviceID, dockerfile string, files map[string]string
 	var lines []string
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	err = localBuild(ctx, dir, "Dockerfile", tag, nil, func(l string) { lines = append(lines, l) })
+	err = localBuild(ctx, dir, "Dockerfile", tag, nil, nil, func(l string) { lines = append(lines, l) })
 	return tag, strings.Join(lines, "\n"), err
 }
 
@@ -192,6 +193,39 @@ func TestLocalBuildHonoursDockerignore(t *testing.T) {
 	assert.Contains(t, log, "ctx-"+n+": [Dockerfile kept.txt ]")
 }
 
+// A build with the service's registry login (for a registry it never
+// contacts) can't hand it to a RUN step: not in its environment, nor in a
+// file anywhere in the step's filesystem. The step builds the marker from
+// halves, so the log has it only if the step found it; a file copied in
+// with a control value shows the search finds what is there.
+func TestBuildLoginIsNotReadableByARunStep(t *testing.T) {
+	needsBuildKit(t)
+	n, marker := rand.Text(), rand.Text()
+	b64 := base64.StdEncoding.EncodeToString([]byte("bot:" + marker))
+	auth := &rollout.RegistryAuth{Server: "registry.toft.invalid", Username: "bot", Password: marker}
+	half := func(s string) string { return `"$(echo ` + s[:len(s)/2] + `)$(echo ` + s[len(s)/2:] + `)"` }
+	dir := t.TempDir()
+	df := "FROM " + isolationBase + "\nCOPY ctl /ctl\n" +
+		"RUN M=" + half(marker) + "; B=" + half(b64) + "; C=" + half("ctl"+n) + "; env; tr '\\0' '\\n' < /proc/self/environ; " +
+		`find / \( -path /proc -o -path /sys \) -prune -o -type f -exec grep -H -o -e "$M" -e "$B" -e "$C" {} + 2>/dev/null; ` +
+		`find / \( -path /proc -o -path /sys \) -prune -o -name "conf""ig.json" -print; echo done-` + n + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(df), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ctl"), []byte("ctl"+n+"\n"), 0o644))
+	tag := "paas/" + uuid.NewString() + ":" + uuid.NewString()
+	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
+	var lines []string
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	err := localBuild(ctx, dir, "Dockerfile", tag, nil, auth, func(l string) { lines = append(lines, l) })
+	log := strings.Join(lines, "\n")
+	require.NoError(t, err, log)
+	require.Contains(t, log, "done-"+n, "the step ran")
+	require.Contains(t, log, "/ctl:ctl"+n, "the search finds a file's value")
+	assert.NotContains(t, log, marker)
+	assert.NotContains(t, log, b64)
+	assert.NotContains(t, log, "config.json")
+}
+
 // A build cancelled mid-way (its service deleted, the deploy's time limit)
 // ends soon, and leaves no image and no step running.
 func TestCancelledBuildStops(t *testing.T) {
@@ -209,7 +243,7 @@ func TestCancelledBuildStops(t *testing.T) {
 	started := false
 	done := make(chan error, 1)
 	go func() {
-		done <- localBuild(ctx, dir, "Dockerfile", tag, nil, func(l string) {
+		done <- localBuild(ctx, dir, "Dockerfile", tag, nil, nil, func(l string) {
 			// The step's output, not the line that names its command.
 			if strings.HasSuffix(l, " started-"+n) {
 				started = true

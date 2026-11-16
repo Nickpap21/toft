@@ -100,6 +100,7 @@ func TestBuildFromTheProjectsRepository(t *testing.T) {
 	input := deployment.TriggerInput{
 		ServiceID: "svc-1", ProjectID: "p1", SourceType: "git", RepositoryID: id, GitBranch: "main",
 		BaseDirectory: "api", ServiceName: "api", EnvironmentName: "production",
+		RegistryAuth: &deployment.RegistryAuth{Server: "ghcr.io", Password: "hunter2"},
 	}
 	_, err = svc.Trigger(context.Background(), input)
 	require.NoError(t, err)
@@ -114,6 +115,7 @@ func TestBuildFromTheProjectsRepository(t *testing.T) {
 	require.NotNil(t, orch.buildArgs["TOFT_GIT_SHA"])
 	assert.Equal(t, head, *orch.buildArgs["TOFT_GIT_SHA"])
 	assert.Equal(t, "main", *orch.buildArgs["TOFT_GIT_BRANCH"])
+	assert.Equal(t, input.RegistryAuth, orch.buildAuth, "the service's registry login, for private base images")
 	orch.mu.Unlock()
 	repo.mu.Lock()
 	assert.Contains(t, repo.commits, deployment.Commit{SHA: head, Subject: "Add the api"})

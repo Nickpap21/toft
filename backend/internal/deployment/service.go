@@ -79,13 +79,16 @@ type Orchestrator interface {
 	// The Commit is what the clone checked out (the branch's tip), returned
 	// once the clone succeeded, also when the build then fails; it is empty
 	// when the clone failed or the commit could not be read.
-	BuildFromGit(ctx context.Context, repoURL, branch, baseDir, imageTag string, buildArgs map[string]*string, logFn func(string)) (Commit, error)
-	BuildFromGitNixpacks(ctx context.Context, repoURL, branch, baseDir, imageTag string, cmds NixpacksCommands, buildArgs map[string]*string, logFn func(string)) (Commit, error)
+	//
+	// auth is the service's registry login (nil or no password: none), for
+	// the base images the build pulls; only the docker build gets it.
+	BuildFromGit(ctx context.Context, repoURL, branch, baseDir, imageTag string, buildArgs map[string]*string, auth *RegistryAuth, logFn func(string)) (Commit, error)
+	BuildFromGitNixpacks(ctx context.Context, repoURL, branch, baseDir, imageTag string, cmds NixpacksCommands, buildArgs map[string]*string, auth *RegistryAuth, logFn func(string)) (Commit, error)
 	// BuildFromArchive builds imageTag from source, a commit's tree as a tar
 	// (the project's own repository, D-77): with the Dockerfile at
 	// baseDir/Dockerfile and the tree as the context, or with nixpacks in
 	// baseDir when nixpacks is set. The build host never sees a URL or a token.
-	BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error
+	BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *NixpacksCommands, buildArgs map[string]*string, auth *RegistryAuth, logFn func(string)) error
 	// Rollout runs a single-container deploy's rollout on the server
 	// (rollout.Run): pull, migrate, the new blue/green slot, its checks and
 	// the switch. route is the new slot's routing, which the orchestrator
@@ -2044,9 +2047,9 @@ func (s *Service) runGitPipeline(ctx context.Context, deploymentID string, input
 			built, buildErr = s.buildFromRepository(ctx, deploymentID, input, orch, imageTag, buildArgs, appendLog)
 		} else if input.BuildPack == "nixpacks" {
 			appendLog("[nixpacks] Detecting language and building...")
-			built, buildErr = orch.BuildFromGitNixpacks(ctx, repoURL, input.GitBranch, input.BaseDirectory, imageTag, input.Nixpacks, buildArgs, appendLog)
+			built, buildErr = orch.BuildFromGitNixpacks(ctx, repoURL, input.GitBranch, input.BaseDirectory, imageTag, input.Nixpacks, buildArgs, input.RegistryAuth, appendLog)
 		} else {
-			built, buildErr = orch.BuildFromGit(ctx, repoURL, input.GitBranch, input.BaseDirectory, imageTag, buildArgs, appendLog)
+			built, buildErr = orch.BuildFromGit(ctx, repoURL, input.GitBranch, input.BaseDirectory, imageTag, buildArgs, input.RegistryAuth, appendLog)
 		}
 		releaseSlot()
 		// What was built, which the status updates below keep: a push's or
@@ -3061,7 +3064,7 @@ func (s *Service) buildFromRepository(ctx context.Context, deploymentID string, 
 	if input.BuildPack == "nixpacks" {
 		nix = &input.Nixpacks
 	}
-	buildErr := orch.BuildFromArchive(ctx, a, input.BaseDirectory, imageTag, nix, args, appendLog)
+	buildErr := orch.BuildFromArchive(ctx, a, input.BaseDirectory, imageTag, nix, args, input.RegistryAuth, appendLog)
 	if err := closeArchive(a); err != nil {
 		return c, err
 	}
