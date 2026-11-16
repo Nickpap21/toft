@@ -157,8 +157,9 @@ func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, b
 	}
 	defer cleanup()
 	// BUILDX_GIT_INFO: buildx doesn't run git in the context, which is the
-	// repository's to shape (as in localBuild).
-	cmd := cfg + "BUILDX_GIT_INFO=false docker build -t " + imageTag
+	// repository's to shape (as in localBuild). BUILDX_GIT_LABELS too: set
+	// in the login's environment it would have buildx run git all the same.
+	cmd := cfg + "BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build -t " + imageTag
 	for _, a := range args {
 		cmd += " --build-arg " + shellEscape(a)
 	}
