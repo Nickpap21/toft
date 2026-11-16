@@ -851,7 +851,10 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 	if err := noLinksOut(dir); err != nil {
 		return err
 	}
-	flags := nixpacksArgs(cmds, buildArgs)
+	flags, err := nixpacksArgs(cmds, buildArgs)
+	if err != nil {
+		return err
+	}
 	// nixpacks gets the clean environment the build does, none of the
 	// backend's own.
 	planCmd := exec.CommandContext(ctx, "nixpacks", append([]string{"plan", dir}, flags...)...)

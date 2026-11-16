@@ -187,9 +187,9 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, root, dir, image
 	if err != nil {
 		return err
 	}
-	flags := ""
-	for _, a := range nixpacksArgs(cmds, buildArgs) {
-		flags += " " + shellEscape(a) // the commands are user input
+	args, err := nixpacksArgs(cmds, buildArgs)
+	if err != nil {
+		return err
 	}
 	out := shellEscape(dir + "/.nixpacks")
 	// nixpacks writes into dir/.nixpacks: one the repository brought (a
@@ -199,11 +199,24 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, root, dir, image
 		return fmt.Errorf("check the build folder: %w", err)
 	}
 	if link, _, _ := strings.Cut(strings.TrimSpace(links), "\n"); link != "" {
-		return fmt.Errorf("%w: %s is a link that doesn't stay in the build folder", service.ErrInvalidConfig, link)
+		return fmt.Errorf("%w: %s is a link that doesn't stay in the build folder", service.ErrInvalidConfig, strings.TrimPrefix(link, "/"))
 	}
-	nix := o.nixpacksRunner(ctx, root, logFn)
+	nix, sandboxed := o.nixpacksRunner(ctx, root, logFn)
+	arg, own := shellEscape, ""
+	if sandboxed {
+		// systemd expands ${VAR} and $VAR in a unit's command line, and
+		// reads $$ as $: the service's commands, variables and base
+		// directory go in with every $ doubled. The folder is root's
+		// again before docker reads the Dockerfile in it.
+		arg = func(s string) string { return shellEscape(strings.ReplaceAll(s, "$", "$$")) }
+		own = " && chown -hR 0:0 " + shellEscape(root)
+	}
+	flags := ""
+	for _, a := range args {
+		flags += " " + arg(a) // the commands are user input
+	}
 	// The plan is nixpacks' stdout; what it says beside it is logged when it fails.
-	plan, err := o.host.Exec(ctx, `e=$(mktemp) && { `+nix+` plan `+shellEscape(dir)+flags+` 2>"$e"; s=$?; [ $s = 0 ] || cat "$e"; rm -f "$e"; exit $s; }`)
+	plan, err := o.host.Exec(ctx, `e=$(mktemp) && { `+nix+` plan `+arg(dir)+flags+` 2>"$e"; s=$?; [ $s = 0 ] || cat "$e"; rm -f "$e"; exit $s; }`)
 	if err != nil {
 		logFn(plan)
 		return fmt.Errorf("remote nixpacks plan: %w", err)
@@ -213,7 +226,7 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, root, dir, image
 		return err
 	}
 	logFn(fmt.Sprintf("Building %s with nixpacks on remote...", imageTag))
-	write := fmt.Sprintf("%s build %s --out %s --cache-key %s%s 2>&1", nix, shellEscape(dir), shellEscape(dir), serviceID, flags)
+	write := fmt.Sprintf("%s build %s --out %s --cache-key %s%s 2>&1%s", nix, arg(dir), arg(dir), serviceID, flags, own)
 	if err := o.streamRetry(ctx, write, logFn); err != nil {
 		return fmt.Errorf("remote nixpacks build: %w", err)
 	}
@@ -221,11 +234,13 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, root, dir, image
 }
 
 // linksOutCmd prints each link under dir that, followed, leaves dir or
-// leads nowhere, by its path in dir: noLinksOut for a folder on a server. A
-// failed realpath of dir fails the command, so nothing passes unchecked.
+// leads nowhere, by its path in dir after a "/": noLinksOut for a folder on
+// a server. A failed realpath of dir fails the command, so nothing passes
+// unchecked, and the "/" is what is left of a name made of spaces once the
+// SSH client has trimmed the reply.
 func linksOutCmd(dir string) string {
 	return "r=$(realpath -e -- " + shellEscape(dir) + `) || exit 1; find "$r" -type l -exec sh -c ` +
-		shellEscape(`r=$1; shift; for p; do q=$(realpath -e -- "$p" 2>/dev/null) || q=; case "$q/" in "$r"/*) ;; *) printf '%s\n' "${p#"$r"/}" ;; esac; done`) +
+		shellEscape(`r=$1; shift; for p; do q=$(realpath -e -- "$p" 2>/dev/null) || q=; case "$q/" in "$r"/*) ;; *) printf '/%s\n' "${p#"$r"/}" ;; esac; done`) +
 		` sh "$r" {} +`
 }
 
@@ -245,7 +260,7 @@ func nixpacksSandbox(root, nix string) string {
 	return "systemd-run --quiet --wait --pipe --collect --description=nixpacks -p User=65534 -p Group=65534" +
 		" -p TemporaryFileSystem=/:ro -p TemporaryFileSystem=/proc:ro -p BindReadOnlyPaths=" + nix +
 		" -p BindPaths=" + shellEscape(root) + " -p PrivateNetwork=yes -p PrivateDevices=yes -p NoNewPrivileges=yes" +
-		` -p RuntimeMaxSec=300 ${TOFT_EXEC:+-E "TOFT_EXEC=$TOFT_EXEC"} ` + nix
+		` -p RuntimeMaxSec=300 -E "TOFT_EXEC=$TOFT_EXEC" ` + nix
 }
 
 // nixpacksRunner is how nixpacks starts on the server for the build in
@@ -254,16 +269,16 @@ func nixpacksSandbox(root, nix string) string {
 // release's own build is static); root is then handed to the sandbox's
 // user. Otherwise as the login, in the clean environment compose gets, and
 // the deploy log says so.
-func (o *RemoteOrchestrator) nixpacksRunner(ctx context.Context, root string, logFn func(string)) string {
+func (o *RemoteOrchestrator) nixpacksRunner(ctx context.Context, root string, logFn func(string)) (nix string, sandboxed bool) {
 	probe := `n=$(realpath -e -- "$(command -v nixpacks)") && [ "$(id -u)" = 0 ] && ` + nixpacksSandbox(root, `"$n"`) +
 		` --version >/dev/null 2>&1 && chown -hR 65534:65534 ` + shellEscape(root) + ` && printf %s "$n"`
 	if n, err := o.host.Exec(ctx, probe); err == nil && strings.HasPrefix(n, "/") {
-		return nixpacksSandbox(root, shellEscape(strings.TrimSpace(n)))
+		return nixpacksSandbox(root, shellEscape(strings.TrimSpace(n))), true
 	}
 	if ctx.Err() == nil {
 		logFn("Nixpacks runs as the server's login here, not in a sandbox: that takes a root login, systemd and a statically linked nixpacks on the server.")
 	}
-	return remoteCleanEnv("nixpacks")
+	return remoteCleanEnv("nixpacks"), false
 }
 
 // BuildFromArchive unpacks source, a commit's tree as a tar (D-77), into a

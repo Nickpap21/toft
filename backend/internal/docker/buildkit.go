@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/Nickpap21/toft/backend/internal/deployment"
+	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/google/uuid"
 )
 
@@ -68,15 +70,20 @@ func buildArgList(imageTag string, buildArgs map[string]*string) ([]string, erro
 
 // nixpacksArgs are the flags `nixpacks plan` and `nixpacks build` both
 // take: the commands that replace the detected ones, and buildArgs as
-// --env, in order of key.
-func nixpacksArgs(cmds deployment.NixpacksCommands, buildArgs map[string]*string) []string {
+// --env, in order of key. nixpacks reads the file NIXPACKS_CONFIG_FILE
+// names, joined to the repository's folder as it is written: a full path
+// or one through ".." is a file of the server's, and is refused.
+func nixpacksArgs(cmds deployment.NixpacksCommands, buildArgs map[string]*string) ([]string, error) {
 	args := nixpacksCommandArgs(cmds)
 	for _, k := range slices.Sorted(maps.Keys(buildArgs)) {
 		if v := buildArgs[k]; v != nil {
+			if k == "NIXPACKS_CONFIG_FILE" && !filepath.IsLocal(*v) {
+				return nil, fmt.Errorf("%w: NIXPACKS_CONFIG_FILE names a file outside the repository", service.ErrInvalidConfig)
+			}
 			args = append(args, "--env", k+"="+*v)
 		}
 	}
-	return args
+	return args, nil
 }
 
 // nixpacksVariables are the variables of a Nixpacks plan (the JSON
@@ -85,12 +92,32 @@ func nixpacksArgs(cmds deployment.NixpacksCommands, buildArgs map[string]*string
 // them the same way. Toft runs that build itself (buildArgList), because a
 // repository's nixpacks.toml can name BUILDKIT_SYNTAX and
 // BUILDKIT_CACHE_MOUNT_NS as variables, and those beat --env.
+//
+// A plan that would have `nixpacks build` write outside its folder is
+// refused here, before that runs: nixpacks writes each static asset at
+// .nixpacks/assets/<its name> and a phase's Nix file at
+// .nixpacks/nixpkgs-<its archive>.nix, whatever the names say, and a
+// repository's nixpacks.toml chooses both.
 func nixpacksVariables(plan []byte) (map[string]*string, error) {
 	var p struct {
-		Variables map[string]string `json:"variables"`
+		Variables    map[string]string `json:"variables"`
+		StaticAssets map[string]string `json:"staticAssets"`
+		Phases       map[string]struct {
+			NixpkgsArchive string `json:"nixpkgsArchive"`
+		} `json:"phases"`
 	}
 	if err := json.Unmarshal(plan, &p); err != nil {
 		return nil, fmt.Errorf("read the nixpacks plan: %w", err)
+	}
+	for name := range p.StaticAssets {
+		if !filepath.IsLocal(name) {
+			return nil, fmt.Errorf("%w: the static asset %q is not a file in Nixpacks' own folder", service.ErrInvalidConfig, name)
+		}
+	}
+	for name, phase := range p.Phases {
+		if strings.Contains(phase.NixpkgsArchive, "/") {
+			return nil, fmt.Errorf("%w: the %s phase's nixpkgsArchive %q is not a commit of nixpkgs", service.ErrInvalidConfig, name, phase.NixpkgsArchive)
+		}
 	}
 	out := make(map[string]*string, len(p.Variables))
 	for k, v := range p.Variables {

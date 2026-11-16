@@ -92,6 +92,9 @@ func TestLinksOutCmd(t *testing.T) {
 		require.NoError(t, err, string(out))
 		lines := strings.Fields(string(out))
 		sort.Strings(lines)
+		for i, l := range lines {
+			lines[i] = strings.TrimPrefix(l, "/")
+		}
 		return lines
 	}
 	require.NoError(t, os.Symlink("src/main.js", filepath.Join(dir, "index.js")))
@@ -105,7 +108,16 @@ func TestLinksOutCmd(t *testing.T) {
 	require.NoError(t, os.Symlink(other, filepath.Join(dir, "src", "other")))
 	assert.Equal(t, []string{"Procfile", "dangling", "src/other", "src/passwd"}, run())
 
-	_, err := exec.Command("sh", "-c", linksOutCmd(filepath.Join(tmp, "missing"))).CombinedOutput()
+	// A link named with a space only still prints something the SSH
+	// client's trim leaves.
+	blank := filepath.Join(tmp, "paas-build-c")
+	require.NoError(t, os.Mkdir(blank, 0o755))
+	require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(blank, " ")))
+	out, err := exec.Command("sh", "-c", linksOutCmd(blank)).CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Equal(t, "/", strings.TrimSpace(string(out)))
+
+	_, err = exec.Command("sh", "-c", linksOutCmd(filepath.Join(tmp, "missing"))).CombinedOutput()
 	assert.Error(t, err, "a folder that can't be read is not passed as clean")
 }
 

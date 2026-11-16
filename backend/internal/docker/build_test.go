@@ -249,6 +249,37 @@ func TestLocalNixpacksIsKeptToTheTree(t *testing.T) {
 	assert.NotContains(t, string(env), "JWT_SECRET")
 }
 
+// As on a server (TestRemoteNixpacksRefusesAPlanThatWritesOutsideItsFolder,
+// TestRemoteNixpacksConfigFileStaysInTheRepository): on the panel's host
+// nixpacks runs as the backend, and writes nothing for a plan that names a
+// file outside its folder, nor starts for a config file outside the
+// repository.
+func TestLocalNixpacksWritesAndReadsInItsFolderOnly(t *testing.T) {
+	dir := fakeDocker(t)
+	script := "#!/bin/sh\necho \"$1\" >> " + dir + "/nixran\n[ \"$1\" = plan ] && cat " + dir + "/plan\n" +
+		"[ \"$1\" = build ] && mkdir \"$2/.nixpacks\" && echo 'FROM scratch' > \"$2/.nixpacks/Dockerfile\"\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(script), 0o700))
+	build := func(plan string, buildArgs map[string]*string) error {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "plan"), []byte(plan), 0o600))
+		return (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, nil),
+			"", testImageTag, &deployment.NixpacksCommands{}, buildArgs, nil, func(string) {})
+	}
+	file := "/etc/toft/config.toml"
+	err := build("{}", map[string]*string{"NIXPACKS_CONFIG_FILE": &file})
+	require.ErrorIs(t, err, service.ErrInvalidConfig)
+	assert.NoFileExists(t, filepath.Join(dir, "nixran"), "nixpacks did not run")
+
+	for name, plan := range map[string]string{
+		"an asset":          `{"staticAssets":{"../../../../usr/local/bin/nixpacks":"#!/bin/sh\n"}}`,
+		"a nixpkgs archive": `{"phases":{"setup":{"nixpkgsArchive":"/../../x"}}}`,
+	} {
+		require.ErrorIs(t, build(plan, nil), service.ErrInvalidConfig, name)
+	}
+	ran, err := os.ReadFile(filepath.Join(dir, "nixran"))
+	require.NoError(t, err)
+	assert.Equal(t, "plan\nplan\n", string(ran), "the Dockerfile and the plan's files were never written")
+}
+
 // A command's output reaches the deployment log while the command runs:
 // this one waits, after its first line, for the test to have read it.
 func TestRunStreamHandsLinesOverAsTheyAreWritten(t *testing.T) {
