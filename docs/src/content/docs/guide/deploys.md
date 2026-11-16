@@ -47,7 +47,8 @@ the service.
 
 A git service builds from one of the project's own repositories in Toft, or
 from any repository URL. For a private repository at a URL, store a username
-and token in Settings → Credentials.
+and token in Settings → Credentials. For a private base image in the
+Dockerfile's `FROM`, store that registry's login there too.
 
 Settings → Source offers two builders:
 
@@ -69,8 +70,9 @@ other service's on the server:
   pinned). A `# syntax=` line in a Dockerfile is not followed.
 - A build has no secrets: `--mount=type=secret` and `--mount=type=ssh` get
   nothing, and `--network=host` is refused.
-- A build pulls its base images without a login, even where someone ran
-  `docker login` on the server.
+- A build pulls its base images with the service's own registry login, or
+  with none: a `docker login` someone ran on the server is never used. The
+  login goes only to its registry, and no `RUN` step can read it.
 
 The first two also hold for the images a Compose stack builds.
 

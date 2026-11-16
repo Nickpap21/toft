@@ -39,9 +39,11 @@ type fakeHost struct {
 	mu     sync.Mutex
 	calls  []call
 	inputs []string // stdin of each ExecInput, in order
-	exec   func(ctx context.Context, cmd string) (string, error)
-	stream func(ctx context.Context, cmd string) error
-	docker *fakedocker.Docker
+	// uploads is what each Upload wrote, by path.
+	uploads map[string]string
+	exec    func(ctx context.Context, cmd string) (string, error)
+	stream  func(ctx context.Context, cmd string) error
+	docker  *fakedocker.Docker
 	// subsystem answers SubsystemStream (nil: an error).
 	subsystem func(name, stdin string, lineFn func(string)) error
 }
@@ -98,8 +100,14 @@ func (f *fakeHost) ExecStream(ctx context.Context, cmd string, _ func(string)) e
 	return f.stream(ctx, cmd)
 }
 
-func (f *fakeHost) Upload(ctx context.Context, remotePath string, _ []byte) error {
+func (f *fakeHost) Upload(ctx context.Context, remotePath string, content []byte) error {
 	f.record(ctx, "upload", remotePath)
+	f.mu.Lock()
+	if f.uploads == nil {
+		f.uploads = map[string]string{}
+	}
+	f.uploads[remotePath] = string(content)
+	f.mu.Unlock()
 	return ctx.Err()
 }
 
@@ -145,23 +153,23 @@ func TestBuildsRefuseABaseDirectoryOutsideTheBuildFolder(t *testing.T) {
 	log := func(string) {}
 	nixpacks := []*deployment.NixpacksCommands{nil, {}}
 
-	_, err := o.BuildFromGit(ctx, "https://example.com/r.git", "main", evil, "img:1", nil, log)
+	_, err := o.BuildFromGit(ctx, "https://example.com/r.git", "main", evil, "img:1", nil, nil, log)
 	assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromGit")
-	_, err = o.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", evil, "img:1", deployment.NixpacksCommands{}, nil, log)
+	_, err = o.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", evil, "img:1", deployment.NixpacksCommands{}, nil, nil, log)
 	assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromGitNixpacks")
 	for _, nix := range nixpacks {
-		err = o.BuildFromArchive(ctx, strings.NewReader("tar"), evil, "img:1", nix, nil, log)
+		err = o.BuildFromArchive(ctx, strings.NewReader("tar"), evil, "img:1", nix, nil, nil, log)
 		assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromArchive")
 	}
 	assert.Empty(t, h.recorded(), "no command reached the server")
 
 	l := &LocalOrchestrator{log: zap.NewNop()}
-	_, err = l.BuildFromGit(ctx, "https://example.com/r.git", "main", evil, "img:1", nil, log)
+	_, err = l.BuildFromGit(ctx, "https://example.com/r.git", "main", evil, "img:1", nil, nil, log)
 	assert.ErrorIs(t, err, service.ErrInvalidConfig, "local BuildFromGit")
-	_, err = l.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", evil, "img:1", deployment.NixpacksCommands{}, nil, log)
+	_, err = l.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", evil, "img:1", deployment.NixpacksCommands{}, nil, nil, log)
 	assert.ErrorIs(t, err, service.ErrInvalidConfig, "local BuildFromGitNixpacks")
 	for _, nix := range nixpacks {
-		err = l.BuildFromArchive(ctx, strings.NewReader("tar"), evil, "img:1", nix, nil, log)
+		err = l.BuildFromArchive(ctx, strings.NewReader("tar"), evil, "img:1", nix, nil, nil, log)
 		assert.ErrorIs(t, err, service.ErrInvalidConfig, "local BuildFromArchive")
 	}
 }
@@ -211,7 +219,7 @@ func TestRemoteBuildCleansUpAfterCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := newTestRemote(h).BuildFromGit(ctx, "https://example.com/r.git", "main", "", "paas/x:1", nil, func(string) {})
+		_, err := newTestRemote(h).BuildFromGit(ctx, "https://example.com/r.git", "main", "", "paas/x:1", nil, nil, func(string) {})
 		done <- err
 	}()
 	require.Eventually(t, func() bool { _, ok := h.find("git clone"); return ok }, time.Second, time.Millisecond)
@@ -618,7 +626,7 @@ func TestRemoteCommandsQuoteUserInput(t *testing.T) {
 	_ = o.ExecInContainer(ctx, "svc", evil, "true", func(string) {})
 	_ = o.StreamLogs(ctx, "svc", 10, evil, func(string) {})
 	_, _ = o.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", evil, "img:1",
-		deployment.NixpacksCommands{Install: evil, Build: evil}, nil, func(string) {})
+		deployment.NixpacksCommands{Install: evil, Build: evil}, nil, nil, func(string) {})
 
 	cmds := h.recorded()
 	require.NotEmpty(t, cmds)
@@ -642,7 +650,7 @@ func TestRemoteCloneKeepsTheTokenOffTheCommandLine(t *testing.T) {
 			return "", nil
 		}}
 		o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
-		_, _ = o.BuildFromGit(context.Background(), repo, "main", "", "img:1", nil, func(string) {})
+		_, _ = o.BuildFromGit(context.Background(), repo, "main", "", "img:1", nil, nil, func(string) {})
 
 		for _, c := range h.recorded() {
 			assert.NotContains(t, c.cmd, "ghp_secret", "the token reached a command line: %s", c.cmd)
@@ -685,11 +693,11 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 		var lines []string
 		build := o.BuildFromGit
 		if nixpacks {
-			build = func(ctx context.Context, repo, branch, dir, tag string, args map[string]*string, logFn func(string)) (deployment.Commit, error) {
-				return o.BuildFromGitNixpacks(ctx, repo, branch, dir, tag, deployment.NixpacksCommands{}, args, logFn)
+			build = func(ctx context.Context, repo, branch, dir, tag string, args map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
+				return o.BuildFromGitNixpacks(ctx, repo, branch, dir, tag, deployment.NixpacksCommands{}, args, auth, logFn)
 			}
 		}
-		c, err := build(context.Background(), "https://example.com/r.git", "main", "", testImageTag, nil, func(l string) { lines = append(lines, l) })
+		c, err := build(context.Background(), "https://example.com/r.git", "main", "", testImageTag, nil, nil, func(l string) { lines = append(lines, l) })
 
 		assert.ErrorContains(t, err, "exit status 1", "the build failed")
 		assert.Equal(t, deployment.Commit{SHA: sha, Subject: "Fix nil pointer in cart totals"}, c)
@@ -719,7 +727,7 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 func TestRemoteNixpacksCommands(t *testing.T) {
 	h := nixpacksHost(`{"variables":{}}`)
 	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
-		deployment.NixpacksCommands{Install: "npm ci", Build: "npm run build"}, nil, func(string) {})
+		deployment.NixpacksCommands{Install: "npm ci", Build: "npm run build"}, nil, nil, func(string) {})
 	require.NoError(t, err)
 	for _, step := range []string{"nixpacks plan", "nixpacks build"} {
 		c, ok := h.find(step)
@@ -730,7 +738,7 @@ func TestRemoteNixpacksCommands(t *testing.T) {
 
 	h = nixpacksHost(`{"variables":{}}`)
 	_, err = newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
-		deployment.NixpacksCommands{}, nil, func(string) {})
+		deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	require.NoError(t, err)
 	build, _ := h.find("nixpacks build")
 	assert.NotContains(t, build.cmd, "--install-cmd", "Nixpacks keeps what it detects")
@@ -761,7 +769,7 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 	h := nixpacksHost(`{"variables":{"NODE_ENV":"production","FOO":"it's $HOME","BUILDKIT_SYNTAX":"example.invalid/nope:1","BUILDKIT_CACHE_MOUNT_NS":"paas/other"}}`)
 	sha := "abc"
 	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
-		deployment.NixpacksCommands{}, map[string]*string{"TOFT_GIT_SHA": &sha}, func(string) {})
+		deployment.NixpacksCommands{}, map[string]*string{"TOFT_GIT_SHA": &sha}, nil, func(string) {})
 	require.NoError(t, err)
 
 	var seq []string
@@ -782,11 +790,73 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 	}, seq)
 }
 
+// A build with the service's registry login pulls its base images with it,
+// from a docker config of its own, uploaded privately and removed after:
+// only the docker build gets it, never nixpacks, and the password reaches
+// no command line. Without a login the config is empty and nothing is
+// uploaded.
+func TestRemoteBuildPullsWithTheServicesLogin(t *testing.T) {
+	const cfg = "/tmp/paas-docker-abc"
+	auth := &rollout.RegistryAuth{Server: "ghcr.io", Username: "bot", Password: "hunter2"}
+	builds := map[string]func(o *RemoteOrchestrator, auth *rollout.RegistryAuth) error{
+		"dockerfile": func(o *RemoteOrchestrator, auth *rollout.RegistryAuth) error {
+			_, err := o.BuildFromGit(context.Background(), "https://example.com/r.git", "main", "", testImageTag, nil, auth, func(string) {})
+			return err
+		},
+		"nixpacks": func(o *RemoteOrchestrator, auth *rollout.RegistryAuth) error {
+			_, err := o.BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
+				deployment.NixpacksCommands{}, nil, auth, func(string) {})
+			return err
+		},
+		"archive": func(o *RemoteOrchestrator, auth *rollout.RegistryAuth) error {
+			return o.BuildFromArchive(context.Background(), strings.NewReader("TAR"), "", testImageTag, nil, nil, auth, func(string) {})
+		},
+		"archive with nixpacks": func(o *RemoteOrchestrator, auth *rollout.RegistryAuth) error {
+			return o.BuildFromArchive(context.Background(), strings.NewReader("TAR"), "", testImageTag, &deployment.NixpacksCommands{}, nil, auth, func(string) {})
+		},
+	}
+	for name, build := range builds {
+		h := nixpacksHost(`{"variables":{}}`)
+		require.NoError(t, build(newTestRemote(h), auth), name)
+
+		var seq []string
+		for _, c := range h.recorded() {
+			assert.NotContains(t, c.cmd, "hunter2", "%s: the password reached a command line: %s", name, c.cmd)
+			assert.NotContains(t, c.cmd, base64.StdEncoding.EncodeToString([]byte("bot:hunter2")), "%s: %s", name, c.cmd)
+			assert.NotContains(t, c.cmd, "docker login", name)
+			if strings.Contains(c.cmd, "nixpacks ") {
+				assert.NotContains(t, c.cmd, "DOCKER_CONFIG", "%s: nixpacks gets no login", name)
+			}
+			if strings.Contains(c.cmd, cfg) {
+				seq = append(seq, c.kind+" "+strings.SplitAfter(c.cmd, "docker build")[0])
+			}
+		}
+		assert.Equal(t, []string{
+			"exec umask 077 && rm -f '" + cfg + "/config.json' && : > '" + cfg + "/config.json'",
+			"upload '" + cfg + "/config.json'",
+			"exec chmod 600 '" + cfg + "/config.json'",
+			"stream DOCKER_CONFIG='" + cfg + "' BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build",
+			"exec rm -rf '" + cfg + "'",
+		}, seq, name)
+		assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"Ym90Omh1bnRlcjI="}}}`, h.uploads["'"+cfg+"/config.json'"], name)
+
+		for _, none := range []*rollout.RegistryAuth{nil, {Server: "ghcr.io", Username: "bot"}} {
+			h = nixpacksHost(`{"variables":{}}`)
+			require.NoError(t, build(newTestRemote(h), none), name)
+			_, uploaded := h.find("config.json")
+			assert.False(t, uploaded, "%s: no login, no config.json", name)
+			b, ok := h.find("docker build")
+			require.True(t, ok, name)
+			assert.True(t, strings.HasPrefix(b.cmd, "DOCKER_CONFIG='"+cfg+"' "), "%s: an empty config of its own: %s", name, b.cmd)
+		}
+	}
+}
+
 // A plan Toft can't read builds nothing.
 func TestRemoteNixpacksRefusesAnUnreadablePlan(t *testing.T) {
 	h := nixpacksHost("not json")
 	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
-		deployment.NixpacksCommands{}, nil, func(string) {})
+		deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	require.ErrorContains(t, err, "read the nixpacks plan")
 	_, built := h.find("docker build")
 	assert.False(t, built)
@@ -826,7 +896,7 @@ func TestRemoteCloneEndsOptionsBeforeTheURL(t *testing.T) {
 	}}
 	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
 	_, _ = o.BuildFromGitNixpacks(context.Background(), "--upload-pack=id", "main", "", "img:1",
-		deployment.NixpacksCommands{}, nil, func(string) {})
+		deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	clone, ok := h.find("git clone")
 	require.True(t, ok)
 	assert.Contains(t, clone.cmd, "--branch 'main' -- '--upload-pack=id' /tmp/paas-build-abc")
@@ -847,7 +917,7 @@ func TestRemoteBuildFromArchive(t *testing.T) {
 	}}
 	sha := "abc"
 	err := newTestRemote(h).BuildFromArchive(context.Background(), strings.NewReader("TAR"), "services/api", testImageTag, nil,
-		map[string]*string{"TOFT_GIT_SHA": &sha}, func(string) {})
+		map[string]*string{"TOFT_GIT_SHA": &sha}, nil, func(string) {})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -355,7 +355,7 @@ func (h *Handler) deploy(ctx context.Context, p pushed) error {
 // push deploy and a preview's share.
 func (h *Handler) inputFor(ctx context.Context, svc *service.Service, orgID string, srv *serverPkg.Server, envName string) deployment.TriggerInput {
 	var regAuth *deployment.RegistryAuth
-	if svc.RegistryUsername != "" {
+	if svc.RegistryPassword != "" {
 		regAuth = &deployment.RegistryAuth{
 			Server:   svc.RegistryServer,
 			Username: svc.RegistryUsername,

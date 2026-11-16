@@ -3350,9 +3350,6 @@ function Credentials({
   canEdit: boolean;
 }) {
   const [opened, setOpened] = useState({ git: false, registry: false });
-  const registry =
-    service.source_type === "docker-image" ||
-    service.source_type === "docker-compose";
   // A compose file kept in the panel clones nothing.
   const git =
     service.source_type === "git" ||
@@ -3458,68 +3455,70 @@ function Credentials({
           )}
         </>
       )}
-      {registry && (
-        <>
-          {row(
-            "Registry login",
-            "to pull private images",
-            !!service.has_registry_password || !!service.registry_username,
-            registryOpen,
-            () => open("registry", "set-rserver"),
-          )}
-          {registryOpen && (
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field
-                id="set-rserver"
-                labelText="Registry"
-                hint="For example ghcr.io."
-              >
-                <input
-                  id="set-rserver"
-                  className={cn(input, "font-mono")}
-                  value={form.registry_server}
-                  disabled={!canEdit}
-                  onChange={(e) => set({ registry_server: e.target.value })}
-                  spellCheck={false}
-                />
-              </Field>
-              <Field id="set-ruser" labelText="Username">
-                <input
-                  id="set-ruser"
-                  className={cn(input, "font-mono")}
-                  value={form.registry_username}
-                  disabled={!canEdit}
-                  onChange={(e) => set({ registry_username: e.target.value })}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </Field>
-              <Field
-                id="set-rpass"
-                labelText={
-                  service.has_registry_password
-                    ? "Replace the password"
-                    : "Password or token"
-                }
-                hint={
-                  service.has_registry_password
-                    ? "Empty keeps the stored one."
-                    : undefined
-                }
-              >
-                <input
-                  id="set-rpass"
-                  type="password"
-                  className={input}
-                  value={form.registry_password}
-                  disabled={!canEdit}
-                  onChange={(e) => set({ registry_password: e.target.value })}
-                  autoComplete="new-password"
-                />
-              </Field>
-            </div>
-          )}
-        </>
+      {row(
+        "Registry login",
+        service.source_type === "git"
+          ? "for private base images in your Dockerfile"
+          : "to pull private images",
+        !!service.has_registry_password || !!service.registry_username,
+        registryOpen,
+        () => open("registry", "set-rserver"),
+      )}
+      {registryOpen && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field
+            id="set-rserver"
+            labelText="Registry"
+            hint={
+              service.source_type === "docker-image"
+                ? "For example ghcr.io."
+                : "For example ghcr.io. Empty is Docker Hub."
+            }
+          >
+            <input
+              id="set-rserver"
+              className={cn(input, "font-mono")}
+              value={form.registry_server}
+              disabled={!canEdit}
+              onChange={(e) => set({ registry_server: e.target.value })}
+              spellCheck={false}
+            />
+          </Field>
+          <Field id="set-ruser" labelText="Username">
+            <input
+              id="set-ruser"
+              className={cn(input, "font-mono")}
+              value={form.registry_username}
+              disabled={!canEdit}
+              onChange={(e) => set({ registry_username: e.target.value })}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+          <Field
+            id="set-rpass"
+            labelText={
+              service.has_registry_password
+                ? "Replace the password"
+                : "Password or token"
+            }
+            hint={
+              service.has_registry_password
+                ? "Empty keeps the stored one."
+                : undefined
+            }
+          >
+            <input
+              id="set-rpass"
+              type="password"
+              className={input}
+              value={form.registry_password}
+              disabled={!canEdit}
+              onChange={(e) => set({ registry_password: e.target.value })}
+              autoComplete="new-password"
+            />
+          </Field>
+        </div>
       )}
     </div>
   );

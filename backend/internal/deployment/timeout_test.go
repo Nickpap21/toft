@@ -66,7 +66,7 @@ func (limited) Get(_ context.Context, id string) (*service.Service, error) {
 // hangingBuild is an orchestrator whose build never ends on its own.
 type hangingBuild struct{ *mockOrchestrator }
 
-func (hangingBuild) BuildFromGit(ctx context.Context, _, _, _, _ string, _ map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (hangingBuild) BuildFromGit(ctx context.Context, _, _, _, _ string, _ map[string]*string, _ *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	logFn("Building image...")
 	<-ctx.Done()
 	return deployment.Commit{}, ctx.Err()

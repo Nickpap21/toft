@@ -91,7 +91,7 @@ func (o *RemoteOrchestrator) streamRetry(ctx context.Context, cmd string, logFn 
 }
 
 // BuildFromGit clones repoURL@branch on the remote server and runs docker build there.
-func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, baseDir, imageTag string, buildArgs map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, baseDir, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return deployment.Commit{}, err
 	}
@@ -127,7 +127,7 @@ func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, 
 		dockerfilePath = ""
 	}
 	logFn("Building Docker image on remote...")
-	if err := o.dockerBuild(ctx, imageTag, buildArgs, dockerfilePath, tmpDir, logFn); err != nil {
+	if err := o.dockerBuild(ctx, imageTag, buildArgs, auth, dockerfilePath, tmpDir, logFn); err != nil {
 		return commit, err
 	}
 
@@ -138,15 +138,20 @@ func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, 
 // dockerBuild runs docker build of imageTag from dir on the server, with
 // dockerfile ("" is dir's own) and buildArgs, then the two arguments that
 // keep the build to its service (buildArgList). The build has a Docker
-// config of its own, empty: a registry login on the server (a compose
-// deploy's, or one made by hand) is not this build's to pull with, and a
-// builder someone selected there is not the one it runs on.
-func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, buildArgs map[string]*string, dockerfile, dir string, logFn func(string)) error {
+// config of its own, holding auth (the service's registry login) or
+// nothing: a registry login on the server (a compose deploy's, or one made
+// by hand) is not this build's to pull with, and a builder someone selected
+// there is not the one it runs on.
+func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, dockerfile, dir string, logFn func(string)) error {
 	args, err := buildArgList(imageTag, buildArgs)
 	if err != nil {
 		return err
 	}
-	cfg, cleanup, err := o.dockerConfigDir(ctx, nil)
+	server := ""
+	if auth != nil {
+		server = auth.Server
+	}
+	cfg, cleanup, err := o.registryConfigDir(ctx, auth, server)
 	if err != nil {
 		return err
 	}
@@ -173,7 +178,7 @@ func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, b
 // its build arguments (nixpacksVariables). The cache key is the service's,
 // so its builds reuse their cache mounts. nixpacks must be installed on
 // the server.
-func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	serviceID, err := builtService(imageTag)
 	if err != nil {
 		return err
@@ -200,14 +205,14 @@ func (o *RemoteOrchestrator) nixpacksBuild(ctx context.Context, dir, imageTag st
 	if err := o.streamRetry(ctx, write, logFn); err != nil {
 		return fmt.Errorf("remote nixpacks build: %w", err)
 	}
-	return o.dockerBuild(ctx, imageTag, vars, dir+"/.nixpacks/Dockerfile", dir, logFn)
+	return o.dockerBuild(ctx, imageTag, vars, auth, dir+"/.nixpacks/Dockerfile", dir, logFn)
 }
 
 // BuildFromArchive unpacks source, a commit's tree as a tar (D-77), into a
 // new directory on the remote server over SSH and builds imageTag there:
 // docker build with baseDir/Dockerfile, or nixpacks in baseDir. The server
 // gets the files only: no URL, no token, no .git.
-func (o *RemoteOrchestrator) BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+func (o *RemoteOrchestrator) BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return err
 	}
@@ -233,7 +238,7 @@ func (o *RemoteOrchestrator) BuildFromArchive(ctx context.Context, source io.Rea
 		return err
 	}
 	if nixpacks != nil {
-		if err := o.nixpacksBuild(ctx, dir, imageTag, *nixpacks, buildArgs, logFn); err != nil {
+		if err := o.nixpacksBuild(ctx, dir, imageTag, *nixpacks, buildArgs, auth, logFn); err != nil {
 			return err
 		}
 	} else {
@@ -242,7 +247,7 @@ func (o *RemoteOrchestrator) BuildFromArchive(ctx context.Context, source io.Rea
 			dockerfile = filepath.Join(dir, "Dockerfile")
 		}
 		logFn("Building Docker image on remote...")
-		if err := o.dockerBuild(ctx, imageTag, buildArgs, dockerfile, tmpDir, logFn); err != nil {
+		if err := o.dockerBuild(ctx, imageTag, buildArgs, auth, dockerfile, tmpDir, logFn); err != nil {
 			return err
 		}
 	}
@@ -289,7 +294,7 @@ func (o *RemoteOrchestrator) dropGitDir(ctx context.Context, dir string) error {
 
 // BuildFromGitNixpacks clones repoURL@branch on the remote server and builds via nixpacks.
 // nixpacks must be installed on the remote server.
-func (o *RemoteOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, branch, baseDir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (o *RemoteOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, branch, baseDir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return deployment.Commit{}, err
 	}
@@ -319,7 +324,7 @@ func (o *RemoteOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, 
 		return commit, err
 	}
 
-	if err := o.nixpacksBuild(ctx, buildDir, imageTag, cmds, buildArgs, logFn); err != nil {
+	if err := o.nixpacksBuild(ctx, buildDir, imageTag, cmds, buildArgs, auth, logFn); err != nil {
 		return commit, err
 	}
 

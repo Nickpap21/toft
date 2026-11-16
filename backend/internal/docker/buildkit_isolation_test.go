@@ -3,7 +3,10 @@ package docker
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
+	"fmt"
 	"maps"
+	mrand "math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // These run real builds, on the Docker of the machine the tests run on,
@@ -60,7 +64,7 @@ func buildAs(t *testing.T, serviceID, dockerfile string, files map[string]string
 	var lines []string
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	err = localBuild(ctx, dir, "Dockerfile", tag, nil, func(l string) { lines = append(lines, l) })
+	err = localBuild(ctx, dir, "Dockerfile", tag, nil, nil, func(l string) { lines = append(lines, l) })
 	return tag, strings.Join(lines, "\n"), err
 }
 
@@ -192,6 +196,99 @@ func TestLocalBuildHonoursDockerignore(t *testing.T) {
 	assert.Contains(t, log, "ctx-"+n+": [Dockerfile kept.txt ]")
 }
 
+// privateRegistry starts a registry on this machine that takes user and
+// password only, and returns its host. It is removed when the test ends.
+func privateRegistry(t *testing.T, user, password string) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	require.NoError(t, err)
+	htpasswd := filepath.Join(t.TempDir(), "htpasswd")
+	require.NoError(t, os.WriteFile(htpasswd, []byte(user+":"+string(hash)+"\n"), 0o644))
+	docker := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("docker", args...).CombinedOutput()
+		require.NoError(t, err, "docker %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	name := "toft-test-registry-" + strings.ToLower(rand.Text())
+	// On the Docker host's own loopback (the daemon pulls from there, and a
+	// registry on 127.0.0.1 may speak plain HTTP), at a port picked at
+	// random. Its storage is a tmpfs, so no volume is left behind.
+	host := fmt.Sprintf("127.0.0.1:%d", 20000+mrand.IntN(40000))
+	docker("create", "--name", name, "--network", "host", "--tmpfs", "/var/lib/registry", "-e", "REGISTRY_HTTP_ADDR="+host,
+		"-e", "REGISTRY_AUTH=htpasswd", "-e", "REGISTRY_AUTH_HTPASSWD_REALM=test", "-e", "REGISTRY_AUTH_HTPASSWD_PATH=/htpasswd", "registry:3")
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+	docker("cp", htpasswd, name+":/htpasswd")
+	docker("start", name)
+	require.Eventually(t, func() bool {
+		out, _ := exec.Command("docker", "exec", name, "wget", "-qO-", "http://"+host+"/v2/").CombinedOutput()
+		return strings.Contains(string(out), "401")
+	}, 30*time.Second, 200*time.Millisecond, "the registry asks for a login")
+	return host
+}
+
+// A Dockerfile's private base image is pulled with the service's registry
+// login and with nothing else, and no RUN step can read that login: not in
+// its environment, nor in a file anywhere in its filesystem, the build's
+// context included. The step builds what it looks for from halves, so the
+// log has a value only if the step found or printed it; a file with a
+// control value shows the search finds what is there.
+func TestBuildPullsItsBaseWithALoginNoRunStepCanRead(t *testing.T) {
+	needsBuildKit(t)
+	n, marker := rand.Text(), rand.Text()
+	host := privateRegistry(t, "bot", marker)
+	auth := &rollout.RegistryAuth{Server: host, Username: "bot", Password: marker}
+	b64 := base64.StdEncoding.EncodeToString([]byte("bot:" + marker))
+
+	// The base image, pushed with the login and then gone from this Docker.
+	base := host + "/base:" + strings.ToLower(n)
+	raw, err := rollout.RegistryConfig(*auth, host)
+	require.NoError(t, err)
+	cfg, cleanup, err := dockerConfigDir(raw)
+	require.NoError(t, err)
+	defer cleanup()
+	seed := exec.Command("docker", "build", "-t", base, "-")
+	seed.Stdin = strings.NewReader("FROM " + isolationBase + "\nRUN echo " + n + " > /base\n")
+	out, err := seed.CombinedOutput()
+	require.NoError(t, err, string(out))
+	push := exec.Command("docker", "push", base)
+	push.Env = append(os.Environ(), "DOCKER_CONFIG="+cfg)
+	out, err = push.CombinedOutput()
+	require.NoError(t, err, string(out))
+	out, err = exec.Command("docker", "image", "rm", "-f", base).CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	half := func(s string) string { return `"$(echo ` + s[:len(s)/2] + `)$(echo ` + s[len(s)/2:] + `)"` }
+	dir := t.TempDir()
+	df := "FROM " + base + "\nCOPY . /ctx\n" +
+		"RUN M=" + half(marker) + "; B=" + half(b64) + "; C=" + half("ctl"+n) + "; env; tr '\\0' '\\n' < /proc/self/environ; " +
+		`find / \( -path /proc -o -path /sys \) -prune -o -type f -exec grep -H -o -e "$M" -e "$B" -e "$C" {} + 2>/dev/null; ` +
+		`find / \( -path /proc -o -path /sys \) -prune -o -name "conf""ig.json" -print; cat /base; echo "ran-$C"` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(df), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ctl"), []byte("ctl"+n+"\n"), 0o644))
+	build := func(auth *rollout.RegistryAuth) (string, error) {
+		tag := "paas/" + uuid.NewString() + ":" + uuid.NewString()
+		t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
+		var lines []string
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		err := localBuild(ctx, dir, "Dockerfile", tag, nil, auth, func(l string) { lines = append(lines, l) })
+		return strings.Join(lines, "\n"), err
+	}
+
+	log, err := build(nil)
+	require.Error(t, err, "without the login the base image is not this build's to pull: %s", log)
+	assert.NotContains(t, log, "ran-ctl"+n)
+
+	log, err = build(auth)
+	require.NoError(t, err, log)
+	require.Contains(t, log, "ran-ctl"+n, "the step ran")
+	require.Contains(t, log, "/ctx/ctl:ctl"+n, "the search finds a file's value")
+	assert.NotContains(t, log, marker)
+	assert.NotContains(t, log, b64)
+	assert.NotContains(t, log, "config.json")
+}
+
 // A build cancelled mid-way (its service deleted, the deploy's time limit)
 // ends soon, and leaves no image and no step running.
 func TestCancelledBuildStops(t *testing.T) {
@@ -209,7 +306,7 @@ func TestCancelledBuildStops(t *testing.T) {
 	started := false
 	done := make(chan error, 1)
 	go func() {
-		done <- localBuild(ctx, dir, "Dockerfile", tag, nil, func(l string) {
+		done <- localBuild(ctx, dir, "Dockerfile", tag, nil, nil, func(l string) {
 			// The step's output, not the line that names its command.
 			if strings.HasSuffix(l, " started-"+n) {
 				started = true
