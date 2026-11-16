@@ -163,3 +163,19 @@ func TestStreamLines_KeepsGoingPastALongLine(t *testing.T) {
 	require.NoError(t, streamLines(&buf, func(l string) { got = append(got, l) }))
 	assert.Equal(t, []string{long, "after"}, got)
 }
+
+// The credentials a deploy pulls with are a config.json of its own, under
+// the name the docker CLI looks the registry up by.
+func TestRegistryConfig(t *testing.T) {
+	for server, key := range map[string]string{
+		"": "https://index.docker.io/v1/", "docker.io": "https://index.docker.io/v1/", "https://index.docker.io/v1/": "https://index.docker.io/v1/",
+		"registry-1.docker.io": "https://index.docker.io/v1/", "ghcr.io": "ghcr.io", "https://ghcr.io/": "ghcr.io", "localhost:5000": "localhost:5000",
+	} {
+		raw, err := RegistryConfig(RegistryAuth{Username: "bot", Password: "hunter2"}, server)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"auths":{"`+key+`":{"auth":"Ym90Omh1bnRlcjI="}}}`, string(raw), server)
+	}
+	raw, err := RegistryConfig(RegistryAuth{Password: "t0ken"}, "ghcr.io")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"dG9rZW46dDBrZW4="}}}`, string(raw), "a token alone goes with the username token")
+}

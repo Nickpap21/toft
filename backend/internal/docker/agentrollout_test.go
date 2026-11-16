@@ -174,6 +174,41 @@ func TestComposeUpIsHandedToTheAgent(t *testing.T) {
 	assert.True(t, pruned, "older releases are removed after a successful up")
 }
 
+// The pull of a routed image before up is the panel's on an agent's server
+// too: it runs with the service's credentials, in a docker config of its
+// own that is removed afterwards, not with whatever the server is logged
+// in to.
+func TestAgentRoutedImagePullUsesTheServicesCredentials(t *testing.T) {
+	h := &fakeHost{docker: fakedocker.New(t), exec: func(_ context.Context, cmd string) (string, error) {
+		switch {
+		case strings.Contains(cmd, "mktemp -d"):
+			return rollout.ComposeDir(slotSvcID) + "/r-abc\n", nil
+		case strings.Contains(cmd, "config --images"):
+			return "ghcr.io/acme/web:1\n", nil
+		}
+		return "", nil
+	}}
+	removedBeforeUp := false
+	h.subsystem = func(_, _ string, lineFn func(string)) error {
+		_, removedBeforeUp = h.find("rm -rf '" + testDockerConfig + "'")
+		lineFn(event(t, rollout.Event{Result: &rollout.Result{Changed: true}}))
+		return nil
+	}
+	route := &deployment.ComposeRoute{Service: "web", Port: 8080, Domains: []string{"app.example.com"}}
+	err := agentOrchestrator(t, h).RunCompose(t.Context(), "dep-1", slotSvcID, "web", "services: {}\n",
+		nil, route, deployment.ComposeNetworks{Home: "paas-network"}, nil,
+		&deployment.RegistryAuth{Server: "ghcr.io", Password: "pw"},
+		rollout.Hooks{Log: func(string) {}, HandOff: func() error { return nil }})
+	require.NoError(t, err)
+
+	pull, ok := h.find("docker pull --quiet")
+	require.True(t, ok)
+	assert.True(t, strings.HasPrefix(pull.cmd, "DOCKER_CONFIG='"+testDockerConfig+"' docker pull --quiet 'ghcr.io/acme/web:1'"), pull.cmd)
+	_, uploaded := h.find(testDockerConfig + "/config.json")
+	assert.True(t, uploaded, "the credentials are written for the pull")
+	assert.True(t, removedBeforeUp, "and removed before the agent's up, which a panel restart doesn't end")
+}
+
 // A service's own container check goes to an agent that applies it; one
 // that would drop it, and keep the image's, is handed nothing: the deploy
 // fails and says why.

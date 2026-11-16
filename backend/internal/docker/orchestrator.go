@@ -105,21 +105,11 @@ func (o *LocalOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, b
 }
 
 // BuildFromArchive builds imageTag from source, a commit's tree as a tar
-// (D-77): handed to Docker as the build context as it is, with the
-// Dockerfile at baseDir/Dockerfile; or unpacked into a temporary directory
-// for nixpacks in baseDir.
+// (D-77), unpacked into a temporary directory: the build context, with the
+// Dockerfile at baseDir/Dockerfile; or nixpacks' in baseDir.
 func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return err
-	}
-	dir := filepath.Clean(strings.TrimPrefix(baseDir, "/"))
-	if nixpacks == nil {
-		dockerfilePath := "Dockerfile"
-		if baseDir != "" {
-			dockerfilePath = filepath.Join(dir, "Dockerfile")
-		}
-		logFn(fmt.Sprintf("Building image %s...", imageTag))
-		return localBuild(ctx, source, dockerfilePath, imageTag, buildArgs, logFn)
 	}
 	tmpDir, err := os.MkdirTemp("", "paas-build-*")
 	if err != nil {
@@ -128,6 +118,14 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 	defer os.RemoveAll(tmpDir)
 	if err := archive.Untar(source, tmpDir, &archive.TarOptions{NoLchown: true}); err != nil {
 		return fmt.Errorf("unpack the source: %w", err)
+	}
+	if nixpacks == nil {
+		dockerfilePath := "Dockerfile"
+		if baseDir != "" {
+			dockerfilePath = filepath.Join(filepath.Clean(strings.TrimPrefix(baseDir, "/")), "Dockerfile")
+		}
+		logFn(fmt.Sprintf("Building image %s...", imageTag))
+		return localBuild(ctx, tmpDir, dockerfilePath, imageTag, buildArgs, logFn)
 	}
 	buildDir, err := service.JoinBaseDirectory(tmpDir, baseDir)
 	if err != nil {
@@ -383,7 +381,7 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 	var raw []byte
 	if auth != nil && auth.Password != "" {
 		var err error
-		if raw, err = registryConfig(*auth, auth.Server); err != nil {
+		if raw, err = rollout.RegistryConfig(*auth, auth.Server); err != nil {
 			return err
 		}
 	}
@@ -751,39 +749,50 @@ func discoverVolumes(ctx context.Context, dc *client.Client, serviceID string) (
 // in the Dockerfile can expose them to RUN steps (e.g. NEXT_PUBLIC_* in Next.js).
 func (o *LocalOrchestrator) buildImage(ctx context.Context, buildContextDir, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
 	o.log.Info("building image", zap.String("tag", imageTag), zap.String("context", buildContextDir), zap.String("dockerfile", dockerfilePath))
-
-	buildContextTar, err := archive.TarWithOptions(buildContextDir, &archive.TarOptions{})
-	if err != nil {
-		return fmt.Errorf("create build context archive: %w", err)
-	}
-	defer buildContextTar.Close()
-	return localBuild(ctx, buildContextTar, dockerfilePath, imageTag, buildArgs, logFn)
+	return localBuild(ctx, buildContextDir, dockerfilePath, imageTag, buildArgs, logFn)
 }
 
-// localBuild runs docker build of imageTag on the local Docker, from a
-// build context given as a tar, with the Dockerfile at dockerfilePath
-// inside it: BuildKit where the CLI has buildx (the backend's image does),
+// localBuild runs docker build of imageTag on the local Docker, with the
+// folder dir as the build context (so the CLI applies its .dockerignore)
+// and the Dockerfile at dockerfilePath inside it, which a link in the
+// repository can't take out of it: the CLI reads the Dockerfile on this
+// host. BuildKit where the CLI has buildx (the backend's image does),
 // the classic builder where it doesn't. buildArgs are followed by the two
 // arguments that keep the build to its service (buildArgList). The build
 // has the clean environment compose gets and a Docker config of its own,
 // empty: a registry login on this host is not this build's to pull with.
-func localBuild(ctx context.Context, contextTar io.Reader, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
+func localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
 	kvs, err := buildArgList(imageTag, buildArgs)
 	if err != nil {
 		return err
+	}
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("the build folder: %w", err)
+	}
+	dockerfile := filepath.Join(dir, dockerfilePath)
+	if err := insideBuild(dir, filepath.Dir(dockerfile)); err != nil {
+		return err
+	}
+	// One that isn't there is the build's to report.
+	if real, err := filepath.EvalSymlinks(dockerfile); err == nil && !strings.HasPrefix(real, root+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %s is a link out of the repository", service.ErrInvalidConfig, dockerfilePath)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %s: %w", service.ErrInvalidConfig, dockerfilePath, err)
 	}
 	cfg, cleanup, err := dockerConfigDir(nil)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	args := []string{"build", "-t", imageTag, "-f", dockerfilePath}
+	args := []string{"build", "-t", imageTag, "-f", dockerfile}
 	for _, kv := range kvs {
 		args = append(args, "--build-arg", kv)
 	}
-	cmd := exec.CommandContext(ctx, "docker", append(args, "-")...)
-	cmd.Stdin = contextTar
-	cmd.Env = append(localComposeEnv(nil), "DOCKER_CONFIG="+cfg)
+	cmd := exec.CommandContext(ctx, "docker", append(args, dir)...)
+	// BUILDX_GIT_INFO: buildx doesn't run git in the context, which is the
+	// repository's to shape.
+	cmd.Env = append(localComposeEnv(nil), "DOCKER_CONFIG="+cfg, "BUILDX_GIT_INFO=false")
 	// Cancelled (a deleted service, the deploy's time limit), the CLI gets
 	// to tell the builder to stop.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -831,8 +840,15 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 	if err := os.RemoveAll(filepath.Join(dir, ".nixpacks")); err != nil {
 		return fmt.Errorf("clear the nixpacks folder: %w", err)
 	}
+	if err := noLinksOut(dir); err != nil {
+		return err
+	}
 	flags := nixpacksArgs(cmds, buildArgs)
-	plan, err := exec.CommandContext(ctx, "nixpacks", append([]string{"plan", dir}, flags...)...).Output()
+	// nixpacks gets the clean environment the build does, none of the
+	// backend's own.
+	planCmd := exec.CommandContext(ctx, "nixpacks", append([]string{"plan", dir}, flags...)...)
+	planCmd.Env = localComposeEnv(nil)
+	plan, err := planCmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
@@ -845,16 +861,12 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 		return err
 	}
 	write := exec.CommandContext(ctx, "nixpacks", append([]string{"build", dir, "--out", dir, "--cache-key", serviceID}, flags...)...)
+	write.Env = localComposeEnv(nil)
 	write.WaitDelay = 30 * time.Second // a child that keeps the output open doesn't keep the deploy
 	if err := runStream(write, logFn); err != nil {
 		return fmt.Errorf("nixpacks build: %w", err)
 	}
-	contextTar, err := archive.TarWithOptions(dir, &archive.TarOptions{})
-	if err != nil {
-		return fmt.Errorf("create build context archive: %w", err)
-	}
-	defer contextTar.Close()
-	return localBuild(ctx, contextTar, ".nixpacks/Dockerfile", imageTag, vars, logFn)
+	return localBuild(ctx, dir, ".nixpacks/Dockerfile", imageTag, vars, logFn)
 }
 
 // ─── Build-arg helpers ────────────────────────────────────────────────────────
@@ -1030,8 +1042,7 @@ func cloneRepository(ctx context.Context, repoURL, branch, baseDirectory string,
 
 // insideBuild refuses dir, which nixpacks reads, when a link in the
 // repository takes it out of root: base_directory's check is by name only.
-// (A docker build here gets the context as a tar, inside which Docker
-// resolves links.)
+// (localBuild checks a docker build's Dockerfile.)
 func insideBuild(root, dir string) error {
 	r, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -1045,6 +1056,26 @@ func insideBuild(root, dir string) error {
 		return fmt.Errorf("%w: base_directory is a link out of the repository", service.ErrInvalidConfig)
 	}
 	return nil
+}
+
+// noLinksOut refuses a build folder that holds a link leaving it, or one
+// leading nowhere: nixpacks reads the files it finds through links, on this
+// host, and puts what they say in its plan (a Procfile's command, say).
+func noLinksOut(dir string) error {
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("the build folder: %w", err)
+	}
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.Type()&fs.ModeSymlink == 0 {
+			return err
+		}
+		if real, err := filepath.EvalSymlinks(path); err != nil || (real != root && !strings.HasPrefix(real, root+string(filepath.Separator))) {
+			rel, _ := filepath.Rel(dir, path)
+			return fmt.Errorf("%w: %s is a link that doesn't stay in the build folder", service.ErrInvalidConfig, rel)
+		}
+		return nil
+	})
 }
 
 // gitHead is `git log -1 --format=%H%n%s` in dir, a clone on this host.

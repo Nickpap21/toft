@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/rollout/fakedocker"
+	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -57,8 +60,8 @@ func TestBuildArgListRefusesATagThatIsNotAServices(t *testing.T) {
 }
 
 // fakeDocker puts a docker in PATH that records its arguments, its stdin,
-// its environment and what its DOCKER_CONFIG holds, and returns the folder
-// those are written to.
+// its environment, what its DOCKER_CONFIG holds and what its last argument
+// (a build's context) holds, and returns the folder those are written to.
 func fakeDocker(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -67,22 +70,44 @@ func fakeDocker(t *testing.T) string {
 		"cat > " + dir + "/stdin\n" +
 		"env > " + dir + "/env\n" +
 		"ls -A \"$DOCKER_CONFIG\" > " + dir + "/config\n" +
+		"for last; do :; done; (cd \"$last\" && find . -type f | sort) > " + dir + "/context\n" +
 		"echo '#1 building'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return dir
 }
 
+// sourceTar is a commit's tree as BuildFromArchive gets it: files by name,
+// and links (name to target).
+func sourceTar(t *testing.T, files, links map[string]string) io.Reader {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for name, content := range files {
+		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}))
+		_, err := tw.Write([]byte(content))
+		require.NoError(t, err)
+	}
+	for name, target := range links {
+		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}))
+	}
+	require.NoError(t, tw.Close())
+	return &buf
+}
+
 // A build on the panel's host is the docker CLI's (BuildKit, where it has
-// buildx), with the context on stdin, the Dockerfile named inside it, the
-// service's two arguments last, none of the backend's environment and an
-// empty Docker config of its own, removed afterwards.
+// buildx), with the tree unpacked in a folder as its context (the CLI
+// applies a .dockerignore to a folder, not to a tar), the Dockerfile named
+// inside it, the service's two arguments last, none of the backend's
+// environment and an empty Docker config of its own; folder and config are
+// removed afterwards.
 func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	dir := fakeDocker(t)
 	t.Setenv("JWT_SECRET", "the backend's")
 	sha := "abc"
 	var logged []string
-	err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), strings.NewReader("the tree's tar"), "services/api", testImageTag, nil,
+	source := sourceTar(t, map[string]string{"services/api/Dockerfile": "FROM scratch\n", ".dockerignore": "secret\n", "secret": "s"}, nil)
+	err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), source, "services/api", testImageTag, nil,
 		map[string]*string{"TOFT_GIT_SHA": &sha}, func(l string) { logged = append(logged, l) })
 	require.NoError(t, err)
 
@@ -91,17 +116,22 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 		require.NoError(t, err)
 		return string(raw)
 	}
+	args := strings.Split(strings.TrimSpace(read("args")), "\n")
+	buildDir := args[len(args)-1]
 	assert.Equal(t, []string{
-		"build", "-t", testImageTag, "-f", "services/api/Dockerfile",
+		"build", "-t", testImageTag, "-f", buildDir + "/services/api/Dockerfile",
 		"--build-arg", "TOFT_GIT_SHA=abc",
 		"--build-arg", "BUILDKIT_SYNTAX=" + dockerfileFrontend,
 		"--build-arg", "BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID,
-		"-",
-	}, strings.Split(strings.TrimSpace(read("args")), "\n"))
-	assert.Equal(t, "the tree's tar", read("stdin"))
+		buildDir,
+	}, args)
+	assert.Empty(t, read("stdin"))
+	assert.Equal(t, "./.dockerignore\n./secret\n./services/api/Dockerfile\n", read("context"))
+	assert.NoDirExists(t, buildDir, "the unpacked tree is removed after the build")
 	assert.Equal(t, "cli-plugins\n", read("config"), "the build's Docker config holds no login, only the way to the CLI's plugins")
 	env := read("env")
 	assert.NotContains(t, env, "JWT_SECRET")
+	assert.Contains(t, env, "BUILDX_GIT_INFO=false\n", "buildx runs no git in a tenant's tree")
 	var cfg string
 	for _, line := range strings.Split(env, "\n") {
 		if v, ok := strings.CutPrefix(line, "DOCKER_CONFIG="); ok {
@@ -112,6 +142,63 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	assert.NoDirExists(t, cfg, "the config directory is removed after the build")
 	assert.Contains(t, logged, "#1 building")
 	assert.Contains(t, logged, "Image built: "+testImageTag)
+}
+
+// The CLI reads the Dockerfile on the panel's host, so one that a link in
+// the repository takes out of the tree (one of the backend's own files) is
+// refused before docker runs.
+func TestLocalBuildRefusesADockerfileLinkedOutOfTheTree(t *testing.T) {
+	dir := fakeDocker(t)
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "Dockerfile"), []byte("FROM scratch\n"), 0o600))
+	for name, tc := range map[string]struct {
+		baseDir string
+		links   map[string]string
+	}{
+		"the Dockerfile is a link":               {"", map[string]string{"Dockerfile": filepath.Join(outside, "Dockerfile")}},
+		"its folder is a link":                   {"api", map[string]string{"api": outside}},
+		"its folder is a link, to one with none": {"api", map[string]string{"api": t.TempDir()}},
+	} {
+		err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"main.go": "package main\n"}, tc.links),
+			tc.baseDir, testImageTag, nil, nil, func(string) {})
+		require.ErrorIs(t, err, service.ErrInvalidConfig, name)
+		assert.ErrorContains(t, err, "a link out of the repository", name)
+		assert.NoFileExists(t, filepath.Join(dir, "args"), name+": docker did not run")
+	}
+}
+
+// Nixpacks on the panel's host reads the repository's files, through
+// links too, and puts what they say in its plan: it runs with none of the
+// backend's environment, and not at all on a tree with a link that leaves
+// it or leads nowhere.
+func TestLocalNixpacksIsKeptToTheTree(t *testing.T) {
+	dir := fakeDocker(t)
+	script := "#!/bin/sh\necho \"$1\" >> " + dir + "/nixran\nenv >> " + dir + "/nixenv\n[ \"$1\" = plan ] && echo '{}'\n" +
+		"[ \"$1\" = build ] && mkdir \"$2/.nixpacks\" && echo 'FROM scratch' > \"$2/.nixpacks/Dockerfile\"\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(script), 0o700))
+	t.Setenv("JWT_SECRET", "the backend's")
+	build := func(links map[string]string) error {
+		return (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, links),
+			"", testImageTag, &deployment.NixpacksCommands{}, nil, func(string) {})
+	}
+
+	for name, links := range map[string]map[string]string{
+		"a link out of the tree": {"Procfile": "/proc/1/environ"},
+		"a link to nowhere":      {"Procfile": "not-there"},
+	} {
+		err := build(links)
+		require.ErrorIs(t, err, service.ErrInvalidConfig, name)
+		assert.ErrorContains(t, err, "Procfile is a link that doesn't stay in the build folder", name)
+		assert.NoFileExists(t, filepath.Join(dir, "nixran"), name+": nixpacks did not run")
+	}
+
+	require.NoError(t, build(map[string]string{"Procfile": "package.json"}), "a link inside the tree builds")
+	ran, err := os.ReadFile(filepath.Join(dir, "nixran"))
+	require.NoError(t, err)
+	assert.Equal(t, "plan\nbuild\n", string(ran))
+	env, err := os.ReadFile(filepath.Join(dir, "nixenv"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(env), "JWT_SECRET")
 }
 
 // A command's output reaches the deployment log while the command runs:
@@ -169,22 +256,6 @@ func TestComposeBuildOverrideNamesOnlyBuiltServices(t *testing.T) {
 
 	_, err = composeOverrides("svc-1", rollout.NetConfig{}, nil, deployment.ComposeNetworks{Home: "paas-network", Built: []string{"web"}}, nil)
 	assert.Error(t, err, "a build with no service ID has no namespace")
-}
-
-// The credentials a deploy pulls with are a config.json of its own, under
-// the name the docker CLI looks the registry up by.
-func TestRegistryConfig(t *testing.T) {
-	for server, key := range map[string]string{
-		"": "https://index.docker.io/v1/", "docker.io": "https://index.docker.io/v1/", "https://index.docker.io/v1/": "https://index.docker.io/v1/",
-		"registry-1.docker.io": "https://index.docker.io/v1/", "ghcr.io": "ghcr.io", "https://ghcr.io/": "ghcr.io", "localhost:5000": "localhost:5000",
-	} {
-		raw, err := registryConfig(rollout.RegistryAuth{Username: "bot", Password: "hunter2"}, server)
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"auths":{"`+key+`":{"auth":"Ym90Omh1bnRlcjI="}}}`, string(raw), server)
-	}
-	raw, err := registryConfig(rollout.RegistryAuth{Password: "t0ken"}, "ghcr.io")
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"dG9rZW46dDBrZW4="}}}`, string(raw), "a token alone goes with the username token")
 }
 
 // A compose deploy on the panel's host with credentials never logs the

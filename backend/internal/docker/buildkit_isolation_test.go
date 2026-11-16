@@ -1,10 +1,9 @@
 package docker
 
 import (
-	"archive/tar"
-	"bytes"
 	"context"
 	"crypto/rand"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,25 +45,22 @@ func needsBuildKit(t *testing.T) {
 // the test ends.
 func buildAs(t *testing.T, serviceID, dockerfile string, files map[string]string) (tag, log string, err error) {
 	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	add := func(name, content string) {
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}))
-		_, werr := tw.Write([]byte(content))
-		require.NoError(t, werr)
+	dir := t.TempDir()
+	files = maps.Clone(files)
+	if files == nil {
+		files = map[string]string{}
 	}
-	add("Dockerfile", dockerfile)
+	files["Dockerfile"] = dockerfile
 	for name, content := range files {
-		add(name, content)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
 	}
-	require.NoError(t, tw.Close())
 
 	tag = "paas/" + serviceID + ":" + uuid.NewString()
 	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
 	var lines []string
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	err = localBuild(ctx, &buf, "Dockerfile", tag, nil, func(l string) { lines = append(lines, l) })
+	err = localBuild(ctx, dir, "Dockerfile", tag, nil, func(l string) { lines = append(lines, l) })
 	return tag, strings.Join(lines, "\n"), err
 }
 
@@ -184,19 +180,27 @@ func TestBuildsOfOneServiceAreKeptFromAnothers(t *testing.T) {
 	})
 }
 
+// A build on the panel's host leaves out what the repository's
+// .dockerignore names, as a build on a server does.
+func TestLocalBuildHonoursDockerignore(t *testing.T) {
+	needsBuildKit(t)
+	n := rand.Text()
+	_, log, err := buildAs(t, uuid.NewString(),
+		"FROM "+isolationBase+"\nCOPY . /src\nRUN echo \"ctx-"+n+": [$(ls /src | tr '\\n' ' ')]\"\n",
+		map[string]string{".dockerignore": "secret.txt\n", "secret.txt": "s", "kept.txt": "k"})
+	require.NoError(t, err, log)
+	assert.Contains(t, log, "ctx-"+n+": [Dockerfile kept.txt ]")
+}
+
 // A build cancelled mid-way (its service deleted, the deploy's time limit)
 // ends soon, and leaves no image and no step running.
 func TestCancelledBuildStops(t *testing.T) {
 	needsBuildKit(t)
 	n := rand.Text()
 	const nap = "sleep 86399"
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+	dir := t.TempDir()
 	df := "FROM " + isolationBase + "\nRUN echo started-" + n + " && " + nap + "\n"
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(df))}))
-	_, err := tw.Write([]byte(df))
-	require.NoError(t, err)
-	require.NoError(t, tw.Close())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(df), 0o644))
 
 	tag := "paas/" + uuid.NewString() + ":" + uuid.NewString()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,7 +209,7 @@ func TestCancelledBuildStops(t *testing.T) {
 	started := false
 	done := make(chan error, 1)
 	go func() {
-		done <- localBuild(ctx, &buf, "Dockerfile", tag, nil, func(l string) {
+		done <- localBuild(ctx, dir, "Dockerfile", tag, nil, func(l string) {
 			// The step's output, not the line that names its command.
 			if strings.HasSuffix(l, " started-"+n) {
 				started = true

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nickpap21/toft/backend/internal/composespec"
@@ -498,7 +499,7 @@ func (o *RemoteOrchestrator) registryConfigDir(ctx context.Context, auth *rollou
 	if auth == nil || auth.Password == "" {
 		return o.dockerConfigDir(ctx, nil)
 	}
-	raw, err := registryConfig(*auth, server)
+	raw, err := rollout.RegistryConfig(*auth, server)
 	if err != nil {
 		return "", nil, err
 	}
@@ -608,10 +609,11 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 		defer o.cleanup(ctx, "rm -f "+shellEscape(projectDir+"/.env"))
 	}
 
-	// The registry's credentials, for the pulls and builds below (an
-	// agent makes its own, from auth).
-	dockerCfg := ""
-	if !onAgent {
+	// The registry's credentials, for the pulls and builds below. An agent
+	// makes its own for up, from auth; the pull of a routed image before
+	// it is the panel's on every server.
+	dockerCfg, removeCfg := "", func() {}
+	if !onAgent || route != nil {
 		server := ""
 		if auth != nil {
 			server = auth.Server
@@ -621,7 +623,8 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 		if dockerCfg, cleanup, err = o.registryConfigDir(ctx, auth, server); err != nil {
 			return err
 		}
-		defer cleanup()
+		removeCfg = sync.OnceFunc(cleanup)
+		defer removeCfg()
 	}
 
 	if !nets.Isolated {
@@ -687,6 +690,9 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 	}
 
 	if onAgent {
+		// The pull's credentials don't wait for up, which goes on without
+		// the panel when it restarts.
+		removeCfg()
 		ovs := make([]rollout.ComposeOverride, 0, len(overrides))
 		for _, ov := range overrides {
 			ovs = append(ovs, rollout.ComposeOverride{Name: ov.name, Content: ov.content})

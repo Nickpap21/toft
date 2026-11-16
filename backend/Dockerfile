@@ -48,6 +48,21 @@ FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c03
 # docker-cli-buildx: builds there run on BuildKit (D-167); without it
 # `docker build` is the classic builder, which has no cache mounts.
 RUN apk add --no-cache ca-certificates tzdata git docker-cli docker-cli-compose docker-cli-buildx
+# Nixpacks, for Nixpacks builds on the control-plane server: it plans and
+# writes the Dockerfile there, and Toft runs the build. The release's static
+# binary for this image's architecture, refused unless it has the hash
+# recorded here (v1.41.0, taken 2026-11-16).
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) arch=x86_64 sum=0f55de7874507b9cf7502113120bd96f2ab6979f78d10eaf2eb2ade9207b3af6 ;; \
+      arm64) arch=aarch64 sum=912bd02dd2bb6f9c3a9ed965fe8a68b4aa318dc7a2546e2eca6f2806a894ba39 ;; \
+      *) echo "no nixpacks binary for '$TARGETARCH'" >&2; exit 1 ;; \
+    esac && \
+    wget -qO /tmp/nixpacks.tar.gz "https://github.com/railwayapp/nixpacks/releases/download/v1.41.0/nixpacks-v1.41.0-$arch-unknown-linux-musl.tar.gz" && \
+    echo "$sum  /tmp/nixpacks.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/nixpacks.tar.gz -C /usr/local/bin nixpacks && \
+    rm /tmp/nixpacks.tar.gz && \
+    nixpacks --version
 # The paas-git container runs this image as git (uid 10001): the
 # repositories' volume and the socket's directory start out owned by it.
 RUN adduser -D -H -u 10001 -s /sbin/nologin git && \

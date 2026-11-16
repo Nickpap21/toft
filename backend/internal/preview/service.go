@@ -616,7 +616,7 @@ func untrustedRefusal(src SourceService) string {
 	case strings.Contains(src.Volumes, `"host_path":"/`):
 		return src.Name + " mounts a path on its server, which a preview opened with an API key can't reach"
 	case src.BuildPack == "nixpacks":
-		return src.Name + " builds with Nixpacks, whose cache is shared with every build on the server: a preview opened with an API key needs a Dockerfile"
+		return src.Name + " builds with Nixpacks, whose Dockerfile is written during the build and can't be checked first: a preview opened with an API key needs a Dockerfile"
 	}
 	return ""
 }

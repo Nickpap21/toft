@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -217,20 +215,12 @@ func waitForUp(ctx context.Context, pid int, project string) {
 // login made on the host is not the deploy's to pull with; the CLI plugins
 // (compose among them) are linked from the host's.
 func dockerConfig(dir string, a *rollout.RegistryAuth) (string, error) {
-	auths := map[string]any{}
+	raw := []byte(`{"auths":{}}`)
 	if a != nil && a.Password != "" {
-		server, user := a.Server, a.Username
-		if server == "" {
-			server = "https://index.docker.io/v1/"
+		var err error
+		if raw, err = rollout.RegistryConfig(*a, a.Server); err != nil {
+			return "", err
 		}
-		if user == "" {
-			user = "token"
-		}
-		auths[server] = map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(user + ":" + a.Password))}
-	}
-	raw, err := json.Marshal(map[string]any{"auths": auths})
-	if err != nil {
-		return "", err
 	}
 	cfg := filepath.Join(dir, "docker")
 	if err := os.MkdirAll(cfg, 0o700); err != nil {
