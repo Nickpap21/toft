@@ -835,7 +835,7 @@ func TestRemoteBuildPullsWithTheServicesLogin(t *testing.T) {
 			"exec umask 077 && rm -f '" + cfg + "/config.json' && : > '" + cfg + "/config.json'",
 			"upload '" + cfg + "/config.json'",
 			"exec chmod 600 '" + cfg + "/config.json'",
-			"stream DOCKER_CONFIG='" + cfg + "' BUILDX_GIT_INFO=false docker build",
+			"stream DOCKER_CONFIG='" + cfg + "' BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build",
 			"exec rm -rf '" + cfg + "'",
 		}, seq, name)
 		assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"Ym90Omh1bnRlcjI="}}}`, h.uploads["'"+cfg+"/config.json'"], name)
