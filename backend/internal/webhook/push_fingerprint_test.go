@@ -88,7 +88,7 @@ func (r *deployments) DeleteOldDeploymentsForService(context.Context, string, in
 type builds struct{ deployment.Orchestrator }
 
 func (builds) PrepareNetworks(context.Context, netplan.Plan, func(string)) error { return nil }
-func (builds) BuildFromGit(_ context.Context, _, _, _, _ string, _ map[string]*string, _ func(string)) (deployment.Commit, error) {
+func (builds) BuildFromGit(_ context.Context, _, _, _, _ string, _ map[string]*string, _ *deployment.RegistryAuth, _ func(string)) (deployment.Commit, error) {
 	return deployment.Commit{SHA: "abc123", Subject: "Ship it"}, nil
 }
 func (builds) Rollout(context.Context, rollout.Spec, deployment.Routing, rollout.Hooks) rollout.Result {

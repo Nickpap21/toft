@@ -60,7 +60,8 @@ func TestBuildArgListRefusesATagThatIsNotAServices(t *testing.T) {
 }
 
 // fakeDocker puts a docker in PATH that records its arguments, its stdin,
-// its environment, what its DOCKER_CONFIG holds and what its last argument
+// its environment, what its DOCKER_CONFIG holds (and its config.json, as
+// login) and what its last argument
 // (a build's context) holds, and returns the folder those are written to.
 func fakeDocker(t *testing.T) string {
 	t.Helper()
@@ -70,6 +71,7 @@ func fakeDocker(t *testing.T) string {
 		"cat > " + dir + "/stdin\n" +
 		"env > " + dir + "/env\n" +
 		"ls -A \"$DOCKER_CONFIG\" > " + dir + "/config\n" +
+		"cat \"$DOCKER_CONFIG/config.json\" > " + dir + "/login 2>/dev/null\n" +
 		"for last; do :; done; (cd \"$last\" && find . -type f | sort) > " + dir + "/context\n" +
 		"echo '#1 building'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700))
@@ -108,7 +110,7 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	var logged []string
 	source := sourceTar(t, map[string]string{"services/api/Dockerfile": "FROM scratch\n", ".dockerignore": "secret\n", "secret": "s"}, nil)
 	err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), source, "services/api", testImageTag, nil,
-		map[string]*string{"TOFT_GIT_SHA": &sha}, func(l string) { logged = append(logged, l) })
+		map[string]*string{"TOFT_GIT_SHA": &sha}, nil, func(l string) { logged = append(logged, l) })
 	require.NoError(t, err)
 
 	read := func(name string) string {
@@ -144,6 +146,52 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	assert.Contains(t, logged, "Image built: "+testImageTag)
 }
 
+// A build on the panel's host with the service's registry login pulls its
+// base images with it: the docker build's own config holds it, nixpacks
+// never sees it, and it is removed after the build. Without a password the
+// config holds no login.
+func TestLocalBuildPullsWithTheServicesLogin(t *testing.T) {
+	dir := fakeDocker(t)
+	nix := "#!/bin/sh\nenv >> " + dir + "/nixenv\n[ \"$1\" = plan ] && echo '{}'\n" +
+		"[ \"$1\" = build ] && mkdir \"$2/.nixpacks\" && echo 'FROM scratch' > \"$2/.nixpacks/Dockerfile\"\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(nix), 0o700))
+	read := func(name string) string {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		return string(raw)
+	}
+	for name, nixpacks := range map[string]*deployment.NixpacksCommands{"dockerfile": nil, "nixpacks": {}} {
+		for _, f := range []string{"login", "nixenv"} {
+			_ = os.Remove(filepath.Join(dir, f))
+		}
+		err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil),
+			"", testImageTag, nixpacks, nil, &deployment.RegistryAuth{Server: "ghcr.io", Username: "bot", Password: "hunter2"}, func(string) {})
+		require.NoError(t, err, name)
+		assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"Ym90Omh1bnRlcjI="}}}`, read("login"), name)
+		assert.NotContains(t, read("args"), "hunter2", name)
+		var cfg string
+		for _, line := range strings.Split(read("env"), "\n") {
+			if v, ok := strings.CutPrefix(line, "DOCKER_CONFIG="); ok {
+				cfg = v
+			}
+		}
+		require.NotEmpty(t, cfg, name)
+		assert.NoDirExists(t, cfg, "%s: the login is removed after the build", name)
+		if nixpacks != nil {
+			assert.NotContains(t, read("nixenv"), "DOCKER_CONFIG", "nixpacks gets no login")
+		}
+
+		for _, none := range []*deployment.RegistryAuth{nil, {Server: "ghcr.io", Username: "bot"}} {
+			_ = os.Remove(filepath.Join(dir, "login"))
+			err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil),
+				"", testImageTag, nixpacks, nil, none, func(string) {})
+			require.NoError(t, err, name)
+			assert.Empty(t, read("login"), "%s: no password, no login", name)
+			assert.Equal(t, "cli-plugins\n", read("config"), name)
+		}
+	}
+}
+
 // The CLI reads the Dockerfile on the panel's host, so one that a link in
 // the repository takes out of the tree (one of the backend's own files) is
 // refused before docker runs.
@@ -160,7 +208,7 @@ func TestLocalBuildRefusesADockerfileLinkedOutOfTheTree(t *testing.T) {
 		"its folder is a link, to one with none": {"api", map[string]string{"api": t.TempDir()}},
 	} {
 		err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"main.go": "package main\n"}, tc.links),
-			tc.baseDir, testImageTag, nil, nil, func(string) {})
+			tc.baseDir, testImageTag, nil, nil, nil, func(string) {})
 		require.ErrorIs(t, err, service.ErrInvalidConfig, name)
 		assert.ErrorContains(t, err, "a link out of the repository", name)
 		assert.NoFileExists(t, filepath.Join(dir, "args"), name+": docker did not run")
@@ -179,7 +227,7 @@ func TestLocalNixpacksIsKeptToTheTree(t *testing.T) {
 	t.Setenv("JWT_SECRET", "the backend's")
 	build := func(links map[string]string) error {
 		return (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, links),
-			"", testImageTag, &deployment.NixpacksCommands{}, nil, func(string) {})
+			"", testImageTag, &deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	}
 
 	for name, links := range map[string]map[string]string{

@@ -58,14 +58,14 @@ func TestRemoteBuildsRefuseALinkOutOfTheBuildFolder(t *testing.T) {
 	o := newTestRemote(h)
 	log := func(string) {}
 	for _, dir := range []string{"", "app"} {
-		_, err := o.BuildFromGit(ctx, "https://example.com/r.git", "main", dir, "img:1", nil, log)
+		_, err := o.BuildFromGit(ctx, "https://example.com/r.git", "main", dir, "img:1", nil, nil, log)
 		assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromGit %q", dir)
 		for _, nix := range []*deployment.NixpacksCommands{nil, {}} {
-			err = o.BuildFromArchive(ctx, strings.NewReader("tar"), dir, "img:1", nix, nil, log)
+			err = o.BuildFromArchive(ctx, strings.NewReader("tar"), dir, "img:1", nix, nil, nil, log)
 			assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromArchive %q", dir)
 		}
 	}
-	_, err := o.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", "app", "img:1", deployment.NixpacksCommands{}, nil, log)
+	_, err := o.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", "app", "img:1", deployment.NixpacksCommands{}, nil, nil, log)
 	assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromGitNixpacks")
 	for _, c := range h.recorded() {
 		assert.NotContains(t, c.cmd, "docker build", "a build ran")
@@ -81,6 +81,6 @@ func TestLocalNixpacksRefusesALinkOutOfTheBuildFolder(t *testing.T) {
 	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "app", Typeflag: tar.TypeSymlink, Linkname: "/", Mode: 0o777}))
 	require.NoError(t, tw.Close())
 	l := &LocalOrchestrator{log: zap.NewNop()}
-	err := l.BuildFromArchive(context.Background(), &buf, "app", "img:1", &deployment.NixpacksCommands{}, nil, func(string) {})
+	err := l.BuildFromArchive(context.Background(), &buf, "app", "img:1", &deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	assert.ErrorIs(t, err, service.ErrInvalidConfig)
 }

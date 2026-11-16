@@ -77,7 +77,7 @@ func NewLocalOrchestrator(log *zap.Logger, net rollout.NetConfig, dataDir string
 // The repo root is always used as the Docker build context so Dockerfiles can reference
 // root-level files (e.g. monorepo package.json). When baseDir is non-empty the Dockerfile
 // is resolved as baseDir/Dockerfile relative to the repo root.
-func (o *LocalOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, baseDir, imageTag string, buildArgs map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (o *LocalOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, baseDir, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return deployment.Commit{}, err
 	}
@@ -101,13 +101,13 @@ func (o *LocalOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, b
 	}
 
 	logFn(fmt.Sprintf("[2/2] Building image %s...", imageTag))
-	return commit, o.buildImage(ctx, repoRoot, dockerfilePath, imageTag, buildArgs, logFn)
+	return commit, o.buildImage(ctx, repoRoot, dockerfilePath, imageTag, buildArgs, auth, logFn)
 }
 
 // BuildFromArchive builds imageTag from source, a commit's tree as a tar
 // (D-77), unpacked into a temporary directory: the build context, with the
 // Dockerfile at baseDir/Dockerfile; or nixpacks' in baseDir.
-func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Reader, baseDir, imageTag string, nixpacks *deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 			dockerfilePath = filepath.Join(filepath.Clean(strings.TrimPrefix(baseDir, "/")), "Dockerfile")
 		}
 		logFn(fmt.Sprintf("Building image %s...", imageTag))
-		return localBuild(ctx, tmpDir, dockerfilePath, imageTag, buildArgs, logFn)
+		return localBuild(ctx, tmpDir, dockerfilePath, imageTag, buildArgs, auth, logFn)
 	}
 	buildDir, err := service.JoinBaseDirectory(tmpDir, baseDir)
 	if err != nil {
@@ -135,12 +135,12 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 		return err
 	}
 	logFn(fmt.Sprintf("Building %s with nixpacks...", imageTag))
-	return localNixpacks(ctx, buildDir, imageTag, *nixpacks, buildArgs, logFn)
+	return localNixpacks(ctx, buildDir, imageTag, *nixpacks, buildArgs, auth, logFn)
 }
 
 // BuildFromGitNixpacks clones repoURL@branch locally, then builds via nixpacks.
 // nixpacks must be installed on the host (https://nixpacks.com).
-func (o *LocalOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, branch, baseDir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (o *LocalOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, branch, baseDir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	if err := service.ValidateBaseDirectory(baseDir); err != nil {
 		return deployment.Commit{}, err
 	}
@@ -158,7 +158,7 @@ func (o *LocalOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, b
 	}
 
 	logFn(fmt.Sprintf("[2/2] Building %s with nixpacks...", imageTag))
-	return commit, localNixpacks(ctx, buildDir, imageTag, cmds, buildArgs, logFn)
+	return commit, localNixpacks(ctx, buildDir, imageTag, cmds, buildArgs, auth, logFn)
 }
 
 // Rollout runs a single-container deploy's rollout on the local Docker
@@ -747,9 +747,9 @@ func discoverVolumes(ctx context.Context, dc *client.Client, serviceID string) (
 // buildImage builds a Docker image from a local directory.
 // buildArgs are forwarded as --build-arg KEY=VALUE so that ARG declarations
 // in the Dockerfile can expose them to RUN steps (e.g. NEXT_PUBLIC_* in Next.js).
-func (o *LocalOrchestrator) buildImage(ctx context.Context, buildContextDir, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
+func (o *LocalOrchestrator) buildImage(ctx context.Context, buildContextDir, dockerfilePath, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	o.log.Info("building image", zap.String("tag", imageTag), zap.String("context", buildContextDir), zap.String("dockerfile", dockerfilePath))
-	return localBuild(ctx, buildContextDir, dockerfilePath, imageTag, buildArgs, logFn)
+	return localBuild(ctx, buildContextDir, dockerfilePath, imageTag, buildArgs, auth, logFn)
 }
 
 // localBuild runs docker build of imageTag on the local Docker, with the
@@ -760,8 +760,10 @@ func (o *LocalOrchestrator) buildImage(ctx context.Context, buildContextDir, doc
 // the classic builder where it doesn't. buildArgs are followed by the two
 // arguments that keep the build to its service (buildArgList). The build
 // has the clean environment compose gets and a Docker config of its own,
-// empty: a registry login on this host is not this build's to pull with.
-func localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, buildArgs map[string]*string, logFn func(string)) error {
+// holding auth (the service's registry login) or nothing: a registry login
+// on this host is not this build's to pull with. The CLI hands the login
+// to the builder for its pulls only; no RUN step sees it.
+func localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	kvs, err := buildArgList(imageTag, buildArgs)
 	if err != nil {
 		return err
@@ -780,7 +782,13 @@ func localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, build
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: %s: %w", service.ErrInvalidConfig, dockerfilePath, err)
 	}
-	cfg, cleanup, err := dockerConfigDir(nil)
+	var raw []byte
+	if auth != nil && auth.Password != "" {
+		if raw, err = rollout.RegistryConfig(*auth, auth.Server); err != nil {
+			return fmt.Errorf("the build's registry login: %w", err)
+		}
+	}
+	cfg, cleanup, err := dockerConfigDir(raw)
 	if err != nil {
 		return err
 	}
@@ -830,7 +838,7 @@ func dockerConfigDir(config []byte) (string, func(), error) {
 // localNixpacks builds imageTag from dir with Nixpacks, as
 // RemoteOrchestrator.nixpacksBuild does on a server: nixpacks plans and
 // writes the Dockerfile, localBuild runs it.
-func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	serviceID, err := builtService(imageTag)
 	if err != nil {
 		return err
@@ -866,7 +874,7 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 	if err := runStream(write, logFn); err != nil {
 		return fmt.Errorf("nixpacks build: %w", err)
 	}
-	return localBuild(ctx, dir, ".nixpacks/Dockerfile", imageTag, vars, logFn)
+	return localBuild(ctx, dir, ".nixpacks/Dockerfile", imageTag, vars, auth, logFn)
 }
 
 // ─── Build-arg helpers ────────────────────────────────────────────────────────

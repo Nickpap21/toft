@@ -33,7 +33,7 @@ type stoppableBuild struct {
 	cause    error // the build context's cause, once it ended
 }
 
-func (b *stoppableBuild) BuildFromGit(ctx context.Context, _, _, _, _ string, _ map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (b *stoppableBuild) BuildFromGit(ctx context.Context, _, _, _, _ string, _ map[string]*string, _ *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	logFn("Building image...")
 	close(b.building)
 	select {

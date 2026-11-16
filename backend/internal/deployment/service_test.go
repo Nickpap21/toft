@@ -247,6 +247,8 @@ type mockOrchestrator struct {
 	// build arguments it got.
 	archived  map[string]string
 	buildArgs map[string]*string
+	// buildAuth is the registry login the last build got.
+	buildAuth *deployment.RegistryAuth
 }
 
 func (m *mockOrchestrator) record(call string) {
@@ -266,16 +268,16 @@ func (m *mockOrchestrator) PrepareNetworks(_ context.Context, plan netplan.Plan,
 	return m.prepareErr
 }
 
-func (m *mockOrchestrator) BuildFromGit(_ context.Context, _, _, _, _ string, _ map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (m *mockOrchestrator) BuildFromGit(_ context.Context, _, _, _, _ string, _ map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	m.mu.Lock()
-	m.built = true
+	m.built, m.buildAuth = true, auth
 	m.mu.Unlock()
 	logFn("Cloning repo...")
 	logFn("Building image...")
 	return m.commit, m.buildErr
 }
 
-func (m *mockOrchestrator) BuildFromArchive(_ context.Context, source io.Reader, _, _ string, _ *deployment.NixpacksCommands, buildArgs map[string]*string, logFn func(string)) error {
+func (m *mockOrchestrator) BuildFromArchive(_ context.Context, source io.Reader, _, _ string, _ *deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	files := map[string]string{}
 	tr := tar.NewReader(source)
 	for {
@@ -287,13 +289,16 @@ func (m *mockOrchestrator) BuildFromArchive(_ context.Context, source io.Reader,
 		files[h.Name] = string(b)
 	}
 	m.mu.Lock()
-	m.built, m.archived, m.buildArgs = true, files, buildArgs
+	m.built, m.archived, m.buildArgs, m.buildAuth = true, files, buildArgs, auth
 	m.mu.Unlock()
 	logFn("Building image...")
 	return m.buildErr
 }
 
-func (m *mockOrchestrator) BuildFromGitNixpacks(_ context.Context, _, _, _, _ string, _ deployment.NixpacksCommands, _ map[string]*string, _ func(string)) (deployment.Commit, error) {
+func (m *mockOrchestrator) BuildFromGitNixpacks(_ context.Context, _, _, _, _ string, _ deployment.NixpacksCommands, _ map[string]*string, auth *deployment.RegistryAuth, _ func(string)) (deployment.Commit, error) {
+	m.mu.Lock()
+	m.buildAuth = auth
+	m.mu.Unlock()
 	return deployment.Commit{}, nil
 }
 
@@ -1848,14 +1853,35 @@ func newGatedOrchestrator(buildErr error) *gatedOrchestrator {
 	}
 }
 
-func (o *gatedOrchestrator) BuildFromGit(ctx context.Context, a, b, c, d string, e map[string]*string, logFn func(string)) (deployment.Commit, error) {
+func (o *gatedOrchestrator) BuildFromGit(ctx context.Context, a, b, c, d string, e map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) (deployment.Commit, error) {
 	close(o.building)
 	<-o.release
-	return o.mockOrchestrator.BuildFromGit(ctx, a, b, c, d, e, logFn)
+	return o.mockOrchestrator.BuildFromGit(ctx, a, b, c, d, e, auth, logFn)
 }
 
 func gitDeploy() deployment.TriggerInput {
 	return deployment.TriggerInput{ServiceID: "svc-1", SourceType: "git", GitRepoURL: "https://github.com/example/repo", GitBranch: "main"}
+}
+
+// A git build gets the service's registry login, for the private base
+// images its Dockerfile names; a service without one hands it none.
+func TestGitBuildGetsTheServicesRegistryLogin(t *testing.T) {
+	login := &deployment.RegistryAuth{Server: "ghcr.io", Username: "bot", Password: "hunter2"}
+	for _, pack := range []string{"", "nixpacks"} {
+		for _, auth := range []*deployment.RegistryAuth{login, nil} {
+			repo := &mockRepo{createdID: "dep-login"}
+			orch := &mockOrchestrator{}
+			svc := newTestService(repo, &mockFactory{orch: orch}, &mockStatusUpdater{})
+			in := gitDeploy()
+			in.BuildPack, in.RegistryAuth = pack, auth
+			_, err := svc.Trigger(context.Background(), in)
+			require.NoError(t, err)
+			waitForStatus(t, repo, deployment.StatusRunning, 2*time.Second)
+			orch.mu.Lock()
+			assert.Equal(t, auth, orch.buildAuth, "build pack %q", pack)
+			orch.mu.Unlock()
+		}
+	}
 }
 
 func TestMarkInterruptedSkipsDeploysRunningHere(t *testing.T) {
