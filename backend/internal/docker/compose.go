@@ -69,7 +69,8 @@ func localComposeEnv(envVars map[string]string) []string {
 // PATH and HOME from the SSH session, plus DOCKER_HOST and XDG_RUNTIME_DIR
 // when they are set and not empty, and TOFT_EXEC, the mark the SSH client
 // ends a cancelled command by (pkg/sshclient): without it a cancelled
-// compose command would run on. The quotes inside ${VAR:+"..."} keep a
+// compose command would run on. composespec reserves that name, so no
+// compose file reads it. The quotes inside ${VAR:+"..."} keep a
 // value with spaces in one word.
 const remoteCleanEnvPrefix = `env -i PATH="$PATH" HOME="$HOME" ` +
 	`${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ` +

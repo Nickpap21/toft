@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/testenv"
 	"github.com/Nickpap21/toft/backend/pkg/sshclient/sshtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,6 +94,28 @@ func TestCancelReapsTheCommand(t *testing.T) {
 	}
 	marksSeen := srv.Reaps()
 	assert.NotEqual(t, marksSeen[0], marksSeen[1], "a mark per command")
+}
+
+// A reaper waits for the one before it only as long as its own run may
+// take: cancelled calls on a server that stopped answering return together,
+// not one reaper's timeout after another, each holding a session slot.
+func TestReaperWaitsForAnotherOnlySoLong(t *testing.T) {
+	oldGrace, oldSlack := reapGrace, reapSlack
+	reapGrace, reapSlack = 0, 100*time.Millisecond
+	t.Cleanup(func() { reapGrace, reapSlack = oldGrace, oldSlack })
+
+	srv := sshtest.New(t)
+	c := dialT(t, testConfig(srv))
+	c.reaping <- struct{}{} // another reaper, which does not end
+
+	done := make(chan struct{})
+	go func() { c.reap(context.Background(), "mark"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting for the other reaper")
+	}
+	assert.Empty(t, srv.Reaps())
 }
 
 // A reply over the cap closes the session, which stops the command no more
@@ -228,6 +251,11 @@ func TestCancelledCommandIsGoneFromTheServer(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the reaper reads /proc")
 	}
+	// The reaper is written for the servers Toft takes, Debian and Ubuntu:
+	// busybox's grep (Alpine) has no -z.
+	if exec.Command("grep", "-z", "--version").Run() != nil {
+		testenv.Skip(t, "no GNU grep here")
+	}
 	old := reapGrace
 	reapGrace = time.Second
 	t.Cleanup(func() { reapGrace = old })
@@ -280,8 +308,10 @@ func TestDeadlineEndsTheCommandWithoutThePanel(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("reads /proc")
 	}
-	if exec.Command("timeout", "-k", "1", "1", "true").Run() != nil {
-		t.Skip("no timeout(1) that takes -k")
+	// GNU's timeout signals the command's whole process group; busybox's
+	// (Alpine) only the shell, and what the shell started runs on.
+	if exec.Command("timeout", "--version").Run() != nil {
+		testenv.Skip(t, "no GNU timeout here")
 	}
 	old := timeoutMargin
 	timeoutMargin = time.Second

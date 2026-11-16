@@ -93,8 +93,8 @@ type Client struct {
 	agent bool
 	// reaping lets one reaper at a time open its session: sshd counts a
 	// closed session against MaxSessions until its command has exited, so
-	// each reaper is a session past the caller's own.
-	reaping sync.Mutex
+	// each reaper is a session past the caller's own. Holds one.
+	reaping chan struct{}
 }
 
 // SessionOpenError reports that a session could not be opened, so the remote
@@ -157,6 +157,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		hostKey: check.presented,
 		done:    make(chan struct{}),
 		agent:   cfg.Conn != nil,
+		reaping: make(chan struct{}, 1),
 	}
 	go func() {
 		_ = c.conn.Wait()
@@ -377,9 +378,12 @@ func wait(ctx context.Context, sess *ssh.Session) error {
 
 // reapGrace is how long a cancelled command has to end at SIGTERM before
 // SIGKILL; timeoutMargin how long past its call's deadline a command may
-// run before `timeout` ends it on the server. Variables for the tests.
+// run before `timeout` ends it on the server; reapSlack how long past
+// reapGrace a reaper may take, and how long one waits for the reaper before
+// it. Variables for the tests.
 var (
 	reapGrace     = 5 * time.Second
+	reapSlack     = 10 * time.Second
 	timeoutMargin = 30 * time.Second
 )
 
@@ -425,7 +429,8 @@ func wrap(cmd, mark string, limit time.Duration) string {
 // reap ends every process on the server that carries mark: SIGTERM, then
 // SIGKILL to what is left after reapGrace. It runs in a session of its own
 // past ctx's end and returns when the processes are gone; it is best
-// effort, and without a connection `timeout` is what ends the command.
+// effort: without a connection, or when the reapers before it are still
+// at it reapGrace+reapSlack on, `timeout` is what ends the command.
 // Nothing found is looked for once more: a command cancelled as it starts
 // has not put the mark on yet.
 func (c *Client) reap(ctx context.Context, mark string) {
@@ -437,9 +442,15 @@ func (c *Client) reap(ctx context.Context, mark string) {
 		return
 	default:
 	}
-	c.reaping.Lock()
-	defer c.reaping.Unlock()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reapGrace+10*time.Second)
+	select {
+	case c.reaping <- struct{}{}:
+		defer func() { <-c.reaping }()
+	case <-c.done:
+		return
+	case <-time.After(reapGrace + reapSlack):
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reapGrace+reapSlack)
 	defer cancel()
 	sess, err := c.newSession(ctx)
 	if err != nil {

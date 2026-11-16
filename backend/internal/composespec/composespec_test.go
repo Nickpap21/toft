@@ -428,6 +428,28 @@ func TestRepo_DotEnvReadingPlatformEnvIsRefused(t *testing.T) {
 	}
 }
 
+// A command on a server added over SSH carries TOFT_EXEC, the mark a
+// cancelled command is ended by (pkg/sshclient), and compose there would
+// read it: a file that is one thing with it and another without is refused.
+func TestRepo_ReadingTheCancelMarkIsRefused(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"compose file": {"docker-compose.yml": "services:\n  web:\n    image: nginx\n    privileged: ${TOFT_EXEC:+true}${TOFT_EXEC:-false}\n"},
+		".env": {
+			"docker-compose.yml": "services:\n  web:\n    image: nginx\n    network_mode: ${NET:-bridge}\n",
+			".env":               "NET=${TOFT_EXEC:+host}\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFiles(t, root, files)
+			vs := validateRepo(t, root, "docker-compose.yml", "", nil)
+			require.NotEmpty(t, vs)
+			assert.Equal(t, "reserved_env", string(vs[0].Rule))
+			assert.Contains(t, vs[0].Field, "${TOFT_EXEC}")
+		})
+	}
+}
+
 // compose reads <dir>/.env for an included file; ScanRepo covers every .env.
 func TestRepo_IncludedDirDotEnvReadingPlatformEnvIsRefused(t *testing.T) {
 	root := t.TempDir()
@@ -525,7 +547,7 @@ func TestRepo_DotEnvReservedKeys(t *testing.T) {
 }
 
 func TestIsPlatformEnv(t *testing.T) {
-	for _, k := range []string{"HOME", "PATH", "DOCKER_HOST", "XDG_RUNTIME_DIR", "DOCKER_CLI_PLUGIN_ORIGINAL_CLI_COMMAND", "OTEL_RESOURCE_ATTRIBUTES", "COMPOSE_FILE"} {
+	for _, k := range []string{"HOME", "PATH", "DOCKER_HOST", "XDG_RUNTIME_DIR", "DOCKER_CLI_PLUGIN_ORIGINAL_CLI_COMMAND", "OTEL_RESOURCE_ATTRIBUTES", "COMPOSE_FILE", "TOFT_EXEC"} {
 		assert.True(t, composespec.IsPlatformEnv(k), k)
 	}
 	for _, k := range []string{"COMPOSE_PROJECT_NAME", "TAG", "OTEL_SERVICE_NAME", "home"} {
@@ -534,7 +556,7 @@ func TestIsPlatformEnv(t *testing.T) {
 }
 
 func TestIsReservedCLIEnv(t *testing.T) {
-	for _, k := range []string{"DOCKER_CONFIG", "DOCKER_HOST", "COMPOSE_ENV_FILES", "PATH", "HOME", "LD_PRELOAD", "GIT_CONFIG_COUNT", "GIT_SSH_COMMAND", "SSH_AUTH_SOCK"} {
+	for _, k := range []string{"DOCKER_CONFIG", "DOCKER_HOST", "COMPOSE_ENV_FILES", "PATH", "HOME", "LD_PRELOAD", "GIT_CONFIG_COUNT", "GIT_SSH_COMMAND", "SSH_AUTH_SOCK", "TOFT_EXEC"} {
 		assert.True(t, composespec.IsReservedCLIEnv(k), k)
 	}
 	for _, k := range []string{"DATABASE_URL", "GIT_SHA", "NODE_ENV", "docker_host", "MY_PATH"} {
