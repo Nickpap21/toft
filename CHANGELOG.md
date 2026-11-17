@@ -6,6 +6,69 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.2.0 (2026-11-17)
+
+New web apps get a health check by default, live logs get an API key
+scope of their own, and a one-project key finds services by name. Two
+migrations (0084, a health check setting that keeps what existing
+services had; 0085, the new scope). A failed upgrade starts 1.1.2 again
+without restoring the database; health check values brought into range
+(below) stay so. Upgrade from 1.1.2.
+
+### Before upgrading
+
+- **A new web app checks `GET /` before it takes traffic.** A web app
+  built from git or an image, created in the panel or through the API from
+  1.2.0 on, has a health check from its first deploy. It makes five
+  attempts, 2 seconds apart, waits 5 seconds for each answer, and passes
+  on any status below 500 (an app that answers 404 on `/` is up). One that
+  answers 500 or more on `/`, or doesn't answer, fails its first deploy.
+  Before deploying it, set its health check path, or set Attempts to 0, in
+  the service's Settings. Services created before keep their settings and
+  pass below 400, as they did. Workers, databases, caches, catalog add-ons
+  and compose stacks still have no check until you set one.
+- **Live logs need the new `logs` scope ("Read live logs").** A
+  one-project API key follows a service's live logs (`toft logs`) only
+  with it. It is not part of `deploy`: a service's output holds whatever
+  the app prints. Existing `deploy` keys don't have it, and the upgrade
+  doesn't add it; create a key with it for `toft logs` from CI. A
+  full-account key reads live logs as before.
+- **Health check values outside their range are refused**, with 400: a
+  timeout outside 1 to 60 seconds, attempts outside 0 to 10, or a path
+  without a leading `/`. The upgrade brings stored values into range
+  (0 or less is the default, more is the most) and gives a path its
+  leading `/`. A path without one asked for `http://host:3000health`, so
+  that check could never pass. Each change is in the workspace's audit log
+  as `service.health_check_clamped`, with what it was.
+
+### Deploys
+
+- **Passes below**, a new health check setting: 500 (the default for new
+  services) or 400 (a 404 fails too).
+- A failed health check says what it got, as in `GET / answered 503 on
+  all 5 attempts`, and the deploy keeps the old container serving.
+
+### API keys and the CLI
+
+- **A one-project key finds services by name.** With `deploy` or `logs`,
+  it lists its own project and that project's services (only those it
+  names, for a key limited to some services), so `toft deploy
+  storefront/production/api` works without the service's ID.
+- A key limited to some services may hold `logs`, beside `deploy` and
+  `variables`.
+- `toft logs` with a key that lacks the scope says it needs `logs` (Read
+  live logs) and where to add a key, instead of only that the key is
+  limited.
+- The panel labels the `deploy` scope "Deploy and roll back".
+- Agents still can't read live logs.
+
+### Install
+
+- Rocky Linux and AlmaLinux are best effort, not tested: provisioning's
+  firewall, fail2ban and automatic updates steps use apt and are skipped
+  there with a warning. The README, the guides and `install.sh` no longer
+  list them as tested.
+
 ## 1.1.2 (2026-11-17)
 
 Nixpacks on the panel's own server runs in a sandbox. No migration: a
