@@ -2458,7 +2458,7 @@ func (s *Service) runComposePipeline(ctx context.Context, deploymentID string, i
 				}
 			}
 			if err != nil {
-				msg := "✗ " + err.Error()
+				msg := "✗ " + gitcred.Failure("git clone failed", out, err).Error()
 				appendLog(msg)
 				s.failAndPublish(ctx, deploymentID, input, imageTag, msg)
 				return
@@ -3116,11 +3116,7 @@ func checkoutRepo(ctx context.Context, repoURL, branch, commitSHA, dir string) (
 	defer forget()
 	if commitSHA == "" {
 		args := append(gitArgs, "clone", "--depth", "1", "--branch", branch, "--progress", "--", cloneURL, dir)
-		out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
-		if err != nil {
-			err = gitcred.Failure("git clone failed", out, err)
-		}
-		return out, err
+		return exec.CommandContext(ctx, "git", args...).CombinedOutput()
 	}
 	var all []byte
 	for _, args := range [][]string{
@@ -3131,7 +3127,7 @@ func checkoutRepo(ctx context.Context, repoURL, branch, commitSHA, dir string) (
 		out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
 		all = append(all, out...)
 		if err != nil {
-			return all, gitcred.Failure("git clone failed", out, err)
+			return all, err
 		}
 	}
 	return all, nil
