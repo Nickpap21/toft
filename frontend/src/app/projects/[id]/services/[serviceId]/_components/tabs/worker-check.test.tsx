@@ -53,7 +53,7 @@ describe("WorkerCheckField", () => {
     const user = userEvent.setup();
     render(<Harness service={{ ...worker, health_check_retries: 3 } as Service} />);
     expect(screen.getByRole("radio", { name: "HTTP" })).toBeChecked();
-    const check = within(screen.getByRole("radiogroup", { name: "Check" }));
+    const check = within(screen.getByRole("group", { name: "Check" }));
     await user.click(check.getByRole("radio", { name: "Command" }));
     await user.type(screen.getByRole("textbox"), "pgrep -f mailer");
     expect(screen.getByTestId("form")).toHaveTextContent("0|command|pgrep -f mailer");
@@ -65,6 +65,23 @@ describe("WorkerCheckField", () => {
     await user.click(screen.getByRole("radio", { name: "None" }));
     expect(screen.getByTestId("form")).toHaveTextContent("0|off|");
     expect(screen.getByText(/checks nothing/)).toBeInTheDocument();
+  });
+
+  it("keeps HTTP open while its attempts are retyped", async () => {
+    const user = userEvent.setup();
+    render(<Harness service={{ ...worker, health_check_retries: 3 } as Service} />);
+    await user.clear(screen.getByLabelText("Attempts"));
+    expect(screen.getByRole("radio", { name: "HTTP" })).toBeChecked();
+    expect(screen.getByLabelText("Attempts")).toHaveFocus();
+  });
+
+  it("goes back to the saved container check when None is left for HTTP", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const check = within(screen.getByRole("group", { name: "Check" }));
+    await user.click(check.getByRole("radio", { name: "None" }));
+    await user.click(check.getByRole("radio", { name: "HTTP" }));
+    expect(screen.getByTestId("form")).toHaveTextContent("5|image|");
   });
 
   it("opens the HTTP fields with HTTP, its attempts back on", async () => {

@@ -2706,6 +2706,7 @@ function HealthCard({
   set,
   canEdit,
   saved,
+  worker = false,
 }: {
   service: Service;
   serviceId: string;
@@ -2713,14 +2714,19 @@ function HealthCard({
   set: (p: Partial<ConfigForm>) => void;
   canEdit: boolean;
   saved: ConfigForm;
+  /** WorkerCheckField's: no attempts of 0 (None is how a worker turns it
+   *  off), and a worker takes no traffic. */
+  worker?: boolean;
 }) {
   const last = service.last_health_check;
   const hhmm = (iso: string) => new Date(iso).toTimeString().slice(0, 5);
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13px] leading-5 text-fg/85">
-        Each deploy waits for this path to answer before the new version takes
-        traffic. While live it is checked every minute: a failure marks{" "}
+        {worker
+          ? "Each deploy waits for this path to answer before it finishes."
+          : "Each deploy waits for this path to answer before the new version takes traffic."}{" "}
+        While live it is checked every minute: a failure marks{" "}
         {service.name} unhealthy and alerts, without taking it offline.
         Requested from inside the container&apos;s network, so the image needs
         no curl.
@@ -2766,19 +2772,23 @@ function HealthCard({
         <Field
           id="set-hretries"
           labelText="Attempts"
-          hint="0 turns both checks off."
+          hint={worker ? "1 to 10." : "0 turns both checks off."}
         >
           <input
             id="set-hretries"
             type="number"
-            min={0}
+            min={worker ? 1 : 0}
             max={10}
             className={cn(input, "font-mono")}
             value={form.health_check_retries}
             disabled={!canEdit}
-            onChange={(e) =>
-              set({ health_check_retries: parseInt(e.target.value) || 0 })
-            }
+            onChange={(e) => {
+              const n = parseInt(e.target.value) || 0;
+              set({
+                health_check_retries:
+                  worker && n < 1 ? form.health_check_retries : n,
+              });
+            }}
           />
         </Field>
         <Field
@@ -2829,7 +2839,9 @@ function HealthCard({
       <p className="text-[13px] text-fg/85">
         {(service.health_check_retries ?? 0) === 0 ? (
           <span className="text-muted">
-            Off: no check at deploys or while live.
+            {form.health_check_retries > 0
+              ? "Off until you save and deploy."
+              : "Off: no check at deploys or while live."}
           </span>
         ) : last ? (
           <>
@@ -2974,7 +2986,10 @@ export function WorkerCheckField({
   const pick = (k: typeof kind) =>
     set(
       k === "http"
-        ? { health_check_retries: saved.health_check_retries || 5 }
+        ? {
+            health_check_retries: saved.health_check_retries || 5,
+            container_health: saved.container_health,
+          }
         : {
             health_check_retries: 0,
             container_health: k === "none" ? "off" : k,
@@ -2986,21 +3001,20 @@ export function WorkerCheckField({
         <legend className={cn(label, "mb-1.5")}>Check</legend>
         <div
           role="radiogroup"
-          aria-label="Check"
           className="grid grid-cols-2 gap-0.5 self-start rounded-lg border border-subtle bg-ground p-0.5 sm:inline-flex"
         >
           {(
             [
+              ["image", "The image's"],
               ["command", "Command"],
               ["http", "HTTP"],
-              ["image", "The image's"],
               ["none", "None"],
             ] as const
           ).map(([v, l]) => (
             <label
               key={v}
               className={cn(
-                "inline-flex h-8 cursor-pointer items-center gap-2 rounded-md px-2.5 text-[13px] pointer-coarse:min-h-11",
+                "inline-flex h-8 cursor-pointer items-center gap-2 rounded-md px-2.5 text-[13px] pointer-coarse:min-h-11 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60",
                 kind === v ? "bg-raised text-fg" : "text-muted hover:text-fg",
               )}
             >
@@ -3017,6 +3031,11 @@ export function WorkerCheckField({
             </label>
           ))}
         </div>
+        {kind === "http" && form.port <= 0 && (
+          <p className={help}>
+            Needs the port {service.name} answers on: set it under Domains.
+          </p>
+        )}
         {kind !== "http" && (
           <p className={help}>
             {kind === "command"
@@ -3037,6 +3056,7 @@ export function WorkerCheckField({
           <input
             id="set-wcheck"
             className={cn(input, "font-mono")}
+            aria-invalid={!form.container_health_command.trim() || undefined}
             value={form.container_health_command}
             maxLength={1024}
             disabled={!canEdit}
@@ -3053,6 +3073,7 @@ export function WorkerCheckField({
           set={set}
           canEdit={canEdit}
           saved={saved}
+          worker
         />
       )}
     </div>
