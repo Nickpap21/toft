@@ -196,7 +196,7 @@ kmaj=${kernel%%.*} krest=${kernel#*.} kmin=${krest%%.*}
 openssl pkeyutl -help 2>&1 | grep -q -- -rawin ||
 	die "OpenSSL 3.0 or newer is needed to check the release's signature; found: $(openssl version 2>/dev/null || echo none)" "Install OpenSSL 3 (the openssl package), then run this again."
 case "$ID:${VERSION_ID:-0}" in
-ubuntu:2[2-9].* | ubuntu:[3-9]*.* | debian:1[2-9]* | rocky:9* | rocky:1[0-9]* | almalinux:9* | almalinux:1[0-9]*) note="" ;;
+ubuntu:2[2-9].* | ubuntu:[3-9]*.* | debian:1[2-9]*) note="" ;;
 *) note="(not tested here: best effort)" ;;
 esac
 detail "${PRETTY_NAME:-$ID} · $arch · systemd $(systemctl --version | sed -n '1s/[^0-9]*\([0-9]*\).*/\1/p') · cgroup v2 · kernel $kernel"

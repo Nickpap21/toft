@@ -18,7 +18,7 @@ provisioning refuses a server that misses one before it changes anything.
 
 | Requirement | |
 | --- | --- |
-| OS | 64-bit Linux. Tested on Ubuntu 22.04+, Debian 12+, Rocky Linux and AlmaLinux 9+ |
+| OS | 64-bit Linux. Tested on Ubuntu 22.04+ and Debian 12+. On Rocky Linux and AlmaLinux, provisioning skips ufw, fail2ban and automatic security updates, with a warning |
 | CPU | amd64 or arm64 |
 | Init and kernel | systemd, cgroup v2, kernel 5.10 or newer |
 | Docker | Docker Engine 29 or newer, or none: provisioning installs it |
