@@ -1,4 +1,4 @@
-package advisory
+package advisory // CI demo: one Go file changed. Never merged.
 
 // known is every advisory in moby/moby's GitHub repository as of
 // 2026-11-11, with the engine releases each affects written by hand from
