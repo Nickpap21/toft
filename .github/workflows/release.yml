@@ -11,11 +11,12 @@ on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   checks:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci.yml
 
   # The node agent (D-106): built by the Dockerfile's agent-bins stage and
@@ -24,6 +25,8 @@ jobs:
   # every upgrade against the public half they were built with
   # (backend/cmd/toft-agent/release.pub). No secret, no release.
   agent:
+    permissions:
+      contents: read
     needs: checks
     environment: release
     runs-on: ubuntu-24.04
@@ -31,6 +34,8 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: build both agents
         run: docker buildx build --target agent-bins --build-arg "TOFT_VERSION=$TAG" --output type=local,dest=dist ./backend
       # The linker ignores an -X path that names nothing: an agent that
@@ -86,6 +91,8 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: matrix.component == 'backend'
         with:
@@ -142,6 +149,8 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: the images' digests, signed
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -178,6 +187,8 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: agent

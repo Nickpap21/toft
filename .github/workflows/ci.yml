@@ -18,8 +18,7 @@ on:
   schedule:
     - cron: "41 4 * * *"
 
-permissions:
-  contents: read
+permissions: {}
 
 # A new push to a pull request cancels its older run. Everything else gets a
 # group of its own: GitHub drops a queued run that waits in a shared group,
@@ -34,6 +33,8 @@ jobs:
   # so does every push, schedule and release. DESIGN.md isn't on it: a test
   # reads it.
   changes:
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     outputs:
@@ -42,6 +43,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
         with:
+          persist-credentials: false
           fetch-depth: 2
       - id: diff
         env:
@@ -60,6 +62,8 @@ jobs:
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
 
   backend-test:
+    permissions:
+      contents: read
     needs: changes
     if: github.event_name != 'schedule' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
@@ -73,6 +77,8 @@ jobs:
       TOFT_TEST_DATABASE_URL: postgres://postgres:toft@127.0.0.1:55432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: backend/go.mod
@@ -93,6 +99,8 @@ jobs:
           grep -q -- '--- PASS: TestLocalNixpacksRunsInItsSandbox' sandbox.log
 
   backend-checks:
+    permissions:
+      contents: read
     needs: changes
     if: github.event_name != 'schedule' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
@@ -102,6 +110,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: backend/go.mod
@@ -150,6 +160,8 @@ jobs:
   # The frontend's checks, split across runners: lint and types, the unit
   # tests in two shards, the accessibility check in three (by page).
   frontend-checks:
+    permissions:
+      contents: read
     name: frontend-checks (${{ matrix.check }} ${{ matrix.shard }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -173,6 +185,8 @@ jobs:
       SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -225,6 +239,7 @@ jobs:
   # The required checks. A job skipped counts only when the pull request
   # changed nothing but documentation; failed or cancelled never does.
   backend:
+    permissions: {}
     needs: [changes, backend-test, backend-checks]
     if: always() && github.event_name != 'schedule'
     runs-on: ubuntu-24.04
@@ -243,6 +258,7 @@ jobs:
           done
 
   frontend:
+    permissions: {}
     needs: [changes, frontend-checks]
     if: always()
     runs-on: ubuntu-24.04
@@ -263,23 +279,30 @@ jobs:
   # Daily only: a new docker/dockerfile release fails this run, never a
   # push that has nothing to do with it.
   dockerfile-frontend:
+    permissions:
+      contents: read
     if: github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Dockerfile frontend (docker/dockerfile:1 newer than the pin in backend/internal/docker/buildkit.go fails)
         run: scripts/dockerfile-frontend.sh
 
   # Every commit of a pull request is signed off (DCO, CONTRIBUTING.md).
   # Dependabot signs its commits off too.
   dco:
+    permissions:
+      contents: read
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: every commit is signed off
         env:
