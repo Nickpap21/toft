@@ -794,9 +794,10 @@ CREATE TABLE IF NOT EXISTS deployment_logs (
 -- A key without a project acts with everything its user can do, in the
 -- user's active workspace. A key with a project is limited to that project
 -- and its scopes ("deploy", "variables"; internal/apikey/scope.go), and
--- with service_ids to those services of it (deploy and variables only; an
--- ID of a deleted service stays, so the key never widens). expires_at NULL
--- is a key that never expires (K4, K5; 0055).
+-- with service_ids to those services of it (deploy, variables and logs
+-- only; an ID of a deleted service stays, so the key never widens).
+-- expires_at NULL is a key that never expires (K4, K5; 0055). logs follows
+-- a service's live logs (0085, issue #11).
 CREATE TABLE IF NOT EXISTS api_keys (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -812,13 +813,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
     UNIQUE(user_id, name),
     CONSTRAINT api_keys_service_ids_check CHECK (
         cardinality(service_ids) = 0
-        OR (project_id IS NOT NULL AND scopes <@ ARRAY['deploy', 'variables']::TEXT[])
+        OR (project_id IS NOT NULL AND scopes <@ ARRAY['deploy', 'variables', 'logs']::TEXT[])
     ),
     CONSTRAINT api_keys_scope_check CHECK (
         (project_id IS NULL AND cardinality(scopes) = 0)
         OR (project_id IS NOT NULL AND cardinality(scopes) > 0
             AND scopes <@ ARRAY['deploy', 'variables', 'code_read', 'code_write', 'checks', 'issues_read', 'issues_write',
-                                'docs_read', 'docs_write']::TEXT[])
+                                'docs_read', 'docs_write', 'logs']::TEXT[])
     )
 );
 

@@ -66,7 +66,7 @@ func (s *Service) Create(ctx context.Context, userID string, input CreateInput) 
 }
 
 // keyServices checks a key's service_ids: none, or each once a service of
-// its project, with only the deploy and variables scopes. It returns them
+// its project, with only the deploy, variables and logs scopes. It returns them
 // named.
 func (s *Service) keyServices(ctx context.Context, input CreateInput) ([]KeyService, error) {
 	if len(input.ServiceIDs) == 0 {
@@ -76,7 +76,7 @@ func (s *Service) keyServices(ctx context.Context, input CreateInput) ([]KeyServ
 		return nil, ErrInvalidServices
 	}
 	for _, sc := range input.Scopes {
-		if sc != ScopeDeploy && sc != ScopeVariables {
+		if sc != ScopeDeploy && sc != ScopeVariables && sc != ScopeLogs {
 			return nil, ErrInvalidServices
 		}
 	}

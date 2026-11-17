@@ -80,6 +80,7 @@ const section = cn(card, "focus:outline-none");
 const CAN: Record<APIKeyScope, string> = {
   deploy: "deploy",
   variables: "change variables",
+  logs: "read live logs",
   code_read: "read code",
   code_write: "push code",
   checks: "report checks",

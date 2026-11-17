@@ -215,7 +215,8 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	}
 
 	// Every service of the workspace, for the sidebar and the command palette.
-	// Not in a project-scoped API key's routes, so those keys get 403.
+	// A project key with deploy or logs gets its own project's services (only those
+	// it names, if it names any), narrowed in the handler (issue #11).
 	r.GET("/workspace/services", h.handleListWorkspace)
 	r.GET("/observability/logs", h.handleLogDrivers)
 
@@ -1356,6 +1357,14 @@ func (h *Handler) handleListWorkspace(c *gin.Context) {
 	// the workspace's (D-100), whether through MCP or REST.
 	if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
 		services = slices.DeleteFunc(services, func(s WorkspaceService) bool { return !slices.Contains(a.ProjectIDs, s.ProjectID) })
+	}
+	// A project key, its project's services, or those it is limited to (K5;
+	// issue #11).
+	if keyProject, _, ok := middleware.APIKeyScopeFrom(c); ok {
+		limited := middleware.APIKeyServicesFrom(c)
+		services = slices.DeleteFunc(services, func(s WorkspaceService) bool {
+			return s.ProjectID != keyProject || len(limited) > 0 && !slices.Contains(limited, s.ID)
+		})
 	}
 	respond.JSON(c, http.StatusOK, services)
 }

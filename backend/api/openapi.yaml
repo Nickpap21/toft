@@ -24,8 +24,11 @@ info:
       code (`code_read`, or `code_write`, which includes it), issues
       (`issues_read`, or `issues_write`, which includes it) and docs
       (`docs_read`, or `docs_write`, which includes it). A project key may
-      also name some of the project's services: it then deploys and sets
-      variables on those services only. A key past its `expires_at` gets
+      also name some of the project's services: it then deploys, sets
+      variables and follows live logs on those services only. With `deploy`
+      or `logs`, it also lists its project and that project's services
+      (those it names, if any); `logs` follows their live logs, and is
+      never part of `deploy`. A key past its `expires_at` gets
       `401 api_key_expired`.
       Keys can't do what needs a password.
 
@@ -7314,6 +7317,7 @@ paths:
       tags: [Projects]
       operationId: getProjects
       summary: The workspace's projects
+      description: "Every member. A project key with deploy or logs gets its own project alone; an agent, the projects its connection reaches."
       responses:
         "200":
           content:
@@ -9044,7 +9048,7 @@ paths:
           $ref: '#/components/responses/Problem'
         default:
           $ref: '#/components/responses/Problem'
-      description: 'Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can''t be connected to; any other names no cause.'
+      description: 'Every member, and a project key with logs that reaches the service (403 insufficient_scope without it: deploy doesn''t include it); agents can''t (following live logs isn''t an agent policy action yet). Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can''t be connected to; any other names no cause.'
       parameters:
         - description: Lines of history first, 100 by default.
           in: query
@@ -9748,7 +9752,7 @@ paths:
           $ref: '#/components/responses/Problem'
         default:
           $ref: '#/components/responses/Problem'
-      description: 'Needs a signed-in session: an API key or an agent gets 403 session_required, so a key never mints another. project_id with scopes (deploy, variables, code_read, code_write, checks, issues_read, issues_write, docs_read, docs_write) makes a project-scoped key; neither makes a full-access key. Viewers cannot create project keys; a project outside the workspace is 404. service_ids limits a project key to some of its services (deploy and variables only; 400 invalid_scope otherwise, and for a service outside the project). expires_at: omitted is 90 days from now, null is never, a time not in the future is 400 invalid_expiry.'
+      description: 'Needs a signed-in session: an API key or an agent gets 403 session_required, so a key never mints another. project_id with scopes (deploy, variables, code_read, code_write, checks, issues_read, issues_write, docs_read, docs_write, logs) makes a project-scoped key; neither makes a full-access key. Viewers cannot create project keys; a project outside the workspace is 404. service_ids limits a project key to some of its services (deploy, variables and logs only; 400 invalid_scope otherwise, and for a service outside the project). expires_at: omitted is 90 days from now, null is never, a time not in the future is 400 invalid_expiry.'
       requestBody:
         content:
           application/json:
@@ -9781,6 +9785,7 @@ paths:
       tags: [Services]
       operationId: getWorkspaceServices
       summary: Every service in the workspace, with its project, environment and state
+      description: "Every member. A project key with deploy or logs gets its project's services alone (those it names, if it names some); an agent, those of the projects its connection reaches."
       responses:
         "200":
           content:
@@ -17462,10 +17467,10 @@ components:
         scopes:
           items:
             type: string
-            enum: [deploy, variables, code_read, code_write, checks, issues_read, issues_write, docs_read, docs_write]
+            enum: [deploy, variables, code_read, code_write, checks, issues_read, issues_write, docs_read, docs_write, logs]
           type: array
         service_ids:
-          description: Limits a project key to these services of its project (at least one, no repeats). Its scopes may then be only deploy and variables.
+          description: Limits a project key to these services of its project (at least one, no repeats). Its scopes may then be only deploy, variables and logs.
           items:
             type: string
           type: array

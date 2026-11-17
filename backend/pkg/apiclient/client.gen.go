@@ -169,6 +169,7 @@ const (
 	DocsWrite   ApikeyCreateInputScopes = "docs_write"
 	IssuesRead  ApikeyCreateInputScopes = "issues_read"
 	IssuesWrite ApikeyCreateInputScopes = "issues_write"
+	Logs        ApikeyCreateInputScopes = "logs"
 	Variables   ApikeyCreateInputScopes = "variables"
 )
 
@@ -1935,7 +1936,7 @@ type ApikeyCreateInput struct {
 	ProjectId *string                    `json:"project_id,omitempty"`
 	Scopes    *[]ApikeyCreateInputScopes `json:"scopes,omitempty"`
 
-	// ServiceIds Limits a project key to these services of its project (at least one, no repeats). Its scopes may then be only deploy and variables.
+	// ServiceIds Limits a project key to these services of its project (at least one, no repeats). Its scopes may then be only deploy, variables and logs.
 	ServiceIds *[]string `json:"service_ids,omitempty"`
 }
 

@@ -71,6 +71,10 @@ func (h *Handler) list(c *gin.Context) {
 	if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
 		projects = slices.DeleteFunc(projects, func(p Project) bool { return !slices.Contains(a.ProjectIDs, p.ID) })
 	}
+	// A project key, its own project alone (issue #11).
+	if keyProject, _, ok := middleware.APIKeyScopeFrom(c); ok {
+		projects = slices.DeleteFunc(projects, func(p Project) bool { return p.ID != keyProject })
+	}
 	respond.JSON(c, http.StatusOK, projects)
 }
 

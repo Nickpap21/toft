@@ -156,6 +156,26 @@ func TestProjectListNarrowsToTheAgentsProjects(t *testing.T) {
 	assert.NotContains(t, got, "p-b")
 }
 
+// A project key lists its own project alone (issue #11: the CLI resolves
+// names with it).
+func TestProjectListNarrowsToTheKeysProject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	g := r.Group("")
+	g.Use(func(c *gin.Context) {
+		c.Set("orgID", "org-1")
+		c.Set("apiKeyProject", "p-a")
+		c.Set("apiKeyScopes", []string{"deploy"})
+		c.Next()
+	})
+	project.NewHandler(project.NewService(&listRepo{}), &fakeAudit{}, zap.NewNop()).RegisterRoutes(g)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/projects", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "p-a")
+	assert.NotContains(t, w.Body.String(), "p-b")
+}
+
 type fakeInline struct{ got []string }
 
 func (f *fakeInline) CreateProjectWithService(c *gin.Context, in project.CreateProjectInput, raw json.RawMessage) {

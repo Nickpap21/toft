@@ -3,8 +3,9 @@ import { fetchAPI, fetchPage, type Page } from "./client";
 
 export type APIKey = components["schemas"]["APIKey"];
 
-/** deploy: deploy, follow and roll back the project's services.
+/** deploy: deploy the project's services, follow their deploys and roll back.
  *  variables: their env vars and secrets, and their environments'.
+ *  logs: follow the services' live logs (never part of deploy).
  *  code_read, code_write: clone the project's repository; push too (D-71). */
 export type APIKeyScope = NonNullable<components["schemas"]["ApikeyCreateInput"]["scopes"]>[number];
 

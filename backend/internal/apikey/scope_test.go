@@ -50,10 +50,12 @@ func scopedRouter() *gin.Engine {
 		"paas_read":   {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeCodeRead}},
 		"paas_write":  {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeCodeWrite}},
 		"paas_checks": {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeChecks}},
+		"paas_logs":   {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeLogs}},
 		"paas_full":   {UserID: "u-1"},
 		// K5: limited to svc-a; and to a service since deleted.
-		"paas_svc":  {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeDeploy, ScopeVariables}, ServiceIDs: []string{"svc-a"}},
-		"paas_gone": {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeDeploy, ScopeVariables}, ServiceIDs: []string{"svc-deleted"}},
+		"paas_svc":      {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeDeploy, ScopeVariables}, ServiceIDs: []string{"svc-a"}},
+		"paas_gone":     {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeDeploy, ScopeVariables}, ServiceIDs: []string{"svc-deleted"}},
+		"paas_svc_logs": {UserID: "u-1", ProjectID: "p-1", OrgID: "org-1", Scopes: []string{ScopeLogs}, ServiceIDs: []string{"svc-a"}},
 	}
 	r := gin.New()
 	v1 := r.Group("/api/v1")
@@ -66,7 +68,6 @@ func scopedRouter() *gin.Engine {
 	}
 	// Routes no scoped key may call.
 	v1.GET("/servers", ok)
-	v1.GET("/workspace/services", ok)
 	v1.DELETE("/projects/:projectID", ok)
 	v1.PUT("/services/:serviceID", ok)
 	v1.POST("/services/:serviceID/exec", ok)
@@ -105,7 +106,21 @@ func TestScopedKeys(t *testing.T) {
 		{"paas_deploy", "PUT", "/api/v1/services/svc-a", 403},                   // not listed
 		{"paas_deploy", "POST", "/api/v1/services/svc-a/exec", 403},
 		{"paas_deploy", "GET", "/api/v1/servers", 403},
-		{"paas_deploy", "GET", "/api/v1/workspace/services", 403}, // the whole workspace
+		// the CLI's names (issue #11): the lists pass for deploy and logs,
+		// and their handlers narrow them to the key's project; toft logs
+		// needs logs, which a deploy key from before doesn't gain
+		{"paas_deploy", "GET", "/api/v1/projects", 200},
+		{"paas_deploy", "GET", "/api/v1/workspace/services", 200},
+		{"paas_deploy", "GET", "/api/v1/services/svc-a/logs/live", 403}, // lacks logs
+		{"paas_logs", "GET", "/api/v1/projects", 200},
+		{"paas_logs", "GET", "/api/v1/workspace/services", 200},
+		{"paas_logs", "GET", "/api/v1/services/svc-a/logs/live", 200},
+		{"paas_logs", "GET", "/api/v1/services/svc-b/logs/live", 403},      // another project
+		{"paas_logs", "GET", "/api/v1/services/svc-shared/logs/live", 403}, // workspace-shared
+		{"paas_logs", "POST", "/api/v1/services/svc-a/deployments", 403},   // lacks deploy
+		{"paas_logs", "GET", "/api/v1/services/svc-a/deployments/d-1/logs/stream", 403},
+		{"paas_vars", "GET", "/api/v1/workspace/services", 403}, // lacks deploy and logs
+		{"paas_read", "GET", "/api/v1/projects", 403},
 		{"paas_deploy", "DELETE", "/api/v1/projects/p-1", 403},
 		// variables: services and environments of its project
 		{"paas_vars", "PUT", "/api/v1/services/svc-a/env-vars", 200},
@@ -156,7 +171,13 @@ func TestScopedKeys(t *testing.T) {
 		{"paas_svc", "POST", "/api/v1/projects/p-1/repositories/r-1/pulls/3/preview", 403}, // a preview
 		{"paas_svc", "POST", "/api/v1/services/svc-b/deployments", 403},                    // another project
 		{"paas_svc", "PUT", "/api/v1/services/svc-a", 403},                                 // not listed
-		{"paas_gone", "POST", "/api/v1/services/svc-a/deployments", 403},                   // its services were deleted
+		{"paas_svc", "GET", "/api/v1/projects", 200},                                       // narrowed by the handler
+		{"paas_svc", "GET", "/api/v1/workspace/services", 200},                             // narrowed by the handler
+		{"paas_svc", "GET", "/api/v1/services/svc-a/logs/live", 403},                       // lacks logs
+		{"paas_svc_logs", "GET", "/api/v1/services/svc-a/logs/live", 200},
+		{"paas_svc_logs", "GET", "/api/v1/services/svc-a2/logs/live", 403}, // another service of its project
+		{"paas_svc_logs", "GET", "/api/v1/workspace/services", 200},
+		{"paas_gone", "POST", "/api/v1/services/svc-a/deployments", 403}, // its services were deleted
 		{"paas_gone", "GET", "/api/v1/services/svc-deleted", 403},
 		// full-access keys are unchanged
 		{"paas_full", "GET", "/api/v1/servers", 200},
@@ -194,14 +215,17 @@ func TestScopedKeyRefusalsCarryACode(t *testing.T) {
 }
 
 // Every listed route names the service, environment or project
-// EnforceScopes checks against the key's project. A route without one would
-// skip that check.
+// EnforceScopes checks against the key's project, or is one of keyLists,
+// whose handlers narrow them to it. A route with neither would skip that
+// check.
 func TestEveryScopedRouteNamesItsOwner(t *testing.T) {
 	for route := range routeScopes {
 		_, path, _ := strings.Cut(route, " ")
 		assert.True(t, strings.Contains(route, "/:serviceID") || strings.Contains(route, "/:environmentID") ||
-			strings.HasPrefix(path, "/api/v1/projects/:projectID/"), route)
+			strings.HasPrefix(path, "/api/v1/projects/:projectID/") || keyLists[route], route)
 	}
+	assert.Equal(t, map[string]bool{"GET /api/v1/projects": true, "GET /api/v1/workspace/services": true}, keyLists,
+		"a new list here needs its handler to narrow it to the key's project")
 }
 
 func TestValidateScope(t *testing.T) {

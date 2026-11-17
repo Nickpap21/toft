@@ -85,3 +85,40 @@ func TestListWorkspaceServicesNarrowsToTheAgentsProjects(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), `"s2"`)
 	assert.NotContains(t, w.Body.String(), `"s3"`)
 }
+
+// A project key lists its project's services alone (issue #11: the CLI
+// resolves names with it), and a key limited to services (K5) those alone.
+func TestListWorkspaceServicesNarrowsToTheKeysProject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &workspaceRepo{byOrg: map[string][]WorkspaceService{"org-a": {
+		{ID: "s1", ProjectID: "p1"}, {ID: "s4", ProjectID: "p1"}, {ID: "s2", ProjectID: "p2"}, {ID: "s3", Scope: ScopeOrg},
+	}}}
+	list := func(services []string) string {
+		h := NewHandler(NewServiceManager(repo, zap.NewNop()), nil, nil, nil, nil, zap.NewNop())
+		r := gin.New()
+		g := r.Group("/api/v1")
+		g.Use(func(c *gin.Context) {
+			c.Set("orgID", "org-a")
+			c.Set("memberRole", "developer")
+			c.Set("apiKeyProject", "p1")
+			c.Set("apiKeyScopes", []string{"deploy"})
+			if services != nil {
+				c.Set("apiKeyServices", services)
+			}
+			c.Next()
+		})
+		h.RegisterRoutes(g)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/workspace/services", nil))
+		assert.Equal(t, http.StatusOK, w.Code)
+		return w.Body.String()
+	}
+	got := list(nil)
+	assert.Contains(t, got, `"s1"`)
+	assert.Contains(t, got, `"s4"`)
+	assert.NotContains(t, got, `"s2"`)
+	assert.NotContains(t, got, `"s3"`)
+	got = list([]string{"s4"})
+	assert.Contains(t, got, `"s4"`)
+	assert.NotContains(t, got, `"s1"`)
+}
