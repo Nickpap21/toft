@@ -527,3 +527,40 @@ func TestApprovalRunsTheCommitShown(t *testing.T) {
 		})
 	}
 }
+
+// A repeated deploy attaches to its approved run only while the deployment
+// that run started is in flight; once it is over, the same call is a new
+// request, not the old result again (FindOpenAgentApproval's rule).
+func TestRepeatedDeployAfterItsRunIsANewRequest(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, _ := setup(t)
+	repo.Services["s-prod"] = &agent.ServiceInfo{ID: "s-prod", Class: agent.ClassProtected, Label: "web in production"}
+	conn, _ := repo.CreateConnection(ctx, agent.NewConnection{Code: agent.Code{OrgID: "org1", UserID: "dev", AllProjects: true, Scopes: []string{"read", "deploy"}}, Name: "Claude Code"})
+	actx := actor.WithIntent(actor.WithAgent(ctx, actor.Agent{ConnectionID: conn, OrgID: "org1", UserID: "dev"}),
+		actor.Intent{Tool: "deploy", Reason: "fixes it", Method: "POST", Path: "/api/v1/services/s-prod/deployments"})
+	var ge *actor.GateError
+	if err := svc.Check(actx, dep("s-prod")); !errors.As(err, &ge) || ge.Code != "approval_pending" {
+		t.Fatalf("Ask: %v", err)
+	}
+	id := ge.ApprovalID
+	if _, err := svc.Decide(ctx, "org1", "owner", "owner", id, true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	svc.WaitRuns()
+	// The run's own call through the gate, which claims it, and the
+	// deployment it started.
+	if err := svc.Check(actor.WithGrant(actx, id), dep("s-prod")); err != nil {
+		t.Fatalf("the approved run: %v", err)
+	}
+	if err := repo.SetResult(ctx, id, agent.Result{Status: 202}, "dep-1"); err != nil {
+		t.Fatal(err)
+	}
+	repo.DeploymentStatus["dep-1"] = "building"
+	if err := svc.Check(actx, dep("s-prod")); !errors.As(err, &ge) || ge.ApprovalID != id {
+		t.Fatalf("while it builds, the same call should attach to %s: %v", id, err)
+	}
+	repo.DeploymentStatus["dep-1"] = "success"
+	if err := svc.Check(actx, dep("s-prod")); !errors.As(err, &ge) || ge.Code != "approval_pending" || ge.ApprovalID == id {
+		t.Fatalf("after it ran, the same call returned the old run: %v", err)
+	}
+}

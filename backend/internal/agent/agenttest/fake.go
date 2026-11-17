@@ -61,7 +61,10 @@ type Repo struct {
 	Rollbacks map[string][2]string
 	// Deployments are the deployments approved runs started, by approval.
 	Deployments map[string]string
-	Released    []string
+	// DeploymentStatus is a deployment's status, by id, as a test sets it;
+	// FindOpenApproval reads it as the database's join does.
+	DeploymentStatus map[string]string
+	Released         []string
 }
 
 func New() *Repo {
@@ -69,7 +72,7 @@ func New() *Repo {
 		tokens: map[string]*token{}, policy: map[string]map[string]map[string]string{}, approvals: map[string]*approval{},
 		orgPaused: map[string]*agent.PauseState{}, Services: map[string]*agent.ServiceInfo{}, OrgProjects: map[string][]string{},
 		Envs: map[string]*agent.ServiceInfo{}, Projects: map[string]Project{}, projPolicy: map[string]map[string]map[string]string{},
-		Rollbacks: map[string][2]string{}, Deployments: map[string]string{}}
+		Rollbacks: map[string][2]string{}, Deployments: map[string]string{}, DeploymentStatus: map[string]string{}}
 }
 
 func (r *Repo) GetClient(_ context.Context, clientID string) (*agent.Client, error) {
@@ -373,8 +376,19 @@ func (r *Repo) FindOpenApproval(_ context.Context, connectionID, hash string) (s
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, a := range r.approvals {
-		if a.ConnectionID == connectionID && a.reqHash == hash && time.Now().Before(a.ExpiresAt) &&
-			(a.State == "waiting" || (a.State == "approved" && a.ExecutedAt != nil)) {
+		if a.ConnectionID != connectionID || a.reqHash != hash || !time.Now().Before(a.ExpiresAt) {
+			continue
+		}
+		// FindOpenAgentApproval's rule: a deploy's run re-attaches only while
+		// it has no result yet or its deployment is in flight.
+		switch r.DeploymentStatus[r.Deployments[a.ID]] {
+		case "pending", "queued", "building":
+		default:
+			if a.State == "approved" && a.Tool == "deploy" && a.Result != nil {
+				continue
+			}
+		}
+		if a.State == "waiting" || (a.State == "approved" && a.ExecutedAt != nil) {
 			return a.ID, nil
 		}
 	}
