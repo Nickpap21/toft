@@ -38,6 +38,7 @@ type mockRepo struct {
 	createdID     string
 	statusHistory []deployment.Status
 	logMessages   []string
+	errMsgs       []string // UpdateStatus's errMsg, in order
 	createErr     error
 	updateErr     error
 	imageTags     []string // UpdateStatus's imageTag, in order
@@ -134,9 +135,10 @@ func (m *mockRepo) Create(_ context.Context, _, _, _ string, _ int64) (*deployme
 	return &deployment.Deployment{ID: m.createdID, Status: deployment.StatusPending}, nil
 }
 
-func (m *mockRepo) UpdateStatus(_ context.Context, _ string, status deployment.Status, imageTag, commitSHA, _ string) (*deployment.Deployment, error) {
+func (m *mockRepo) UpdateStatus(_ context.Context, _ string, status deployment.Status, imageTag, commitSHA, errMsg string) (*deployment.Deployment, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.errMsgs = append(m.errMsgs, errMsg)
 	m.statusHistory = append(m.statusHistory, status)
 	m.imageTags = append(m.imageTags, imageTag)
 	m.commitSHAs = append(m.commitSHAs, commitSHA)
@@ -967,6 +969,27 @@ func TestPipeline_ComposeRepoViolationFailsAfterClone(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the deploy log names the field: %v", repo.logMessages)
+}
+
+// A failed clone's error message says git's reason, not only the exit status.
+func TestPipeline_ComposeCloneFailureNamesGitsReason(t *testing.T) {
+	src := infraRepo(t, map[string]string{"docker-compose.yml": "services:\n  a:\n    image: x\n"})
+	repo := &mockRepo{createdID: "dep-clone-fail"}
+	svc := newTestService(repo, &mockFactory{orch: &composeTrackingOrchestrator{}}, &mockStatusUpdater{})
+	_, err := svc.Trigger(context.Background(), deployment.TriggerInput{
+		ServiceID:      "svc-1",
+		ServiceName:    "infra",
+		SourceType:     "docker-compose",
+		ComposeRepoURL: src,
+		GitBranch:      "no-such-branch",
+	})
+	require.NoError(t, err)
+	waitForStatus(t, repo, deployment.StatusFailed, 5*time.Second)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.NotEmpty(t, repo.errMsgs)
+	assert.Contains(t, repo.errMsgs[len(repo.errMsgs)-1], "Remote branch no-such-branch not found")
 }
 
 // A deploy from a compose repository records the commit it checked out, so

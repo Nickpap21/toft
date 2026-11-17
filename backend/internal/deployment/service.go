@@ -2458,7 +2458,7 @@ func (s *Service) runComposePipeline(ctx context.Context, deploymentID string, i
 				}
 			}
 			if err != nil {
-				msg := fmt.Sprintf("✗ git clone failed: %v", err)
+				msg := "✗ " + gitcred.Failure("git clone failed", out, err).Error()
 				appendLog(msg)
 				s.failAndPublish(ctx, deploymentID, input, imageTag, msg)
 				return
