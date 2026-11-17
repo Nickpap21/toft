@@ -63,6 +63,9 @@ networks:
     external: true
 volumes:
   data: {}
+  scratch:
+    driver: local
+    driver_opts: {type: tmpfs, device: tmpfs, o: "size=64m"}
 `, nil)
 	assert.Empty(t, vs)
 }
@@ -102,6 +105,15 @@ func TestValidate_OneCasePerRule(t *testing.T) {
 		{"home bind mount", "volumes: [\"~/.ssh:/root/.ssh\"]", "", composespec.RuleHostBindMount, "services.app.volumes[0]"},
 		{"relative escape", "volumes: [\"../../etc:/x\"]", "", composespec.RuleHostBindMount, "services.app.volumes[0]"},
 		{"volume driver bind", "volumes: [\"hostroot:/host\"]", "volumes:\n  hostroot:\n    driver: local\n    driver_opts: {type: none, o: bind, device: /}", composespec.RuleHostBindMount, "volumes.hostroot.driver_opts.device"},
+		{"volume driver host disk", "volumes: [\"disk:/host\"]", "volumes:\n  disk:\n    driver: local\n    driver_opts: {type: ext4, device: /dev/vda1}", composespec.RuleHostBindMount, "volumes.disk.driver_opts.type"},
+		{"volume driver overlay", "volumes: [\"ov:/host\"]", "volumes:\n  ov:\n    driver_opts: {type: overlay, device: overlay, o: \"lowerdir=/etc,upperdir=/tmp/u,workdir=/tmp/w\"}", composespec.RuleHostBindMount, "volumes.ov.driver_opts.type"},
+		// "bind" inside a path is no bind option: the type still decides.
+		{"volume driver overlay, bind in a path", "volumes: [\"ov:/host\"]", "volumes:\n  ov:\n    driver_opts: {type: overlay, device: " + inlineRoot + "/ov, o: \"lowerdir=/etc:/srv/bindl\"}", composespec.RuleHostBindMount, "volumes.ov.driver_opts.type"},
+		{"volume driver nfs as a bind", "volumes: [\"n:/host\"]", "volumes:\n  n:\n    driver_opts: {type: nfs, device: /etc, o: \"rw,rbind\"}", composespec.RuleHostBindMount, "volumes.n.driver_opts.device"},
+		{"volume nfs share", "volumes: [\"share:/data\"]", "volumes:\n  share:\n    driver_opts: {type: nfs, o: \"addr=10.0.0.5,rw\", device: \":/exports/data\"}", composespec.RuleVolumeDriver, "volumes.share.driver_opts.type"},
+		{"volume cifs share", "volumes: [\"share:/data\"]", "volumes:\n  share:\n    driver: local\n    driver_opts: {type: cifs, o: \"addr=10.0.0.5\", device: \"//10.0.0.5/data\"}", composespec.RuleVolumeDriver, "volumes.share.driver_opts.type"},
+		{"volume nfs as a bind is also a share", "volumes: [\"n:/host\"]", "volumes:\n  n:\n    driver_opts: {type: nfs, device: /etc, o: \"rw,rbind\"}", composespec.RuleVolumeDriver, "volumes.n.driver_opts.type"},
+		{"volume plugin", "volumes: [\"p:/data\"]", "volumes:\n  p:\n    driver: rexray/ebs", composespec.RuleVolumeDriver, "volumes.p.driver"},
 		{"external volume", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    external: true\n    name: paas-postgres-data", composespec.RuleExternalVolume, "volumes.pg.external"},
 		{"volume explicit name", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    name: control-panel-paas_postgres_data", composespec.RuleExternalVolume, "volumes.pg.name"},
 		{"secret file outside", "secrets: [creds]", "secrets:\n  creds:\n    file: /etc/shadow", composespec.RuleHostBindMount, "secrets.creds.file"},
@@ -144,6 +156,19 @@ func TestValidate_OneCasePerRule(t *testing.T) {
 			assert.True(t, found, "want %s at %s, got %+v", tc.want, tc.field, vs)
 		})
 	}
+}
+
+// An exception for a share is pinned to the whole share: another address,
+// export or option is another value, which an operator grants again.
+func TestValidate_VolumeDriverValueIsTheWholeSource(t *testing.T) {
+	vs := validateInline(t, "services:\n  app:\n    image: alpine\n    volumes: [\"share:/data\"]\nvolumes:\n  share:\n    driver_opts: {type: nfs, o: \"addr=10.0.0.5,rw\", device: \":/exports/data\"}\n", nil)
+	require.Len(t, vs, 1)
+	assert.Equal(t, `local {"device":":/exports/data","o":"addr=10.0.0.5,rw","type":"nfs"}`, vs[0].Value)
+
+	// The same for a host disk: an exception for /dev/sdb1 doesn't cover /dev/vda1.
+	vs = validateInline(t, "services:\n  app:\n    image: alpine\n    volumes: [\"disk:/data\"]\nvolumes:\n  disk:\n    driver_opts: {type: ext4, device: /dev/sdb1}\n", nil)
+	require.Len(t, vs, 1)
+	assert.Equal(t, `local {"device":"/dev/sdb1","type":"ext4"}`, vs[0].Value)
 }
 
 func TestValidate_PrivilegedFalseIsFine(t *testing.T) {

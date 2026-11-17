@@ -402,6 +402,18 @@ func (c *checker) build(service, field string, b *types.BuildConfig) {
 	c.labels(service, field+".labels", b.Labels)
 }
 
+// networkVolumeTypes are the local driver's network share types. The host
+// mounts the share, as root and from its own network: an operator grants
+// each one (volume_driver). tmpfs is the only other type a stack may name
+// freely; any other mounts a device or directories of the host itself.
+var networkVolumeTypes = map[string]bool{"nfs": true, "nfs4": true, "cifs": true, "smb3": true}
+
+// volumeSource is what a volume mounts, which an exception pins: its driver
+// and every driver option, as JSON so no option's text reads as another's.
+func volumeSource(v types.VolumeConfig) string {
+	return firstNonEmpty(v.Driver, "local") + " " + asJSON(v.DriverOpts)
+}
+
 func (c *checker) volumes() {
 	for _, name := range sortedKeys(c.project.Volumes) {
 		v := c.project.Volumes[name]
@@ -418,12 +430,31 @@ func (c *checker) volumes() {
 			device := v.DriverOpts["device"]
 			o := strings.ToLower(v.DriverOpts["o"])
 			typ := strings.ToLower(v.DriverOpts["type"])
-			if device != "" && (strings.Contains(o, "bind") || typ == "none" || typ == "") {
+			switch {
+			case typ != "" && typ != "none" && typ != "tmpfs" && !networkVolumeTypes[typ]:
+				// The local driver mounts device as this filesystem type on
+				// the host, as root: a host disk (ext4, xfs, btrfs...) or an
+				// overlay of host directories, which a container then reads
+				// and writes like any volume. Whatever o holds: "bind" in it
+				// may be part of a path, which is no bind option to Docker.
+				// The value is the whole source: an exception for one disk
+				// must not cover another.
+				c.addValue(RuleHostBindMount, "", field+".driver_opts.type", volumeSource(v), "volume type %q can mount a host disk or host directories; a volume's type may be tmpfs, or nfs or cifs with an operator's exception", v.DriverOpts["type"])
+			case device != "" && (strings.Contains(o, "bind") || typ == "none" || typ == ""):
 				if !c.inside(device) {
 					rule := hostMountRule(device)
 					c.addValue(rule, "", field+".driver_opts.device", device, "a volume backed by host path %s is a bind mount", device)
 				}
 			}
+			// Beside the bind check, not instead of it: an exception for the
+			// share must not also cover "o: bind" of a host path.
+			if networkVolumeTypes[typ] {
+				c.addValue(RuleVolumeDriver, "", field+".driver_opts.type", volumeSource(v), "volume type %q mounts a network share on the server's host, from the server's network", v.DriverOpts["type"])
+			}
+		} else {
+			// A volume plugin runs on the host with the engine's trust: what
+			// it mounts, and from where, is the plugin's to decide.
+			c.addValue(RuleVolumeDriver, "", field+".driver", volumeSource(v), "volume driver %q is a plugin that runs on the server's host", v.Driver)
 		}
 		for _, key := range sortedKeys(v.Labels) {
 			if IsReservedLabel(key) {

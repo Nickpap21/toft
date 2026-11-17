@@ -8,9 +8,37 @@ published" was tagged, but its release run failed before publishing anything.
 
 ## 1.1.1 (2026-11-17)
 
-Dependencies at the versions that fix published advisories. Toft's own
-code reached none of them. No migration: a failed upgrade starts 1.1.0
-again without restoring the database. Upgrade from 1.1.0.
+A deploy policy fix: a compose volume could mount the server's own disk.
+And dependencies at the versions that fix published advisories, which
+Toft's own code reached none of. No migration: a failed upgrade starts
+1.1.0 again without restoring the database. Upgrade from 1.1.0.
+
+### Security
+
+- **A compose volume can't mount a host disk or host directories**
+  (High). The local volume driver mounts a volume's `driver_opts.device`
+  on the server, as root, with whatever filesystem type the stack names.
+  The policy refused only bind-style options, so a workspace developer
+  could deploy a volume of `type: ext4` over the server's disk, or an
+  `overlay` of its directories, and read and write the server's files.
+  A volume of any type but `tmpfs` and the network shares below is now
+  `host_bind_mount`, and an exception for one is pinned to the volume's
+  device and options. Reported in pull request #24.
+- **Network share volumes and volume plugins need an operator's
+  exception** (new rule `volume_driver`). The server mounts an `nfs` or
+  `cifs` share itself, from its own network, and a volume plugin runs on
+  the server. An exception is pinned to the share's driver and every
+  option, its address among them.
+
+### Breaking
+
+- **Before upgrading:** a compose stack with an `nfs`, `cifs` or plugin
+  volume is refused at its next deploy until an instance operator grants
+  it `volume_driver` (Settings → Deploy policy). One with a volume of any
+  other type but `tmpfs` (ext4, xfs, overlay…) is refused as
+  `host_bind_mount`. Running containers are not touched.
+
+### Dependencies
 
 - **Next.js 16.4.5 in the panel** (CVE-2026-119790: a cached function
   called through `unstable_cache()` could give one route's root
