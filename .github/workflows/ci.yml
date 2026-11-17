@@ -1,5 +1,10 @@
 # The gate (private/plans/2026-10-15-security-performance-audit.md,
 # Plan S3): cheapest first, every step on every push and pull request.
+#
+# The master ruleset requires backend, frontend and dco. backend and frontend
+# are summaries of the jobs that do the work, which run side by side; a
+# summary always reports, and fails unless every job under it passed (or was
+# skipped because a pull request changed only documentation).
 name: ci
 
 on:
@@ -16,10 +21,49 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older run. Everything else gets a
+# group of its own: GitHub drops a queued run that waits in a shared group,
+# and a master commit or a release must never go unchecked.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  backend:
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+  # A pull request that changes only documentation skips the checks below;
+  # docs.yml builds the site. Anything not on this list runs everything, and
+  # so does every push, schedule and release. DESIGN.md isn't on it: a test
+  # reads it.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          code=true
+          # A pull request's checkout is its merge commit: the first parent
+          # is the base, so the diff is exactly what the pull request changes.
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only HEAD^1 HEAD)
+            echo "$files"
+            if [ -n "$files" ] && ! echo "$files" | grep -vqE '^(docs/|\.github/ISSUE_TEMPLATE/|\.github/pull_request_template\.md$|(README|CHANGELOG|CONTRIBUTING|ROADMAP|CODE_OF_CONDUCT|SECURITY|SUPPORT)\.md$)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  backend-test:
+    needs: changes
+    if: github.event_name != 'schedule' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
     defaults:
       run:
         working-directory: backend
@@ -33,14 +77,6 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-      - name: pinned images (install.sh pulls no floating tag)
-        run: ../scripts/check-pinned-images-test.sh
-      - name: truncation-safe installers (a cut-off curl | sh runs nothing)
-        run: ../scripts/check-truncation-safe-test.sh
-      - name: gofmt
-        run: test -z "$(gofmt -l ./cmd ./internal ./pkg)"
-      - name: vet
-        run: go vet ./...
       - name: start the test database (the image docker-compose.yml pins)
         run: make -C .. test-db
       - name: test
@@ -55,6 +91,29 @@ jobs:
             golang:1.26-alpine@sha256:30b1e546a9c7fa3b747c2bdba3a0c7bdf3a02ebb4c5b8405d2f948d7e8aac4ec \
             go test -run '^TestLocalNixpacksRunsInItsSandbox$' -v ./internal/docker/ | tee sandbox.log
           grep -q -- '--- PASS: TestLocalNixpacksRunsInItsSandbox' sandbox.log
+
+  backend-checks:
+    needs: changes
+    if: github.event_name != 'schedule' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 13
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: pinned images (install.sh pulls no floating tag)
+        run: ../scripts/check-pinned-images-test.sh
+      - name: truncation-safe installers (a cut-off curl | sh runs nothing)
+        run: ../scripts/check-truncation-safe-test.sh
+      - name: gofmt
+        run: test -z "$(gofmt -l ./cmd ./internal ./pkg)"
+      - name: vet
+        run: go vet ./...
       - name: govulncheck (reachable advisories not in backend/.govulnignore fail)
         run: ../scripts/govulncheck.sh
       - name: Docker advisories (one moby published that backend/internal/advisory/known.go lacks fails)
@@ -88,39 +147,125 @@ jobs:
             test "$size" -lt 25000000
           done
 
-  frontend:
-    runs-on: ubuntu-latest
+  # The frontend's checks, split across runners: lint and types, the unit
+  # tests in two shards, the accessibility check in three (by page).
+  frontend-checks:
+    name: frontend-checks (${{ matrix.check }} ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      # Every shard finishes, so one run shows every failure.
+      fail-fast: false
+      matrix:
+        include:
+          - { check: lint, shard: "", timeout: 7 }
+          - { check: test, shard: 1/2, timeout: 7 }
+          - { check: test, shard: 2/2, timeout: 7 }
+          - { check: a11y, shard: 1/3, timeout: 20 }
+          - { check: a11y, shard: 2/3, timeout: 20 }
+          - { check: a11y, shard: 3/3, timeout: 20 }
     defaults:
       run:
         working-directory: frontend
+    env:
+      SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - id: node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run lint:tokens
-      - run: npm run typecheck
-      - run: npm run api:types:check
-      - run: npm test
+      # node_modules itself, keyed on the exact lockfile and Node: npm ci only
+      # on a miss, saved straight after it, before any step can write there.
+      - id: modules
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: frontend/node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('frontend/package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - if: steps.modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: frontend/node_modules
+          key: ${{ steps.modules.outputs.cache-primary-key }}
+
+      - if: matrix.check == 'lint'
+        run: npm run lint
+      - if: matrix.check == 'lint'
+        run: npm run lint:tokens
+      - if: matrix.check == 'lint'
+        run: npm run typecheck
+      - if: matrix.check == 'lint'
+        run: npm run api:types:check
       - name: npm audit (production dependencies, high and above)
+        if: matrix.check == 'lint'
         run: npm audit --omit=dev --audit-level=high
+
+      - if: matrix.check == 'test'
+        run: npm test -- --shard="$SHARD"
+
       # As the release image: the API on the panel's own origin (D-62).
-      - run: npm run build
+      - if: matrix.check == 'a11y'
+        run: npm run build
       # A page that fails axe, in Graphite or Paper, fails the build; so does a
       # failed read drawn as empty (scripts/a11y-check). Failing each read alone
       # is most of the step's time: a release and the daily run only.
-      - run: npx playwright install --with-deps chromium
-      - run: npm run a11y -- ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/')) && '--each-read' || '' }}
+      - if: matrix.check == 'a11y'
+        run: npx playwright install --with-deps chromium
+      - if: matrix.check == 'a11y'
+        env:
+          EACH_READ: ${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/')) && '--each-read' || '' }}
+        run: npm run a11y -- --shard="$SHARD" ${EACH_READ:+"$EACH_READ"}
+
+  # The required checks. A job skipped counts only when the pull request
+  # changed nothing but documentation; failed or cancelled never does.
+  backend:
+    needs: [changes, backend-test, backend-checks]
+    if: always() && github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          CODE: ${{ needs.changes.outputs.code }}
+          RESULTS: ${{ needs.changes.result }} ${{ needs.backend-test.result }} ${{ needs.backend-checks.result }}
+        run: |
+          echo "code changed: $CODE; results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] && continue
+            [ "$r" = skipped ] && [ "$CODE" = false ] && continue
+            echo "::error::a job under this check ended $r"
+            exit 1
+          done
+
+  frontend:
+    needs: [changes, frontend-checks]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          CODE: ${{ needs.changes.outputs.code }}
+          RESULTS: ${{ needs.changes.result }} ${{ needs.frontend-checks.result }}
+        run: |
+          echo "code changed: $CODE; results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] && continue
+            [ "$r" = skipped ] && [ "$CODE" = false ] && continue
+            echo "::error::a job under this check ended $r"
+            exit 1
+          done
 
   # Daily only: a new docker/dockerfile release fails this run, never a
   # push that has nothing to do with it.
   dockerfile-frontend:
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Dockerfile frontend (docker/dockerfile:1 newer than the pin in backend/internal/docker/buildkit.go fails)
@@ -130,7 +275,8 @@ jobs:
   # Dependabot signs its commits off too.
   dco:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

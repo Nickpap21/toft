@@ -17,6 +17,7 @@
 //   npm run a11y                     passes 1 and 2
 //   npm run a11y -- --each-read      pass 3 as well, most of the time (CI: a release and daily)
 //   npm run a11y -- /settings /cycles    only the pages whose path has one of these
+//   npm run a11y -- --shard=2/3      every third page from the second (CI splits the run across runners)
 //
 // Needs Playwright's Chromium: npx playwright install chromium
 import { chromium } from "playwright";
@@ -339,7 +340,14 @@ async function scanOneRead(browser, job) {
 
 const only = process.argv.slice(2).filter((a) => a.startsWith("/"));
 const eachRead = process.argv.includes("--each-read");
-const wanted = only.length ? PAGES.filter((p) => only.some((o) => p.path.includes(o))) : PAGES;
+// By page, so pass 3 finds each page's pass 1 in its own shard.
+const shardArg = process.argv.find((a) => a.startsWith("--shard"));
+const shardOf = shardArg ? /^--shard=(\d+)\/(\d+)$/.exec(shardArg) : [, "1", "1"];
+const [shard, shards] = (shardOf ?? []).slice(1).map(Number);
+if (!(shard >= 1 && shard <= shards)) die(`--shard wants k/n with 1 <= k <= n, not ${shardArg}`);
+const wanted = (only.length ? PAGES.filter((p) => only.some((o) => p.path.includes(o))) : PAGES).filter((_, i) => i % shards === shard - 1);
+// A shard or a path that matches nothing must not pass by checking nothing.
+if (!wanted.length) die("no pages to check");
 const jobs = wanted.flatMap((pg) => THEMES.flatMap((theme) => WIDTHS.map((width) => ({ pg, theme, width, run: scan, problems: [], baseline: !pg.readsFailed && theme === "graphite" && width === 390 }))));
 const failed = wanted.filter((pg) => !pg.readsFailed).map((pg) => ({ pg, theme: "graphite", width: 390, run: scanFailing, problems: [], pass: "reads failing" }));
 
@@ -371,5 +379,5 @@ for (const { pg, theme, width, problems, pass } of all) {
   }
 }
 const seconds = Math.round((Date.now() - started) / 1000);
-console.log(`a11y: ${all.length} scans of ${wanted.length} pages in ${seconds}s, ${WORKERS} at a time, ${count} problem(s)`);
+console.log(`a11y: ${all.length} scans of ${wanted.length} pages${shards > 1 ? ` (shard ${shard}/${shards})` : ""} in ${seconds}s, ${WORKERS} at a time, ${count} problem(s)`);
 process.exit(count ? 1 : 0);
