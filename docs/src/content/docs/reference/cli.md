@@ -99,7 +99,10 @@ Without `--follow`, it stops once no new line has arrived for a second and a
 half. Viewers of one container's live log, in the CLI or the panel, share one
 stream.
 
-`logs` works with a full-account key, or a one-project key with `deploy`.
+`logs` works with a full-account key, or a one-project key with `logs`
+(Read live logs). `deploy` doesn't include it: a service's output can hold
+whatever the app prints. Without it, `toft logs` says the key needs the
+`logs` scope.
 
 ### rollback
 
@@ -170,8 +173,9 @@ A one-project key needs one or more of these:
 
 | Scope | Label in the panel | Allows |
 | --- | --- | --- |
-| `deploy` | Deploy, roll back and read live logs | Deploys, rollbacks and their logs, and a service's live logs. |
+| `deploy` | Deploy and roll back | Deploys, rollbacks and their logs. |
 | `variables` | Variables and secrets | Reading and setting variables, and setting secrets. |
+| `logs` | Read live logs | Following a service's live logs (`toft logs`). |
 | `code_read` | Clone and fetch its code | Cloning and fetching the project's repositories. |
 | `code_write` | Push to its code | Pushing too; includes `code_read`. |
 | `checks` | Report checks from CI | Reading and reporting a commit's checks. |
@@ -180,8 +184,9 @@ A one-project key needs one or more of these:
 | `docs_read` | Read its docs | Reading docs pages. |
 | `docs_write` | Write its docs | Writing pages too; includes `docs_read`. Neither runs a page's commands. |
 
-A key limited to **Only these** services may only have `deploy` and
-`variables`, since code, checks, issues and docs belong to the whole project.
+A key limited to **Only these** services may only have `deploy`,
+`variables` and `logs`, since code, checks, issues and docs belong to the
+whole project.
 It reaches only those services: never an environment's shared variables, a
 preview or the project's own routes. For `toft deploy` and `toft rollback`
 from CI, a key limited to the one service with `deploy` is enough.

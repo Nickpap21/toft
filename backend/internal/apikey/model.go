@@ -27,22 +27,26 @@ const (
 	// pages too. Neither runs a page's commands (D-86).
 	ScopeDocsRead  = "docs_read"
 	ScopeDocsWrite = "docs_write"
+	// Follow a service's live (runtime) logs, which can hold what the app
+	// prints: never part of deploy, so keys from before don't gain it
+	// (issue #11).
+	ScopeLogs = "logs"
 )
 
 var knownScopes = map[string]bool{ScopeDeploy: true, ScopeVariables: true, ScopeCodeRead: true, ScopeCodeWrite: true, ScopeChecks: true,
-	ScopeIssuesRead: true, ScopeIssuesWrite: true, ScopeDocsRead: true, ScopeDocsWrite: true}
+	ScopeIssuesRead: true, ScopeIssuesWrite: true, ScopeDocsRead: true, ScopeDocsWrite: true, ScopeLogs: true}
 
 // ErrInvalidScope is a project without scopes, scopes without a project, or
 // an unknown scope.
 // ErrNotFound is a key that isn't the user's, or doesn't exist.
 var ErrNotFound = errors.New("api key not found")
 
-var ErrInvalidScope = errors.New(`a project-scoped key needs project_id and one or more scopes ("deploy", "variables", "code_read", "code_write", "checks", "issues_read", "issues_write", "docs_read", "docs_write"); a full-access key has neither`)
+var ErrInvalidScope = errors.New(`a project-scoped key needs project_id and one or more scopes ("deploy", "variables", "code_read", "code_write", "checks", "issues_read", "issues_write", "docs_read", "docs_write", "logs"); a full-access key has neither`)
 
 // ErrInvalidServices is service_ids that aren't each once a service of the
 // key's project, or a key limited to services with a scope other than
-// deploy and variables (code, checks, issues and docs are project-wide).
-var ErrInvalidServices = errors.New(`service_ids must name services of the key's project, each once, and a key limited to services may only have the "deploy" and "variables" scopes`)
+// deploy, variables and logs (code, checks, issues and docs are project-wide).
+var ErrInvalidServices = errors.New(`service_ids must name services of the key's project, each once, and a key limited to services may only have the "deploy", "variables" and "logs" scopes`)
 
 // ErrInvalidExpiry is an expires_at that isn't a date-time in the future.
 var ErrInvalidExpiry = errors.New("expires_at must be a date-time in the future, or null for a key that never expires")

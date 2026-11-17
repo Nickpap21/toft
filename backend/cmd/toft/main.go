@@ -217,9 +217,18 @@ func logs(ctx context.Context, c *client, args []string, stdout, stderr io.Write
 	if err := fs.Parse(flags); err != nil || service == "" || fs.NArg() != 0 {
 		return usageError("logs needs one <service>")
 	}
+	// A key without the logs scope fails at the name lookup or the stream:
+	// say which scope it needs, not just that it's limited (issue #11).
+	scopeHint := func(err error) error {
+		var ae *apiError
+		if errors.As(err, &ae) && ae.Status == http.StatusForbidden && ae.Code == "insufficient_scope" {
+			return errors.New(`this API key can't read this service's live logs: it needs the "logs" scope (Read live logs) on the service's project or on this service; add a key in Settings → API keys, or use a full-account key`)
+		}
+		return err
+	}
 	id, err := c.resolve(ctx, service)
 	if err != nil {
-		return err
+		return scopeHint(err)
 	}
 	events, errs := c.stream(ctx, fmt.Sprintf("/api/v1/services/%s/logs/live?tail=%d", id, *tail))
 	quiet := time.NewTimer(time.Hour)
@@ -230,7 +239,7 @@ func logs(ctx context.Context, c *client, args []string, stdout, stderr io.Write
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				return <-errs
+				return scopeHint(<-errs)
 			}
 			switch ev.name {
 			case "", "message":

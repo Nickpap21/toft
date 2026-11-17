@@ -18,10 +18,10 @@ import (
 // of keyLists; the handlers then check that a :deploymentID belongs to that
 // service and a :repositoryID to that project.
 var routeScopes = map[string]string{
-	// The CLI's names and toft logs (issue #11).
+	// The CLI's names (keyLists: logs passes them too) and toft logs (issue #11).
 	"GET /api/v1/projects":                                                  ScopeDeploy,
 	"GET /api/v1/workspace/services":                                        ScopeDeploy,
-	"GET /api/v1/services/:serviceID/logs/live":                             ScopeDeploy,
+	"GET /api/v1/services/:serviceID/logs/live":                             ScopeLogs,
 	"GET /api/v1/services/:serviceID":                                       ScopeDeploy,
 	"GET /api/v1/services/:serviceID/domains":                               ScopeDeploy,
 	"POST /api/v1/services/:serviceID/deployments":                          ScopeDeploy,
@@ -123,9 +123,9 @@ type ProjectResolver interface {
 	EnvironmentProject(ctx context.Context, environmentID string) (string, error)
 }
 
-// keyLists are the workspace's lists a scoped key reaches: they name no
-// project, and their handlers narrow them to the key's project, and to its
-// services for a key limited to some (K5).
+// keyLists are the workspace's lists a scoped key with deploy or logs
+// reaches: they name no project, and their handlers narrow them to the key's
+// project, and to its services for a key limited to some (K5).
 var keyLists = map[string]bool{
 	"GET /api/v1/projects":           true,
 	"GET /api/v1/workspace/services": true,
@@ -157,7 +157,8 @@ func EnforceScopes(projects ProjectResolver) gin.HandlerFunc {
 		has := slices.Contains(scopes, need) || need == ScopeCodeRead && slices.Contains(scopes, ScopeCodeWrite) ||
 			need == ScopeIssuesRead && slices.Contains(scopes, ScopeIssuesWrite) ||
 			need == ScopeDocsRead && slices.Contains(scopes, ScopeDocsWrite) ||
-			need == ScopeChecks && c.Request.Method == http.MethodGet && code
+			need == ScopeChecks && c.Request.Method == http.MethodGet && code ||
+			keyLists[route] && slices.Contains(scopes, ScopeLogs)
 		if !listed || !has {
 			respond.ErrorData(c, http.StatusForbidden, scopeRefused, gin.H{"code": "insufficient_scope"})
 			c.Abort()
@@ -265,11 +266,11 @@ func AgentScopeFor(method, path string) (scope string, ok bool) {
 	if agentWorkspaceReads[route] {
 		return AgentScopeRead, true
 	}
-	// A deploy key's live output isn't an agent's read: following a
-	// service's runtime logs waits for an agent policy action of its own.
-	if method != http.MethodGet || route == "GET /api/v1/services/:serviceID/logs/live" {
+	if method != http.MethodGet {
 		return "", false
 	}
+	// Not ScopeLogs: a service's runtime output isn't an agent's read; it
+	// waits for an agent policy action of its own.
 	switch routeScopes[route] {
 	case ScopeCodeRead, ScopeIssuesRead, ScopeDocsRead, ScopeDeploy, ScopeChecks:
 		return AgentScopeRead, true

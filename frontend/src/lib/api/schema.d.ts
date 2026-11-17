@@ -3632,7 +3632,7 @@ export interface paths {
         };
         /**
          * The workspace's projects
-         * @description Every member. A project key with deploy gets its own project alone; an agent, the projects its connection reaches.
+         * @description Every member. A project key with deploy or logs gets its own project alone; an agent, the projects its connection reaches.
          */
         get: operations["getProjects"];
         put?: never;
@@ -4443,7 +4443,7 @@ export interface paths {
         };
         /**
          * Follow the container's logs
-         * @description Every member, and a project key with deploy that reaches the service; agents can't (following live logs isn't an agent policy action yet). Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can't be connected to; any other names no cause.
+         * @description Every member, and a project key with logs that reaches the service (403 insufficient_scope without it: deploy doesn't include it); agents can't (following live logs isn't an agent policy action yet). Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can't be connected to; any other names no cause.
          */
         get: operations["getServicesServiceidLogsLive"];
         put?: never;
@@ -4770,7 +4770,7 @@ export interface paths {
         put?: never;
         /**
          * Create an API key; the full key is shown once
-         * @description Needs a signed-in session: an API key or an agent gets 403 session_required, so a key never mints another. project_id with scopes (deploy, variables, code_read, code_write, checks, issues_read, issues_write, docs_read, docs_write) makes a project-scoped key; neither makes a full-access key. Viewers cannot create project keys; a project outside the workspace is 404. service_ids limits a project key to some of its services (deploy and variables only; 400 invalid_scope otherwise, and for a service outside the project). expires_at: omitted is 90 days from now, null is never, a time not in the future is 400 invalid_expiry.
+         * @description Needs a signed-in session: an API key or an agent gets 403 session_required, so a key never mints another. project_id with scopes (deploy, variables, code_read, code_write, checks, issues_read, issues_write, docs_read, docs_write, logs) makes a project-scoped key; neither makes a full-access key. Viewers cannot create project keys; a project outside the workspace is 404. service_ids limits a project key to some of its services (deploy, variables and logs only; 400 invalid_scope otherwise, and for a service outside the project). expires_at: omitted is 90 days from now, null is never, a time not in the future is 400 invalid_expiry.
          */
         post: operations["postUserApiKeys"];
         delete?: never;
@@ -4805,7 +4805,7 @@ export interface paths {
         };
         /**
          * Every service in the workspace, with its project, environment and state
-         * @description Every member. A project key with deploy gets its project's services alone (those it names, if it names some); an agent, those of the projects its connection reaches.
+         * @description Every member. A project key with deploy or logs gets its project's services alone (those it names, if it names some); an agent, those of the projects its connection reaches.
          */
         get: operations["getWorkspaceServices"];
         put?: never;
@@ -9107,8 +9107,8 @@ export interface components {
         ApikeyCreateInput: {
             name: string;
             project_id?: string;
-            scopes?: ("deploy" | "variables" | "code_read" | "code_write" | "checks" | "issues_read" | "issues_write" | "docs_read" | "docs_write")[];
-            /** @description Limits a project key to these services of its project (at least one, no repeats). Its scopes may then be only deploy and variables. */
+            scopes?: ("deploy" | "variables" | "code_read" | "code_write" | "checks" | "issues_read" | "issues_write" | "docs_read" | "docs_write" | "logs")[];
+            /** @description Limits a project key to these services of its project (at least one, no repeats). Its scopes may then be only deploy, variables and logs. */
             service_ids?: string[];
             /**
              * Format: date-time

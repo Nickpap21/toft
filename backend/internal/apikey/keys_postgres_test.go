@@ -71,8 +71,8 @@ func TestKeyExpiryAndServices(t *testing.T) {
 	require.True(t, errors.As(err, &expired), "%v", err)
 	assert.Contains(t, err.Error(), "expired on 2026-01-02")
 
-	// Services: each a service of the key's project, once, with deploy or
-	// variables only.
+	// Services: each a service of the key's project, once, with deploy,
+	// variables or logs only.
 	k, err = create("web-ci", apikey.CreateInput{ProjectID: p1, Scopes: deploy, ServiceIDs: []string{web, shared}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{web, shared}, k.ServiceIDs)
@@ -122,6 +122,11 @@ func TestKeyExpiryAndServices(t *testing.T) {
 			assert.NotNil(t, listed.Services)
 		}
 	}
+
+	// A key for one service's live logs (issue #11).
+	logs, err := create("cache-logs", apikey.CreateInput{ProjectID: p1, Scopes: []string{apikey.ScopeLogs}, ServiceIDs: []string{shared}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{apikey.ScopeLogs}, logs.Scopes)
 }
 
 // A project's keys (0077): an owner sees every member's, anyone else their

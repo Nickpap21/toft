@@ -54,8 +54,9 @@ import {
 } from "@/components/settings/settings-frame";
 
 const SCOPE_LABEL: Record<APIKeyScope, string> = {
-  deploy: "Deploy, roll back and read live logs",
+  deploy: "Deploy and roll back",
   variables: "Variables and secrets",
+  logs: "Read live logs",
   code_read: "Clone and fetch its code",
   code_write: "Push to its code",
   checks: "Report checks from CI",
@@ -82,7 +83,7 @@ function projectWide(choices: APIKeyScope[]): string {
 const access = (k: APIKey) => (k.project_id ? "One project" : "Full account");
 
 /** The scopes that act on one service: all a key for some services may have. */
-const SERVICE_SCOPES: APIKeyScope[] = ["deploy", "variables"];
+const SERVICE_SCOPES: APIKeyScope[] = ["deploy", "variables", "logs"];
 
 /** A key for some services: their names, and how many were deleted since. */
 function serviceNames(k: APIKey): string {
@@ -431,8 +432,8 @@ function ApiKeys() {
                 deploy
               </dt>
               <dd className="flex-[1_1_220px] text-fg/85">
-                Deploy the project&apos;s services, follow their logs and roll
-                back.
+                Deploy the project&apos;s services, follow their deploys and
+                roll back.
               </dd>
             </div>
             <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-subtle py-2">
@@ -442,6 +443,15 @@ function ApiKeys() {
               <dd className="flex-[1_1_220px] text-fg/85">
                 Read and change variables, and set secrets, on its services and
                 environments. Secrets are never read back.
+              </dd>
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-subtle py-2">
+              <dt className="w-24 flex-none font-mono text-xs leading-5 text-fg">
+                logs
+              </dt>
+              <dd className="flex-[1_1_220px] text-fg/85">
+                Follow its services&apos; live logs, which hold whatever the app
+                prints. Never part of deploy.
               </dd>
             </div>
             {git.data?.enabled && (
@@ -509,8 +519,8 @@ function ApiKeys() {
             </div>
           </dl>
           <p className="text-[13px] leading-[19px] text-fg/85">
-            A key for some of the project&apos;s services deploys and sets
-            variables on those only: not the environment&apos;s shared
+            A key for some of the project&apos;s services deploys, sets
+            variables and follows live logs on those only: not the environment&apos;s shared
             variables, previews or the project&apos;s code.
           </p>
           <p className="text-xs leading-[17px] text-muted">
@@ -642,8 +652,8 @@ function CreateDialog({
   // The code scopes only where this instance hosts git (D-71).
   const git = useQuery(gitInfoQuery);
   const scopeChoices: APIKeyScope[] = git.data?.enabled
-    ? ["deploy", "variables", "code_read", "code_write", "checks", "issues_read", "issues_write", "docs_read", "docs_write"]
-    : ["deploy", "variables", "issues_read", "issues_write", "docs_read", "docs_write"];
+    ? ["deploy", "variables", "logs", "code_read", "code_write", "checks", "issues_read", "issues_write", "docs_read", "docs_write"]
+    : ["deploy", "variables", "logs", "issues_read", "issues_write", "docs_read", "docs_write"];
   const project = projectId || projects.data?.[0]?.id || "";
   const picking = open && mode === "project" && some;
   const services = useQuery({ ...projectServicesQuery(project), enabled: picking && !!project });
@@ -928,8 +938,8 @@ function CreateDialog({
                 {some && (
                   <span id="nk-allows-note" className="text-xs leading-[17px] text-muted">
                     {projectWide(scopeChoices)} reach the whole project, so a
-                    key for some services can only deploy and set their
-                    variables.
+                    key for some services can only deploy, set their
+                    variables and read their live logs.
                   </span>
                 )}
               </fieldset>

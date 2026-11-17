@@ -74,3 +74,45 @@ func TestDeployWaitAndProblem(t *testing.T) {
 		t.Errorf("missing config exit = %d", code)
 	}
 }
+
+// toft logs with a key that lacks the logs scope says which scope it needs,
+// not just that the key is limited, whether the name lookup or the stream
+// refuses it (issue #11); another 403 passes through as it is.
+func TestLogsNamesTheMissingScope(t *testing.T) {
+	refuse := func(w http.ResponseWriter, code string) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"refused","status":403,"data":{"code":"` + code + `"}}`))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch key := r.Header.Get("Authorization"); {
+		case key == "Bearer paas_vars" && r.URL.Path == "/api/v1/projects":
+			refuse(w, "insufficient_scope")
+			return
+		case key == "Bearer paas_other" && r.URL.Path == "/api/v1/projects":
+			refuse(w, "forbidden")
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"p1","name":"storefront"}]}`))
+		case "GET /api/v1/workspace/services":
+			_, _ = w.Write([]byte(`{"data":[{"id":"s1","name":"api","project_id":"p1","environment_name":"production"}]}`))
+		case "GET /api/v1/services/s1/logs/live":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"this API key is limited to its scopes in one project","status":403,"data":{"code":"insufficient_scope"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	for key, hint := range map[string]bool{"paas_k": true, "paas_vars": true, "paas_other": false} {
+		env := map[string]string{"TOFT_URL": srv.URL, "TOFT_API_KEY": key, "TOFT_ORG": "org-1"}
+		var out, errOut bytes.Buffer
+		if code := run([]string{"logs", "storefront/production/api"}, func(k string) string { return env[k] }, &out, &errOut); code != 1 {
+			t.Fatalf("%s: exit %d, want 1: %s", key, code, errOut.String())
+		}
+		if got := strings.Contains(errOut.String(), `"logs" scope (Read live logs)`); got != hint {
+			t.Errorf("%s: hint %v, want %v; stderr = %s", key, got, hint, errOut.String())
+		}
+	}
+}

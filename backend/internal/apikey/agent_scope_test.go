@@ -107,7 +107,7 @@ func TestAgentScopes(t *testing.T) {
 		{http.MethodPut, "/api/v1/environments/:environmentID/secrets/:key", AgentScopeVariables, true},
 		{http.MethodPost, "/api/v1/projects/:projectID/docs/:pageID/steps/:step/run", AgentScopeRunbooks, true},
 		{http.MethodGet, "/api/v1/agents/connections", "", false},
-		// A deploy key follows a service's live output (issue #11); an agent
+		// A logs key follows a service's live output (issue #11); an agent
 		// doesn't, until reading it is a policy action of its own.
 		{http.MethodGet, "/api/v1/services/:serviceID/logs/live", "", false},
 		{http.MethodGet, "/api/v1/projects", AgentScopeRead, true},

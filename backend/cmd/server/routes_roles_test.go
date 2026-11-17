@@ -1004,7 +1004,7 @@ var routeAccess = map[string]access{
 	"GET /api/v1/services/{serviceID}/domains":                                                                  {role: "viewer", serviceKey: true},
 	"GET /api/v1/services/{serviceID}/domains/check":                                                            {role: "viewer"},
 	"GET /api/v1/services/{serviceID}/env-vars":                                                                 {role: "viewer", serviceKey: true},
-	"GET /api/v1/services/{serviceID}/logs/live":                                                                {role: "viewer", serviceKey: true},
+	"GET /api/v1/services/{serviceID}/logs/live":                                                                {role: "viewer"}, // the logs scope, not deploy (issue #11)
 	"GET /api/v1/services/{serviceID}/metrics":                                                                  {role: "viewer"},
 	"GET /api/v1/services/{serviceID}/resources":                                                                {role: "viewer"},
 	"GET /api/v1/services/{serviceID}/admin-password":                                                           {role: "developer", session: true},
