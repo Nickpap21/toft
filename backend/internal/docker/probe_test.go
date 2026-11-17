@@ -76,6 +76,25 @@ exec ` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /cgi-
 	assert.Less(t, ms, 1000)
 }
 
+// What passes is an answer below the service's pass-below status ($4): a
+// 404 is healthy at 500 (a new service's) and not at 400 (one from before,
+// and an exec from a panel that passes none).
+func TestProbeScriptPassesBelowTheServicesStatus(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("needs docker")
+	}
+	const setup = `mkdir -p ` + rollout.ProbeMountPath + `/bin /www && ln -s /bin/busybox ` + rollout.ProbeMountPath + `/bin/busybox
+httpd -p 8080 -h /www
+` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /missing 5 500 && echo PASS500
+` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /missing 5 400 || echo FAIL400
+` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /missing 5 || echo FAILDEFAULT`
+	out, err := exec.Command("docker", "run", "--rm", rollout.ProbeToolImage, "sh", "-c", setup, probeScript).Output()
+	require.NoError(t, err, "%s", out)
+	for _, want := range []string{"PASS500", "FAIL400", "FAILDEFAULT", "HTTP 404"} {
+		assert.Contains(t, string(out), want)
+	}
+}
+
 // A container gets the probe's tool on a Docker API with image mounts, and
 // is created without it (not refused) on an older one.
 func TestContainersGetTheProbeToolWhereDockerCanMountIt(t *testing.T) {

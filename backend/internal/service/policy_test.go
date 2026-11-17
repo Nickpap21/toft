@@ -44,6 +44,8 @@ func (f *fakeRepo) DeployTimeout(context.Context, string) (int, error)       { r
 func (f *fakeRepo) SetDeployTimeout(context.Context, string, int) error      { return nil }
 func (f *fakeRepo) RollbackImagesKept(context.Context, string) (int, error)  { return 0, nil }
 func (f *fakeRepo) SetRollbackImagesKept(context.Context, string, int) error { return nil }
+func (f *fakeRepo) HealthPassBelow(context.Context, string) (int, error)     { return 500, nil }
+func (f *fakeRepo) SetHealthPassBelow(context.Context, string, int) error    { return nil }
 func (f *fakeRepo) ContainerHealth(context.Context, string) (string, string, error) {
 	return f.checkMode, f.checkCommand, nil
 }

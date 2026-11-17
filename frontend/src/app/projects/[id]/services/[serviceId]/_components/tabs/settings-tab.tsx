@@ -2707,12 +2707,8 @@ function HealthCard({
         Requested from inside the container&apos;s network, so the image needs
         no curl.
       </p>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Field
-          id="set-hpath"
-          labelText="Path"
-          hint="400 or higher fails; a redirect passes."
-        >
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Field id="set-hpath" labelText="Path" hint="Asked with GET.">
           <input
             id="set-hpath"
             className={cn(input, "font-mono")}
@@ -2767,6 +2763,30 @@ function HealthCard({
             }
           />
         </Field>
+        <Field
+          id="set-hpass"
+          labelText="Passes below"
+          hint={
+            form.health_check_pass_below === 500
+              ? "500 or higher fails; a 404 passes."
+              : "400 or higher fails; a redirect passes."
+          }
+        >
+          <select
+            id="set-hpass"
+            className={input}
+            value={form.health_check_pass_below}
+            disabled={!canEdit}
+            onChange={(e) =>
+              set({
+                health_check_pass_below: e.target.value === "400" ? 400 : 500,
+              })
+            }
+          >
+            <option value={400}>400</option>
+            <option value={500}>500</option>
+          </select>
+        </Field>
       </div>
       {canEdit && (
         <div className="rounded-lg border border-subtle p-3">
@@ -2775,6 +2795,7 @@ function HealthCard({
             path={form.health_check_path}
             port={form.port}
             timeout={Math.min(30, Math.max(1, form.health_check_timeout || 5))}
+            passBelow={form.health_check_pass_below}
             running={isServing(service.runtime_status)}
           />
           <p className="mt-2 text-xs leading-[17px] text-muted">
@@ -2782,7 +2803,8 @@ function HealthCard({
             would, with the values above:{" "}
             <span className={mono}>{form.health_check_path}</span> on port{" "}
             <span className={mono}>{form.port}</span>,{" "}
-            {form.health_check_timeout} s timeout. Nothing is saved.
+            {form.health_check_timeout} s timeout, passing below{" "}
+            {form.health_check_pass_below}. Nothing is saved.
           </p>
         </div>
       )}

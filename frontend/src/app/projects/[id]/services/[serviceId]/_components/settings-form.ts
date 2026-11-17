@@ -46,6 +46,8 @@ export type ConfigForm = {
   health_check_path: string;
   health_check_timeout: number;
   health_check_retries: number;
+  /** An answer below this status passes the health check. */
+  health_check_pass_below: 400 | 500;
   /** The Docker check its containers get: the image's, none, or a command. */
   container_health: "image" | "off" | "command";
   container_health_command: string;
@@ -167,6 +169,7 @@ export function initForm(service: Service): ConfigForm {
     health_check_path: service.health_check_path ?? "/health",
     health_check_timeout: service.health_check_timeout ?? 5,
     health_check_retries: service.health_check_retries ?? 0, // 0 = off
+    health_check_pass_below: service.health_check_pass_below ?? 400,
     container_health: service.container_health ?? "image",
     container_health_command: service.container_health_command ?? "",
     required_env_vars: service.required_env_vars ?? "",
@@ -232,6 +235,7 @@ export const CARD_FIELDS = {
     "health_check_path",
     "health_check_timeout",
     "health_check_retries",
+    "health_check_pass_below",
     "container_health",
     "container_health_command",
   ],

@@ -227,7 +227,7 @@ UPDATE servers v SET spec_generation = v.spec_generation + 1 WHERE v.id IN (SELE
 -- (a NULL server_id is the control plane's own Docker host). routed: it has
 -- a domain, so its server's Traefik measures its requests (D-156).
 SELECT id, name, server_id, source_type, port,
-       health_check_path, health_check_timeout, health_check_retries, container_health,
+       health_check_path, health_check_timeout, health_check_retries, health_check_pass_below, container_health,
        (preview_of IS NOT NULL)::bool AS preview,
        EXISTS (SELECT 1 FROM domains d WHERE d.service_id = services.id)::bool AS routed
 FROM services
@@ -1216,6 +1216,13 @@ SELECT COALESCE(deploy_timeout_minutes, 0)::int AS deploy_timeout_minutes FROM s
 
 -- name: SetServiceDeployTimeout :exec
 UPDATE services SET deploy_timeout_minutes = sqlc.narg(deploy_timeout_minutes), updated_at = NOW() WHERE id = sqlc.arg(id);
+
+-- name: GetServiceHealthPassBelow :one
+-- An answer below this status passes the health check (issue #12).
+SELECT health_check_pass_below::int AS health_check_pass_below FROM services WHERE id = $1;
+
+-- name: SetServiceHealthPassBelow :exec
+UPDATE services SET health_check_pass_below = sqlc.arg(health_check_pass_below)::smallint, updated_at = NOW() WHERE id = sqlc.arg(id);
 
 -- name: GetServiceIsolation :one
 -- The service's own isolation level (D-95; empty follows the workspace's

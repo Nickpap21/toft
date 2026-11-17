@@ -47,6 +47,10 @@ type Repository interface {
 	// live deployments keep their image (D-135); 0 is the default.
 	RollbackImagesKept(ctx context.Context, id string) (int, error)
 	SetRollbackImagesKept(ctx context.Context, id string, n int) error
+	// HealthPassBelow and SetHealthPassBelow are the status an answer to
+	// its health check stays below to pass, 400 or 500 (issue #12).
+	HealthPassBelow(ctx context.Context, id string) (int, error)
+	SetHealthPassBelow(ctx context.Context, id string, status int) error
 	// ContainerHealth and SetContainerHealth are the Docker health check
 	// its containers are created with (ContainerHealthImage, Off or
 	// Command) and the command's shell line.

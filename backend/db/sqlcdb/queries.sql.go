@@ -932,7 +932,7 @@ func (q *Queries) FetchProjectByID(ctx context.Context, id pgtype.UUID) (Project
 }
 
 const fetchServiceByID = `-- name: FetchServiceByID :one
-SELECT id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command FROM services WHERE id = $1 LIMIT 1
+SELECT id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, health_check_pass_below, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command FROM services WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) FetchServiceByID(ctx context.Context, id pgtype.UUID) (Service, error) {
@@ -979,6 +979,7 @@ func (q *Queries) FetchServiceByID(ctx context.Context, id pgtype.UUID) (Service
 		&i.HealthCheckPath,
 		&i.HealthCheckTimeout,
 		&i.HealthCheckRetries,
+		&i.HealthCheckPassBelow,
 		&i.RequiredEnvVars,
 		&i.MigrateCommand,
 		&i.Dependencies,
@@ -1211,6 +1212,18 @@ func (q *Queries) GetServiceDeployTimeout(ctx context.Context, id pgtype.UUID) (
 	var deploy_timeout_minutes int32
 	err := row.Scan(&deploy_timeout_minutes)
 	return deploy_timeout_minutes, err
+}
+
+const getServiceHealthPassBelow = `-- name: GetServiceHealthPassBelow :one
+SELECT health_check_pass_below::int AS health_check_pass_below FROM services WHERE id = $1
+`
+
+// An answer below this status passes the health check (issue #12).
+func (q *Queries) GetServiceHealthPassBelow(ctx context.Context, id pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, getServiceHealthPassBelow, id)
+	var health_check_pass_below int32
+	err := row.Scan(&health_check_pass_below)
+	return health_check_pass_below, err
 }
 
 const getServiceIsolation = `-- name: GetServiceIsolation :one
@@ -1563,7 +1576,7 @@ func (q *Queries) ListAllProjectsForUser(ctx context.Context, userID pgtype.UUID
 
 const listAllServicesForProject = `-- name: ListAllServicesForProject :many
 
-SELECT id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command FROM services
+SELECT id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, health_check_pass_below, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command FROM services
 WHERE project_id = $1
 ORDER BY created_at DESC
 `
@@ -1619,6 +1632,7 @@ func (q *Queries) ListAllServicesForProject(ctx context.Context, projectID pgtyp
 			&i.HealthCheckPath,
 			&i.HealthCheckTimeout,
 			&i.HealthCheckRetries,
+			&i.HealthCheckPassBelow,
 			&i.RequiredEnvVars,
 			&i.MigrateCommand,
 			&i.Dependencies,
@@ -2929,7 +2943,7 @@ func (q *Queries) ListRecentProjectDeployments(ctx context.Context, arg ListRece
 
 const listRunningServicesForMetrics = `-- name: ListRunningServicesForMetrics :many
 SELECT id, name, server_id, source_type, port,
-       health_check_path, health_check_timeout, health_check_retries, container_health,
+       health_check_path, health_check_timeout, health_check_retries, health_check_pass_below, container_health,
        (preview_of IS NOT NULL)::bool AS preview,
        EXISTS (SELECT 1 FROM domains d WHERE d.service_id = services.id)::bool AS routed
 FROM services
@@ -2938,17 +2952,18 @@ ORDER BY server_id NULLS FIRST, id
 `
 
 type ListRunningServicesForMetricsRow struct {
-	ID                 pgtype.UUID `json:"id"`
-	Name               string      `json:"name"`
-	ServerID           pgtype.UUID `json:"server_id"`
-	SourceType         string      `json:"source_type"`
-	Port               int32       `json:"port"`
-	HealthCheckPath    string      `json:"health_check_path"`
-	HealthCheckTimeout int32       `json:"health_check_timeout"`
-	HealthCheckRetries int32       `json:"health_check_retries"`
-	ContainerHealth    string      `json:"container_health"`
-	Preview            bool        `json:"preview"`
-	Routed             bool        `json:"routed"`
+	ID                   pgtype.UUID `json:"id"`
+	Name                 string      `json:"name"`
+	ServerID             pgtype.UUID `json:"server_id"`
+	SourceType           string      `json:"source_type"`
+	Port                 int32       `json:"port"`
+	HealthCheckPath      string      `json:"health_check_path"`
+	HealthCheckTimeout   int32       `json:"health_check_timeout"`
+	HealthCheckRetries   int32       `json:"health_check_retries"`
+	HealthCheckPassBelow int16       `json:"health_check_pass_below"`
+	ContainerHealth      string      `json:"container_health"`
+	Preview              bool        `json:"preview"`
+	Routed               bool        `json:"routed"`
 }
 
 // The services the metrics collector samples, which it groups by server
@@ -2972,6 +2987,7 @@ func (q *Queries) ListRunningServicesForMetrics(ctx context.Context) ([]ListRunn
 			&i.HealthCheckPath,
 			&i.HealthCheckTimeout,
 			&i.HealthCheckRetries,
+			&i.HealthCheckPassBelow,
 			&i.ContainerHealth,
 			&i.Preview,
 			&i.Routed,
@@ -4114,7 +4130,7 @@ INSERT INTO services (
     port, replicas, cpu_limit, memory_limit
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-RETURNING id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command
+RETURNING id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, health_check_pass_below, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command
 `
 
 type SaveNewServiceParams struct {
@@ -4197,6 +4213,7 @@ func (q *Queries) SaveNewService(ctx context.Context, arg SaveNewServiceParams) 
 		&i.HealthCheckPath,
 		&i.HealthCheckTimeout,
 		&i.HealthCheckRetries,
+		&i.HealthCheckPassBelow,
 		&i.RequiredEnvVars,
 		&i.MigrateCommand,
 		&i.Dependencies,
@@ -4436,6 +4453,20 @@ type SetServiceDockerImageParams struct {
 // saved registry password, which a pull would send there.
 func (q *Queries) SetServiceDockerImage(ctx context.Context, arg SetServiceDockerImageParams) error {
 	_, err := q.db.Exec(ctx, setServiceDockerImage, arg.DockerImage, arg.ClearRegistryPassword, arg.ID)
+	return err
+}
+
+const setServiceHealthPassBelow = `-- name: SetServiceHealthPassBelow :exec
+UPDATE services SET health_check_pass_below = $1::smallint, updated_at = NOW() WHERE id = $2
+`
+
+type SetServiceHealthPassBelowParams struct {
+	HealthCheckPassBelow int16       `json:"health_check_pass_below"`
+	ID                   pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetServiceHealthPassBelow(ctx context.Context, arg SetServiceHealthPassBelowParams) error {
+	_, err := q.db.Exec(ctx, setServiceHealthPassBelow, arg.HealthCheckPassBelow, arg.ID)
 	return err
 }
 
@@ -4871,7 +4902,7 @@ SET
     memory_limit    = $14,
     updated_at      = NOW()
 WHERE id = $1
-RETURNING id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command
+RETURNING id, scope, environment_id, project_id, scoped_org_id, server_id, name, type, source_type, git_repo_url, git_branch, base_directory, docker_image, install_command, build_command, start_command, build_pack, port, replicas, cpu_limit, memory_limit, memory_limit_grace_until, runtime_status, active_deployment_id, compose_content, compose_repo_url, compose_file_path, registry_server, registry_username, registry_password, addon_slug, network_alias, volumes, git_username, git_token, pre_deploy_commands, post_deploy_commands, health_check_path, health_check_timeout, health_check_retries, health_check_pass_below, required_env_vars, migrate_command, dependencies, basic_auth_user, basic_auth_password, ip_allowlist, compose_route_service, compose_network_service, deploy_strategy, pids_limit, deploy_timeout_minutes, rollback_images_kept, isolation, created_at, updated_at, repository_id, deploy_on_push, preview_of, loopback_port, container_health, container_health_command
 `
 
 type UpdateServiceConfigParams struct {
@@ -4950,6 +4981,7 @@ func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConf
 		&i.HealthCheckPath,
 		&i.HealthCheckTimeout,
 		&i.HealthCheckRetries,
+		&i.HealthCheckPassBelow,
 		&i.RequiredEnvVars,
 		&i.MigrateCommand,
 		&i.Dependencies,

@@ -601,6 +601,7 @@ const SETTING: Record<string, string> = {
   health_check_path: "health check path",
   health_check_timeout: "health check timeout",
   health_check_retries: "health check attempts",
+  health_check_pass_below: "health check passing status",
   required_env_vars: "required variables",
   migrate_command: "migrate command",
   dependencies: "dependencies",

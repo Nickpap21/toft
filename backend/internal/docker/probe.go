@@ -28,9 +28,9 @@ import (
 // would take the service offline; this only reports.
 
 // probeScript requests http://localhost:$1$2 with a $3-second timeout and
-// judges it by the first status line, before any redirect, as curl -f does
-// at deploy: below 400 is healthy (exit 0); 400 or more, or no answer, is
-// unhealthy (exit 1, the reason on the next line). Either way its first
+// judges it by the first status line, before any redirect, as the deploy's
+// check does: below $4 (400 or 500; none is 400) is healthy (exit 0); $4 or
+// more, or no answer, is unhealthy (exit 1, the reason on the next line). Either way its first
 // line is "toft-probe <status> <ms>" (status 000: no answer), timed with
 // the shell's $EPOCHREALTIME (seconds.microseconds; the dot dropped, it is
 // microseconds). Not adjtimex: its tv_usec is nanoseconds on a kernel whose
@@ -42,7 +42,7 @@ out=$($B wget -S -O /dev/null -T "$3" "http://localhost:$1$2" 2>&1)
 t=$EPOCHREALTIME; t1=${t%.*}${t#*.}
 code=$(echo "$out" | $B sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | $B head -n 1)
 echo "toft-probe ${code:-000} $(((t1-t0+500)/1000))"
-[ -n "$code" ] && [ "$code" -lt 400 ] && exit 0
+[ -n "$code" ] && [ "$code" -lt "${4:-400}" ] && exit 0
 if [ -n "$code" ]; then echo "HTTP $code"; else echo "$out" | $B tail -n 1; fi
 exit 1`
 
@@ -87,7 +87,7 @@ func probeContainer(ctx context.Context, dc *client.Client, name string, t servi
 	defer cancel()
 	exec, err := dc.ContainerExecCreate(ctx, name, container.ExecOptions{
 		Cmd: []string{rollout.ProbeMountPath + "/bin/busybox", "sh", "-c", probeScript, "toft-probe",
-			strconv.Itoa(t.Port), t.HealthPath, strconv.Itoa(timeout)},
+			strconv.Itoa(t.Port), t.HealthPath, strconv.Itoa(timeout), strconv.Itoa(t.HealthPassBelow)},
 		AttachStdout: true,
 		AttachStderr: true,
 	})

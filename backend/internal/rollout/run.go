@@ -53,6 +53,9 @@ type HealthCheck struct {
 	Path       string
 	TimeoutSec int
 	Retries    int
+	// PassBelow: an answer below this status passes, 400 or 500. 0 is 400,
+	// curl -f's rule: what a panel or an agent from before it sends.
+	PassBelow int
 }
 
 // PostDeploy is a command run in one of the service's containers once the
@@ -418,7 +421,7 @@ func (r *run) health(ctx context.Context) error {
 			return nil
 		}
 	}
-	err := fmt.Errorf("health check failed after %d retries: %w", hc.Retries, lastErr)
+	err := fmt.Errorf("GET %s %w on all %d attempts. Set its path, or what passes, in the service's Settings → Health check", hc.Path, lastErr, hc.Retries)
 	r.log("✗ Health check failed: " + err.Error())
 	return err
 }

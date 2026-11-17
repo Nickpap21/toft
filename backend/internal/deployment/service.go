@@ -592,19 +592,20 @@ type TriggerInput struct {
 	BuildPack    string // "auto" | "nixpacks" | "dockerfile"
 	// Nixpacks replaces the install and build steps Nixpacks detects when
 	// set (BuildPack nixpacks only).
-	Nixpacks           NixpacksCommands
-	HealthCheckPath    string                // e.g. "/health"
-	HealthCheckTimeout int                   // seconds; 0 = skip health check
-	HealthCheckRetries int                   // number of attempts before failing
-	GitUsername        string                // HTTP basic auth username for private repos
-	GitToken           string                // HTTP basic auth token/PAT (never logged)
-	PreDeployCommands  []string              // shell commands to run on the target host before the pipeline
-	PostDeployCommands []PostDeployCommand   // container exec commands to run after the pipeline succeeds
-	RequiredEnvVars    []string              // env var keys that must be present before the container starts
-	ServiceName        string                // human-readable name for container naming
-	EnvironmentName    string                // e.g. "production", "staging" — prefixed on container names
-	MigrateCommand     string                // run --rm before container start; empty = skip
-	AccessControl      service.AccessControl // Traefik-level auth + IP allowlist
+	Nixpacks             NixpacksCommands
+	HealthCheckPath      string                // e.g. "/health"
+	HealthCheckTimeout   int                   // seconds; 0 = skip health check
+	HealthCheckRetries   int                   // number of attempts before failing
+	HealthCheckPassBelow int                   // an answer below this status passes: 400 or 500
+	GitUsername          string                // HTTP basic auth username for private repos
+	GitToken             string                // HTTP basic auth token/PAT (never logged)
+	PreDeployCommands    []string              // shell commands to run on the target host before the pipeline
+	PostDeployCommands   []PostDeployCommand   // container exec commands to run after the pipeline succeeds
+	RequiredEnvVars      []string              // env var keys that must be present before the container starts
+	ServiceName          string                // human-readable name for container naming
+	EnvironmentName      string                // e.g. "production", "staging" — prefixed on container names
+	MigrateCommand       string                // run --rm before container start; empty = skip
+	AccessControl        service.AccessControl // Traefik-level auth + IP allowlist
 	// RollbackImageTag, when non-empty, skips clone+build and re-uses this pre-built image tag.
 	RollbackImageTag string
 	// LokiURL, when non-empty, configures the Loki Docker log driver on the container.
@@ -2248,7 +2249,7 @@ func rolloutSpec(deploymentID string, input TriggerInput, imageTag string, pull 
 		Recreate:    input.Recreate,
 	}
 	if input.HealthCheckRetries > 0 {
-		spec.Health = &rollout.HealthCheck{Path: input.HealthCheckPath, TimeoutSec: input.HealthCheckTimeout, Retries: input.HealthCheckRetries}
+		spec.Health = &rollout.HealthCheck{Path: input.HealthCheckPath, TimeoutSec: input.HealthCheckTimeout, Retries: input.HealthCheckRetries, PassBelow: input.HealthCheckPassBelow}
 	}
 	for _, pd := range input.PostDeployCommands {
 		spec.PostDeploy = append(spec.PostDeploy, rollout.PostDeploy{Container: pd.ServiceName, Command: pd.Command})

@@ -150,9 +150,10 @@ The health check is in Settings → Health check:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| Path | `/health` | A status of 400 or higher fails; a redirect passes. |
+| Path | `/` | Asked with GET; a redirect passes. |
 | Timeout per attempt | 5 seconds | 1 to 60. |
-| Attempts | 0 | 0 to 10. 0 turns the check off. |
+| Attempts | 5 for a web app, else 0 | 0 to 10, 2 seconds apart. 0 turns the check off. |
+| Passes below | 500 | 500: an app that answers 404 is up. 400: a 404 fails too. |
 
 The check is requested from inside the container's network, so the image
 needs no `curl`. The app must listen on more than `127.0.0.1`. While the
@@ -160,9 +161,15 @@ service is live, the same path is checked every minute: a failure marks the
 service unhealthy and raises an alert, without taking it offline.
 
 :::tip
-The health check is off until you set Attempts. Turn it on for every web
-service: without it, Toft switches as soon as the new container has started.
+A web app built from git or an image checks `GET /` from its first deploy.
+A worker, a database, a cache, a catalog add-on or a compose stack has no
+check until you set Attempts; without one, Toft switches as soon as the new
+container has started. A service created before Passes below existed
+keeps its settings and passes below 400.
 :::
+
+A failed check names what it got, as in `GET / answered 503 on all 5
+attempts`, and the deploy keeps the old container serving.
 
 ### Databases and caches deploy stop-then-start
 

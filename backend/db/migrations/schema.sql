@@ -553,6 +553,11 @@ CREATE TABLE IF NOT EXISTS services (
     health_check_path    TEXT        NOT NULL DEFAULT '/health',
     health_check_timeout INT         NOT NULL DEFAULT 5,
     health_check_retries INT         NOT NULL DEFAULT 0,
+    -- An answer below this status passes the health check (issue #12; 0084):
+    -- 500 for a new service (a 404 is an app that is up), 400 for one from
+    -- before, set by premigrate.sql (curl -f's rule, what it had).
+    health_check_pass_below SMALLINT NOT NULL DEFAULT 500
+                         CHECK (health_check_pass_below IN (400, 500)),
     required_env_vars    TEXT        NOT NULL DEFAULT '',
     migrate_command      TEXT        NOT NULL DEFAULT '',
     dependencies         TEXT        NOT NULL DEFAULT '[]',

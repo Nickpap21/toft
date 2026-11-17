@@ -119,6 +119,10 @@ type Docker struct {
 	clock      int64
 	StartErr   bool // fail every ContainerStart
 	ExitCode   int  // what ContainerWait reports
+	// RunOutput, when set, is the log of a container without Logs of its
+	// own (a probe's answer); Removed are the containers removed, in order.
+	RunOutput string
+	Removed   []*Container
 
 	// imageLabels are the labels of images by reference; an image not in
 	// it has none (every image exists).
@@ -703,6 +707,7 @@ func (f *Docker) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete && m[2] == "":
 			f.Ops = append(f.Ops, "remove "+c.Name)
+			f.Removed = append(f.Removed, c)
 			for i, x := range f.Containers {
 				if x == c {
 					f.Containers = append(f.Containers[:i], f.Containers[i+1:]...)
@@ -744,9 +749,13 @@ func (f *Docker) serveLogs(w http.ResponseWriter, r *http.Request, idOrName stri
 		return
 	}
 	if c.Logs == nil {
+		out := "ran " + c.Name + "\n"
+		if f.RunOutput != "" {
+			out = f.RunOutput
+		}
 		f.Mu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		frame("ran " + c.Name + "\n")
+		frame(out)
 		return
 	}
 	f.Mu.Unlock()
