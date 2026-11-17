@@ -59,7 +59,10 @@ Settings → Source offers two builders:
   `git`, and redeploying the same commit builds from Docker's cache.
 - **Nixpacks**: detects the language and builds it. You can replace the
   install, build and start commands it detects. Toft brings Nixpacks for the
-  panel's own server; on a server you add, Nixpacks must be installed.
+  panel's own server, where it runs in a sandbox: an unprivileged user with
+  an empty environment, seeing the build's own files and none of the
+  server's (the network stays reachable). On a server you add, Nixpacks
+  must be installed.
   There it runs in a sandbox that sees the build's own files and nothing
   else of the server, when the server is added with a root login and its
   Nixpacks is the static build (the `musl` release, which Nixpacks' install

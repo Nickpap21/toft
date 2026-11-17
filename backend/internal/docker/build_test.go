@@ -4,12 +4,17 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
@@ -152,6 +157,7 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 // config holds no login.
 func TestLocalBuildPullsWithTheServicesLogin(t *testing.T) {
 	dir := fakeDocker(t)
+	shellNixpacks(t)
 	nix := "#!/bin/sh\nenv >> " + dir + "/nixenv\n[ \"$1\" = plan ] && echo '{}'\n" +
 		"[ \"$1\" = build ] && mkdir \"$2/.nixpacks\" && echo 'FROM scratch' > \"$2/.nixpacks/Dockerfile\"\nexit 0\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(nix), 0o700))
@@ -221,6 +227,7 @@ func TestLocalBuildRefusesADockerfileLinkedOutOfTheTree(t *testing.T) {
 // it or leads nowhere.
 func TestLocalNixpacksIsKeptToTheTree(t *testing.T) {
 	dir := fakeDocker(t)
+	shellNixpacks(t)
 	script := "#!/bin/sh\necho \"$1\" >> " + dir + "/nixran\nenv >> " + dir + "/nixenv\n[ \"$1\" = plan ] && echo '{}'\n" +
 		"[ \"$1\" = build ] && mkdir \"$2/.nixpacks\" && echo 'FROM scratch' > \"$2/.nixpacks/Dockerfile\"\nexit 0\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(script), 0o700))
@@ -256,6 +263,7 @@ func TestLocalNixpacksIsKeptToTheTree(t *testing.T) {
 // repository.
 func TestLocalNixpacksWritesAndReadsInItsFolderOnly(t *testing.T) {
 	dir := fakeDocker(t)
+	shellNixpacks(t)
 	script := "#!/bin/sh\necho \"$1\" >> " + dir + "/nixran\n[ \"$1\" = plan ] && cat " + dir + "/plan\n" +
 		"[ \"$1\" = build ] && mkdir \"$2/.nixpacks\" && echo 'FROM scratch' > \"$2/.nixpacks/Dockerfile\"\nexit 0\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(script), 0o700))
@@ -279,6 +287,230 @@ func TestLocalNixpacksWritesAndReadsInItsFolderOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "plan\nplan\n", string(ran), "the Dockerfile and the plan's files were never written")
 }
+
+// shellNixpacks runs the test's nixpacks, a shell script, as the backend:
+// nixpacks' sandbox has no /bin/sh. TestLocalNixpacksRunsInItsSandbox
+// covers the sandbox.
+func shellNixpacks(t *testing.T) {
+	was := nixpacksSandboxed
+	nixpacksSandboxed = false
+	t.Cleanup(func() { nixpacksSandboxed = was })
+}
+
+// On the panel's host the backend is root, and nixpacks runs as
+// toft-sandbox (65532) in a root of its own: no capabilities, no environment, nothing of the host
+// but its own binary and the build's folder, and no way back out. The fake
+// nixpacks is a static Go program that tries each of these and says what
+// it found, and leaves a child running that tries to climb out once its
+// folder is handed back; a process of another user's, nobody's, outlives
+// the sandbox. It needs root on Linux, in a container of its own: the
+// sandbox kills every process of 65532's, and on a host some of those can
+// be other containers' (distroless images' nonroot). make test-linux and
+// CI's step set TOFT_TEST_SANDBOX for it.
+func TestLocalNixpacksRunsInItsSandbox(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Geteuid() != 0 || os.Getenv("TOFT_TEST_SANDBOX") != "1" {
+		t.Skip("needs root on Linux, in a container: make test-linux")
+	}
+	dir := fakeDocker(t)
+	other := filepath.Join(t.TempDir(), "paas-build-other")
+	require.NoError(t, os.MkdirAll(other, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(other, "secret"), []byte("another deploy's"), 0o644))
+	src := filepath.Join(t.TempDir(), "main.go")
+	require.NoError(t, os.WriteFile(src, []byte(strings.ReplaceAll(sandboxProbe, "OTHER", other)), 0o644))
+	gobuild := exec.Command("go", "build", "-o", filepath.Join(dir, "nixpacks"), src)
+	gobuild.Env = append(os.Environ(), "CGO_ENABLED=0")
+	out, err := gobuild.CombinedOutput()
+	require.NoError(t, err, string(out))
+	t.Setenv("JWT_SECRET", "the backend's")
+	const escaped = "/tmp/toft-sandbox-escaped"
+	require.NoError(t, os.RemoveAll(escaped))
+	bystander := exec.Command("sleep", "60")
+	bystander.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
+	require.NoError(t, bystander.Start())
+	t.Cleanup(func() { _ = bystander.Process.Kill(); _ = bystander.Wait() })
+
+	got := map[string]string{}
+	linger := 0
+	err = (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, map[string]string{"Procfile": "package.json"}),
+		"", testImageTag, &deployment.NixpacksCommands{}, nil, nil, func(l string) {
+			if k, v, ok := strings.Cut(strings.TrimPrefix(l, "sandbox "), ": "); ok && strings.HasPrefix(l, "sandbox ") {
+				got[k] = v
+			}
+			if p, ok := strings.CutPrefix(l, "linger pid: "); ok {
+				linger, _ = strconv.Atoi(p)
+			}
+		})
+	require.NoError(t, err)
+	const gone = "no such file or directory"
+	assert.Equal(t, map[string]string{
+		"ids":              "65532 65532 65532 65532 []",
+		"capabilities":     "[0 0 0 0 0 0]",
+		"environment":      "[]",
+		"root":             "[nixpacks tmp]",
+		"/etc/passwd":      gone,
+		"/proc/self":       gone,
+		"/dev/null":        gone,
+		"/var/run":         gone,
+		other:              gone,
+		"linger":           "ok",
+		"fds":              "0",
+		"chroot":           "operation not permitted",
+		"setuid 0":         "operation not permitted",
+		"climb, /etc":      gone,
+		"write beside dir": "permission denied",
+		"a link in dir":    "{}",
+	}, got)
+	// The one left running was killed before its folder left the sandbox,
+	// so it never got out.
+	require.NotZero(t, linger)
+	time.Sleep(200 * time.Millisecond)
+	if status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", linger)); err == nil {
+		assert.Regexp(t, `(?m)^State:\s+Z`, string(status), "nixpacks' child is still running")
+		assert.Regexp(t, `(?m)^Threads:\s+1$`, string(status), "a thread of nixpacks' child is still running")
+	}
+	assert.NoFileExists(t, escaped, "nixpacks' child climbed out of the sandbox")
+	status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", bystander.Process.Pid))
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^State:\s+S`, string(status), "the sandbox killed a process of another user's")
+	files, err := os.ReadFile(filepath.Join(dir, "context"))
+	require.NoError(t, err)
+	assert.Equal(t, "./.nixpacks/Dockerfile\n./package.json\n", string(files), "the build got its folder back, with nixpacks' Dockerfile")
+	left, err := filepath.Glob(filepath.Join(os.TempDir(), "paas-nix-*"))
+	require.NoError(t, err)
+	assert.Empty(t, left, "the sandbox's root is removed")
+}
+
+// sandboxProbe is TestLocalNixpacksRunsInItsSandbox's nixpacks. OTHER is
+// another build's folder.
+const sandboxProbe = `package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"syscall"
+	"time"
+	"unsafe"
+)
+
+// linger is the child nixpacks leaves running. From its folder, wherever
+// that is moved, it climbs, and outside the sandbox leaves
+// /tmp/toft-sandbox-escaped. The folder is its own while it runs: open to
+// all, it stays open once handed back to root. Its first thread exits
+// alone, which shows the process as a zombie while the climbing thread
+// runs on; it writes "z" to its output first.
+func init() {
+	if len(os.Args) < 2 || os.Args[1] != "linger" {
+		return
+	}
+	_ = os.Chmod(".", 0o777)
+	here, err := os.Open(".")
+	if err != nil {
+		return
+	}
+	go func() {
+		for {
+			_ = here.Chdir()
+			for i := 0; i < 40; i++ {
+				_ = os.Chdir("..")
+			}
+			if _, err := os.Lstat("etc/passwd"); err == nil {
+				_ = os.WriteFile("tmp/toft-sandbox-escaped", []byte("x"), 0o644)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	_, _ = os.Stdout.WriteString("z")
+	syscall.RawSyscall(syscall.SYS_EXIT, 0, 0, 0)
+}
+
+func main() {
+	if os.Args[1] == "plan" {
+		fmt.Println("{}")
+		return
+	}
+	dir := os.Args[2]
+	say := func(k string, v any) { fmt.Printf("sandbox %s: %v\n", k, v) }
+	why := func(err error) string {
+		if pe, ok := err.(*os.PathError); ok {
+			err = pe.Err
+		}
+		if err == nil {
+			return "ok"
+		}
+		return err.Error()
+	}
+	groups, _ := os.Getgroups()
+	say("ids", fmt.Sprint(os.Getuid(), os.Geteuid(), os.Getgid(), os.Getegid(), groups))
+	// capget, version 3: effective, permitted and inheritable, two words each.
+	hdr := [2]uint32{0x20080522, 0}
+	var caps [6]uint32
+	if _, _, e := syscall.RawSyscall(syscall.SYS_CAPGET, uintptr(unsafe.Pointer(&hdr)), uintptr(unsafe.Pointer(&caps)), 0); e != 0 {
+		say("capabilities", e.Error())
+	} else {
+		say("capabilities", caps)
+	}
+	say("environment", os.Environ())
+	entries, _ := os.ReadDir("/")
+	names := []string{}
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	say("root", names)
+	for _, p := range []string{"/etc/passwd", "/proc/self", "/dev/null", "/var/run", "OTHER"} {
+		_, err := os.Lstat(p)
+		say(p, why(err))
+	}
+	fds := 0
+	for fd := 3; fd < 256; fd++ {
+		var st syscall.Stat_t
+		if syscall.Fstat(fd, &st) == nil {
+			fds++
+		}
+	}
+	say("fds", fds)
+	// One left running, in a session of its own, with no output to wait for:
+	// its stdio is a removed file (Go's runtime wants fds 0 to 2, and there
+	// is no /dev/null).
+	out, err := os.Create(filepath.Join(dir, "linger-out"))
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Remove(out.Name())
+	fd := out.Fd()
+	pid, err := syscall.ForkExec("/nixpacks", []string{"/nixpacks", "linger"}, &syscall.ProcAttr{Dir: dir, Files: []uintptr{fd, fd, fd}, Sys: &syscall.SysProcAttr{Setsid: true}})
+	say("linger", why(err))
+	fmt.Printf("linger pid: %d\n", pid)
+	// Until its first thread has gone.
+	for i := 0; i < 200; i++ {
+		if n, _ := out.ReadAt(make([]byte, 1), 0); n == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	say("chroot", why(syscall.Chroot(".")))
+	say("setuid 0", why(syscall.Setuid(0)))
+	for i := 0; i < 20; i++ {
+		_ = os.Chdir("..")
+	}
+	_, err = os.Lstat("etc/passwd")
+	say("climb, /etc", why(err))
+	say("write beside dir", why(os.WriteFile(filepath.Join(dir, "..", "escape"), []byte("x"), 0o644)))
+	if b, err := os.ReadFile(filepath.Join(dir, "Procfile")); err == nil {
+		say("a link in dir", string(b))
+	} else {
+		say("a link in dir", why(err))
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".nixpacks"), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".nixpacks", "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		panic(err)
+	}
+}
+`
 
 // A command's output reaches the deployment log while the command runs:
 // this one waits, after its first line, for the test to have read it.

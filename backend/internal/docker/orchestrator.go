@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -855,10 +857,28 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 	if err != nil {
 		return err
 	}
-	// nixpacks gets the clean environment the build does, none of the
-	// backend's own.
-	planCmd := exec.CommandContext(ctx, "nixpacks", append([]string{"plan", dir}, flags...)...)
-	planCmd.Env = localComposeEnv(nil)
+	nix := func(ctx context.Context, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "nixpacks", args...)
+		// nixpacks gets the clean environment the build does, none of the
+		// backend's own.
+		cmd.Env = localComposeEnv(nil)
+		return cmd
+	}
+	undo := func() error { return nil }
+	if nixpacksSandboxed {
+		if nix, undo, err = nixpacksJail(dir); err != nil {
+			return fmt.Errorf("nixpacks' sandbox: %w", err)
+		}
+		defer func() {
+			if err := undo(); err != nil {
+				logFn("Nixpacks' sandbox wasn't cleared: " + err.Error())
+			}
+		}()
+	} else {
+		logFn("Nixpacks runs as the backend here, not in a sandbox: that takes the backend running as root, as in Toft's image.")
+	}
+	planCmd := nix(ctx, append([]string{"plan", dir}, flags...)...)
+	planCmd.WaitDelay = 30 * time.Second // as write's, below
 	plan, err := planCmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
@@ -871,13 +891,177 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 	if err != nil {
 		return err
 	}
-	write := exec.CommandContext(ctx, "nixpacks", append([]string{"build", dir, "--out", dir, "--cache-key", serviceID}, flags...)...)
-	write.Env = localComposeEnv(nil)
+	write := nix(ctx, append([]string{"build", dir, "--out", dir, "--cache-key", serviceID}, flags...)...)
 	write.WaitDelay = 30 * time.Second // a child that keeps the output open doesn't keep the deploy
 	if err := runStream(write, logFn); err != nil {
 		return fmt.Errorf("nixpacks build: %w", err)
 	}
+	if err := undo(); err != nil {
+		return fmt.Errorf("nixpacks' sandbox: %w", err)
+	}
 	return localBuild(ctx, dir, ".nixpacks/Dockerfile", imageTag, vars, auth, logFn)
+}
+
+// nixpacksSandboxed is whether localNixpacks runs nixpacks in nixpacksJail:
+// when the backend is root, as in Toft's image. A test whose fake nixpacks
+// is a shell script turns it off: the sandbox has no /bin/sh.
+var nixpacksSandboxed = os.Geteuid() == 0
+
+// sandboxUser is the user and group nixpacks runs as in its sandbox:
+// toft-sandbox, Toft's image's, which nothing else runs as. The sandbox kills
+// every process of its, so it must stay that user's alone.
+const sandboxUser = 65532
+
+// nixpacksJail is nixpacks' sandbox on the panel's host, the local twin of
+// nixpacksSandbox: a new root directory that holds a copy of the nixpacks
+// binary and dir, moved in at its own path and handed to sandboxUser.
+// nix's commands run chrooted there, as sandboxUser, so with no
+// capabilities and no other group, and with an empty environment. They see
+// no /proc, /dev or /etc, no Docker socket, no other build's folder, none
+// of the backend's variables. The network stays: taking it away needs namespaces, which
+// need SYS_ADMIN, which the backend doesn't hold. nixpacks must be the
+// static build, Toft's image's, as on a server.
+//
+// undo first kills every process of sandboxUser's: one nixpacks left running
+// (in a session of its own, past the command's kill) would otherwise sit
+// in dir as it moves out of the root, and climb out from there. Then it
+// hands dir back to root at its own path and removes the rest; with a
+// process it couldn't kill, it removes dir too. It can run more than once.
+// The sandbox kills them before it starts as well, and won't start beside
+// one. Killing by user is why one sandbox runs at a time: jailMu, from here
+// to undo. The processes it kills are orphans, which the container's init
+// reaps (docker-compose.yml's init: true).
+func nixpacksJail(dir string) (nix func(ctx context.Context, args ...string) *exec.Cmd, undo func() error, err error) {
+	bin, err := exec.LookPath("nixpacks")
+	if err != nil {
+		return nil, nil, err
+	}
+	jailMu.Lock()
+	// One that outlived an earlier sandbox's undo would share this one's user.
+	if err := killSandboxed(); err != nil {
+		jailMu.Unlock()
+		return nil, nil, err
+	}
+	root, err := os.MkdirTemp("", "paas-nix-*")
+	if err != nil {
+		jailMu.Unlock()
+		return nil, nil, err
+	}
+	jailed := filepath.Join(root, dir)
+	undone := false
+	undo = func() error {
+		if undone {
+			return nil
+		}
+		undone = true
+		defer jailMu.Unlock()
+		if err := killSandboxed(); err != nil {
+			return errors.Join(err, os.RemoveAll(root))
+		}
+		var errs []error
+		if _, err := os.Lstat(jailed); err == nil {
+			errs = append(errs, chownTree(jailed, 0), os.Rename(jailed, dir))
+		}
+		return errors.Join(append(errs, os.RemoveAll(root))...)
+	}
+	for _, step := range []func() error{
+		func() error { return os.Chmod(root, 0o755) },
+		func() error { return copyFile(bin, filepath.Join(root, "nixpacks"), 0o555) },
+		func() error { return os.MkdirAll(filepath.Dir(jailed), 0o755) },
+		func() error { return os.Rename(dir, jailed) },
+		// Handed to sandboxUser, a file loses any setuid bit it came with.
+		func() error { return chownTree(jailed, sandboxUser) },
+	} {
+		if err := step(); err != nil {
+			return nil, nil, errors.Join(err, undo())
+		}
+	}
+	nix = func(ctx context.Context, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "/nixpacks", args...)
+		cmd.Dir = dir
+		cmd.Env = []string{}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Chroot: root, Credential: &syscall.Credential{Uid: sandboxUser, Gid: sandboxUser}}
+		return cmd
+	}
+	return nix, undo, nil
+}
+
+// jailMu keeps nixpacksJail to one sandbox at a time.
+var jailMu sync.Mutex
+
+// chownTree gives dir and everything in it, links themselves rather than
+// what they lead to, to the user and group id. It goes through an os.Root:
+// a folder swapped for a link while it walks can't take it out of dir.
+func chownTree(dir string, id int) error {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	return fs.WalkDir(r.FS(), ".", func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return r.Lchown(p, id, id)
+	})
+}
+
+// killSandboxed SIGKILLs every live process of sandboxUser's until a look
+// through /proc finds none, for up to 5 seconds.
+func killSandboxed() error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pids, err := sandboxedPids()
+		if err != nil || len(pids) == 0 {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%d processes of nixpacks' user outlived SIGKILL", len(pids))
+		}
+		for _, pid := range pids {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// sandboxedPids are the live processes with any of their user ids
+// sandboxUser's. A zombie is dead only with no thread left but its own: a
+// process whose first thread exited alone shows as a zombie while the
+// others run.
+func sandboxedPids() ([]int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	var pids []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		status, err := os.ReadFile(filepath.Join("/proc", e.Name(), "status"))
+		if err != nil {
+			continue // gone since the listing
+		}
+		zombie, threads, ours := false, "", false
+		for line := range strings.Lines(string(status)) {
+			k, v, _ := strings.Cut(line, ":")
+			v = strings.TrimSpace(v)
+			switch k {
+			case "State":
+				zombie = strings.HasPrefix(v, "Z") || strings.HasPrefix(v, "X")
+			case "Threads":
+				threads = v
+			case "Uid":
+				ours = slices.Contains(strings.Fields(v), strconv.Itoa(sandboxUser))
+			}
+		}
+		if ours && !(zombie && threads == "1") {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
 }
 
 // ─── Build-arg helpers ────────────────────────────────────────────────────────

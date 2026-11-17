@@ -6,6 +6,33 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.1.2 (2026-11-17)
+
+Nixpacks on the panel's own server runs in a sandbox. No migration: a
+failed upgrade starts 1.1.1 again without restoring the database. Upgrade
+from 1.1.1.
+
+### Security
+
+- **Nixpacks on the panel's server sees the build's files only.** It ran
+  as the backend: root, with the backend's environment (its database
+  address and secrets among it), the panel's files and the Docker socket
+  within reach of anything that misled it through a repository. It now
+  runs as `toft-sandbox` (uid 65532), a user of its own that nothing else
+  in Toft's image runs as, with no capabilities, an empty environment, and
+  a root that holds only its own binary and the build's folder. Anything
+  it leaves running is killed before the folder leaves the sandbox (only
+  that user's processes), and a Nixpacks build that can't set the sandbox
+  up fails. The backend's container now has an init (`init: true` in
+  `docker-compose.yml`, which `toft upgrade` applies by recreating it) to
+  reap what is killed; without it, those stayed as zombies.
+  Nixpacks builds take turns at that step (the image build after it still
+  runs side by side). Unlike the sandbox on a server you add, this one
+  leaves the network as it is: taking it away would take a capability the
+  backend doesn't hold. Run outside
+  Toft's image as a user other than root, Nixpacks runs as before and the
+  deploy log says so.
+
 ## 1.1.1 (2026-11-17)
 
 A deploy policy fix: a compose volume could mount the server's own disk.

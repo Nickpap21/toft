@@ -184,3 +184,24 @@ func TestPanelContainersLogsAreCapped(t *testing.T) {
 		}
 	}
 }
+
+// The backend runs with an init as pid 1, which reaps the processes
+// Nixpacks' sandbox kills (internal/docker nixpacksJail): the server reaps
+// only its own children.
+func TestPanelBackendHasAnInit(t *testing.T) {
+	b, err := os.ReadFile("../../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Services map[string]struct {
+			Init bool `yaml:"init"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	if !f.Services["backend"].Init {
+		t.Error("docker-compose.yml: the backend has no init: true")
+	}
+}

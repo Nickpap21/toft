@@ -45,6 +45,16 @@ jobs:
         run: make -C .. test-db
       - name: test
         run: go test -race ./...
+      # The runner isn't root, so the step above skips this test. A skip here
+      # fails: only a pass is accepted. As root in a container (the release
+      # builder's image, backend/Dockerfile): the sandbox kills every process
+      # of uid 65532's, which on the runner itself could be other containers'.
+      - name: Nixpacks' sandbox on the panel's host (as root)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -v "$(go env GOMODCACHE):/go/pkg/mod:ro" -e GOPROXY=off -e TOFT_TEST_SANDBOX=1 \
+            golang:1.26-alpine@sha256:30b1e546a9c7fa3b747c2bdba3a0c7bdf3a02ebb4c5b8405d2f948d7e8aac4ec \
+            go test -run '^TestLocalNixpacksRunsInItsSandbox$' -v ./internal/docker/ | tee sandbox.log
+          grep -q -- '--- PASS: TestLocalNixpacksRunsInItsSandbox' sandbox.log
       - name: govulncheck (reachable advisories not in backend/.govulnignore fail)
         run: ../scripts/govulncheck.sh
       - name: Docker advisories (one moby published that backend/internal/advisory/known.go lacks fails)

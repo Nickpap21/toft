@@ -232,7 +232,7 @@ test: ## Run all Go tests
 
 test-linux: test-db ## The backend tests as CI runs them, on Linux in Docker (some read /proc and the shell); run before a tag
 	docker run --rm -v "$(CURDIR)":/src -w /src/backend -v toft-gomod:/go/pkg/mod -v toft-gocache:/root/.cache/go-build \
-		--network container:$(TEST_DB) -e TOFT_TEST_DATABASE_URL='$(TEST_DB_URL_IN)' \
+		--network container:$(TEST_DB) -e TOFT_TEST_DATABASE_URL='$(TEST_DB_URL_IN)' -e TOFT_TEST_SANDBOX=1 \
 		golang:$$(sed -n 's/^go //p' backend/go.mod) go test -race ./...
 
 # The Postgres-backed tests' server (internal/testdb): the image docker-compose.yml
