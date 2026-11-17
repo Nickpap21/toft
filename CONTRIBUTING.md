@@ -12,6 +12,12 @@ For anything larger than a small fix, open an issue first and say what you
 plan to change. That saves you work if the change goes in a different
 direction from the roadmap.
 
+New here? Issues labelled
+[good first issue](https://github.com/Nickpap21/toft/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+are small and self-contained. Comment on one to say you're taking it, so
+two people don't do the same work, then open a pull request that says
+`Closes #<number>`.
+
 ## Running Toft locally
 
 You need Docker, Go (the version in `backend/go.mod`), Node.js 26 and `make`.
