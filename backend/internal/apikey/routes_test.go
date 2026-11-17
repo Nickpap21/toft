@@ -10,6 +10,7 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/envvar"
 	"github.com/Nickpap21/toft/backend/internal/issue"
 	"github.com/Nickpap21/toft/backend/internal/preview"
+	"github.com/Nickpap21/toft/backend/internal/project"
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,7 @@ func TestScopedRoutesExist(t *testing.T) {
 	issue.NewHandler(nil, nil, log).RegisterRoutes(v1)
 	doc.NewHandler(nil, nil, nil, log).RegisterRoutes(v1)
 	preview.NewHandler(nil, nil, nil, log).RegisterRoutes(v1)
+	project.NewHandler(nil, nil, log).RegisterRoutes(v1)
 
 	real := map[string]bool{}
 	for _, rt := range r.Routes() {

@@ -3630,7 +3630,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The workspace's projects */
+        /**
+         * The workspace's projects
+         * @description Every member. A project key with deploy gets its own project alone; an agent, the projects its connection reaches.
+         */
         get: operations["getProjects"];
         put?: never;
         /**
@@ -4440,7 +4443,7 @@ export interface paths {
         };
         /**
          * Follow the container's logs
-         * @description Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can't be connected to; any other names no cause.
+         * @description Every member, and a project key with deploy that reaches the service; agents can't (following live logs isn't an agent policy action yet). Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can't be connected to; any other names no cause.
          */
         get: operations["getServicesServiceidLogsLive"];
         put?: never;
@@ -4800,7 +4803,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every service in the workspace, with its project, environment and state */
+        /**
+         * Every service in the workspace, with its project, environment and state
+         * @description Every member. A project key with deploy gets its project's services alone (those it names, if it names some); an agent, those of the projects its connection reaches.
+         */
         get: operations["getWorkspaceServices"];
         put?: never;
         post?: never;

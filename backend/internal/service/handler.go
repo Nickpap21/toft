@@ -1357,6 +1357,14 @@ func (h *Handler) handleListWorkspace(c *gin.Context) {
 	if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
 		services = slices.DeleteFunc(services, func(s WorkspaceService) bool { return !slices.Contains(a.ProjectIDs, s.ProjectID) })
 	}
+	// A project key, its project's services, or those it is limited to (K5;
+	// issue #11).
+	if keyProject, _, ok := middleware.APIKeyScopeFrom(c); ok {
+		limited := middleware.APIKeyServicesFrom(c)
+		services = slices.DeleteFunc(services, func(s WorkspaceService) bool {
+			return s.ProjectID != keyProject || len(limited) > 0 && !slices.Contains(limited, s.ID)
+		})
+	}
 	respond.JSON(c, http.StatusOK, services)
 }
 

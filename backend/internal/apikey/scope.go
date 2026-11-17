@@ -14,10 +14,14 @@ import (
 // route pattern, with the scope it needs. Deny by default: a route that is
 // not here is refused, so a new route stays closed to scoped keys until it is
 // added. Every route here names a :serviceID, an :environmentID or a
-// :projectID, which EnforceScopes checks is in the key's project; the
-// handlers then check that a :deploymentID belongs to that service and a
-// :repositoryID to that project.
+// :projectID, which EnforceScopes checks is in the key's project, or is one
+// of keyLists; the handlers then check that a :deploymentID belongs to that
+// service and a :repositoryID to that project.
 var routeScopes = map[string]string{
+	// The CLI's names and toft logs (issue #11).
+	"GET /api/v1/projects":                                                  ScopeDeploy,
+	"GET /api/v1/workspace/services":                                        ScopeDeploy,
+	"GET /api/v1/services/:serviceID/logs/live":                             ScopeDeploy,
 	"GET /api/v1/services/:serviceID":                                       ScopeDeploy,
 	"GET /api/v1/services/:serviceID/domains":                               ScopeDeploy,
 	"POST /api/v1/services/:serviceID/deployments":                          ScopeDeploy,
@@ -119,6 +123,14 @@ type ProjectResolver interface {
 	EnvironmentProject(ctx context.Context, environmentID string) (string, error)
 }
 
+// keyLists are the workspace's lists a scoped key reaches: they name no
+// project, and their handlers narrow them to the key's project, and to its
+// services for a key limited to some (K5).
+var keyLists = map[string]bool{
+	"GET /api/v1/projects":           true,
+	"GET /api/v1/workspace/services": true,
+}
+
 const scopeRefused = "this API key is limited to its scopes in one project"
 
 const servicesRefused = "this API key is limited to some services of its project"
@@ -138,7 +150,8 @@ func EnforceScopes(projects ProjectResolver) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		need, listed := routeScopes[c.Request.Method+" "+c.FullPath()]
+		route := c.Request.Method + " " + c.FullPath()
+		need, listed := routeScopes[route]
 		// code_write is code_read and push; code keys read checks too.
 		code := slices.Contains(scopes, ScopeCodeRead) || slices.Contains(scopes, ScopeCodeWrite)
 		has := slices.Contains(scopes, need) || need == ScopeCodeRead && slices.Contains(scopes, ScopeCodeWrite) ||
@@ -152,10 +165,15 @@ func EnforceScopes(projects ProjectResolver) gin.HandlerFunc {
 		}
 		// A key limited to services (K5) reaches only routes that name one
 		// of them: never an environment's variables (shared with other
-		// services), a preview or a project's routes.
-		if services := middleware.APIKeyServicesFrom(c); len(services) > 0 && !slices.Contains(services, c.Param("serviceID")) {
+		// services), a preview or a project's routes; keyLists' handlers
+		// narrow to its services.
+		if services := middleware.APIKeyServicesFrom(c); len(services) > 0 && !keyLists[route] && !slices.Contains(services, c.Param("serviceID")) {
 			respond.ErrorData(c, http.StatusForbidden, servicesRefused, gin.H{"code": "insufficient_scope"})
 			c.Abort()
+			return
+		}
+		if keyLists[route] {
+			c.Next()
 			return
 		}
 
@@ -247,7 +265,9 @@ func AgentScopeFor(method, path string) (scope string, ok bool) {
 	if agentWorkspaceReads[route] {
 		return AgentScopeRead, true
 	}
-	if method != http.MethodGet {
+	// A deploy key's live output isn't an agent's read: following a
+	// service's runtime logs waits for an agent policy action of its own.
+	if method != http.MethodGet || route == "GET /api/v1/services/:serviceID/logs/live" {
 		return "", false
 	}
 	switch routeScopes[route] {

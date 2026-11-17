@@ -48,8 +48,8 @@ after the service.
 - `project/environment/name`, such as `storefront/production/api`;
 - `project/name` for a service shared by the whole project.
 
-The name forms look the service up by name, which needs a full-account key.
-With a one-project key, use the service's ID.
+A one-project key finds the services it reaches by name: its own
+project's, or only those it names.
 
 ### Exit codes
 
@@ -99,7 +99,7 @@ Without `--follow`, it stops once no new line has arrived for a second and a
 half. Viewers of one container's live log, in the CLI or the panel, share one
 stream.
 
-`logs` needs a full-account key: a one-project key can't read live logs.
+`logs` works with a full-account key, or a one-project key with `deploy`.
 
 ### rollback
 
@@ -170,7 +170,7 @@ A one-project key needs one or more of these:
 
 | Scope | Label in the panel | Allows |
 | --- | --- | --- |
-| `deploy` | Deploy, follow and roll back | Deploys, rollbacks and their logs. |
+| `deploy` | Deploy, follow and roll back | Deploys, rollbacks and their logs, and a service's live logs. |
 | `variables` | Variables and secrets | Reading and setting variables, and setting secrets. |
 | `code_read` | Clone and fetch its code | Cloning and fetching the project's repositories. |
 | `code_write` | Push to its code | Pushing too; includes `code_read`. |

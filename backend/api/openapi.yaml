@@ -25,7 +25,9 @@ info:
       (`issues_read`, or `issues_write`, which includes it) and docs
       (`docs_read`, or `docs_write`, which includes it). A project key may
       also name some of the project's services: it then deploys and sets
-      variables on those services only. A key past its `expires_at` gets
+      variables on those services only. With `deploy`, it also lists its
+      project and that project's services (those it names, if any), and
+      follows their live logs. A key past its `expires_at` gets
       `401 api_key_expired`.
       Keys can't do what needs a password.
 
@@ -7314,6 +7316,7 @@ paths:
       tags: [Projects]
       operationId: getProjects
       summary: The workspace's projects
+      description: "Every member. A project key with deploy gets its own project alone; an agent, the projects its connection reaches."
       responses:
         "200":
           content:
@@ -9044,7 +9047,7 @@ paths:
           $ref: '#/components/responses/Problem'
         default:
           $ref: '#/components/responses/Problem'
-      description: 'Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can''t be connected to; any other names no cause.'
+      description: 'Every member, and a project key with deploy that reaches the service; agents can''t (following live logs isn''t an agent policy action yet). Server-sent events: each `data:` line is one log line; the stream ends when the client leaves. Viewers of one container share one stream from the server (K11). A viewer that reads slower than the container writes gets an `error` event, `fell behind the log; reconnect`, and the stream ends. An `error` event starting `no_container:` means the service has no container, and one starting `server_unreachable:` that its server can''t be connected to; any other names no cause.'
       parameters:
         - description: Lines of history first, 100 by default.
           in: query
@@ -9781,6 +9784,7 @@ paths:
       tags: [Services]
       operationId: getWorkspaceServices
       summary: Every service in the workspace, with its project, environment and state
+      description: "Every member. A project key with deploy gets its project's services alone (those it names, if it names some); an agent, those of the projects its connection reaches."
       responses:
         "200":
           content:
