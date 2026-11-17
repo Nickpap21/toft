@@ -37,7 +37,7 @@ func TestRepeatedDeployReattachesOnlyWhileItsDeploymentIsInFlightInPostgres(t *t
 	}
 	admin := q(`INSERT INTO users (email, name, password_hash) VALUES ('admin@toft.test', 'Admin', 'x') RETURNING id::text`)
 	dev := q(`INSERT INTO users (email, name, password_hash) VALUES ('sam@toft.test', 'sam', 'x') RETURNING id::text`)
-	org := q(`INSERT INTO organizations (name) VALUES ('Velbee') RETURNING id::text`)
+	org := q(`INSERT INTO organizations (name) VALUES ('reattach') RETURNING id::text`)
 	exec(`INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'developer')`, org, admin, dev)
 	client := q(`INSERT INTO oauth_clients (client_id, kind, name, redirect_uris) VALUES ('c', 'dcr', 'Claude Code', '{http://localhost/cb}') RETURNING id::text`)
 	conn := q(`INSERT INTO agent_connections (org_id, user_id, client_id, name, all_projects, scopes, expires_at)
@@ -89,7 +89,7 @@ func TestRepeatedDeployReattachesOnlyWhileItsDeploymentIsInFlightInPostgres(t *t
 		t.Fatalf("re-attached to %s while its deployment is pending, want %s", again, first)
 	}
 
-	// The deployment finished (the Velbee report): the same call asks again.
+	// The deployment finished: the same call asks again.
 	exec(`UPDATE deployments SET status = 'running', finished_at = NOW() WHERE id = $1`, d)
 	second := deploy()
 	if second == first {

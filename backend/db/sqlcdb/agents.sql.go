@@ -300,9 +300,9 @@ type FindOpenAgentApprovalParams struct {
 
 // The same call again attaches to its request: waiting, or approved and run
 // within its window, so a call that dropped can read the result. A deploy's
-// run only while it is running or the deployment it started is pending,
-// queued or building (D-164): once that is over, or the run started none,
-// the same deploy is a new request.
+// only while its run has saved no result yet or the deployment it started
+// is pending, queued or building (D-164): once that is over, or the run
+// started none, the same deploy is a new request.
 func (q *Queries) FindOpenAgentApproval(ctx context.Context, arg FindOpenAgentApprovalParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, findOpenAgentApproval, arg.ConnectionID, arg.RequestHash)
 	var id pgtype.UUID

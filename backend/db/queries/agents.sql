@@ -233,9 +233,9 @@ WHERE sealed IS NOT NULL
 -- name: FindOpenAgentApproval :one
 -- The same call again attaches to its request: waiting, or approved and run
 -- within its window, so a call that dropped can read the result. A deploy's
--- run only while it is running or the deployment it started is pending,
--- queued or building (D-164): once that is over, or the run started none,
--- the same deploy is a new request.
+-- only while its run has saved no result yet or the deployment it started
+-- is pending, queued or building (D-164): once that is over, or the run
+-- started none, the same deploy is a new request.
 SELECT a.id FROM agent_approvals a
 LEFT JOIN deployments d ON d.id = a.deployment_id
 WHERE a.connection_id = $1 AND a.request_hash = $2 AND a.expires_at > NOW()
