@@ -124,7 +124,7 @@ export function rollbackKeptProblem(v: string): string {
 /** Why a container check can't be saved; "" when it can (service.validateContainerHealth). */
 export function containerCheckProblem(mode: string, command: string): string {
   if (mode !== "command") return "";
-  if (!command.trim()) return "The container check needs a command.";
+  if (!command.trim()) return "The command check needs a command.";
   return /[\r\n\0]/.test(command) ? "The container check command is one line." : "";
 }
 

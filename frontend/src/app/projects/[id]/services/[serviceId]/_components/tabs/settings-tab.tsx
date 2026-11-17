@@ -522,18 +522,25 @@ export function SettingsTab({
       ]
         .filter(Boolean)
         .join(" · ");
-  const healthShort = [
-    (service.health_check_retries ?? 0) > 0
-      ? `GET ${service.health_check_path || "/health"}`
-      : "Off",
-    service.container_health === "off"
-      ? "container check off"
-      : service.container_health === "command"
-        ? "container check command"
-        : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const httpOn = (service.health_check_retries ?? 0) > 0;
+  // A worker without HTTP names its one check (WorkerCheckField).
+  const healthShort =
+    !httpOn && service.type === "worker"
+      ? service.container_health === "command"
+        ? "Command"
+        : service.container_health === "off"
+          ? "None"
+          : "The image's"
+      : [
+          httpOn ? `GET ${service.health_check_path || "/health"}` : "Off",
+          service.container_health === "off"
+            ? "container check off"
+            : service.container_health === "command"
+              ? "container check command"
+              : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
   const namedVols = (service.volumes ?? []).filter(
     (v) => v.host_path === undefined,
   );
@@ -1195,14 +1202,25 @@ export function SettingsTab({
                 ) || undefined,
               )}
             >
-              <HealthCard
-                service={service}
-                serviceId={serviceId}
-                form={form}
-                set={set}
-                canEdit={canDeploy}
-                saved={saved}
-              />
+              {service.type === "worker" ? (
+                <WorkerCheckField
+                  service={service}
+                  serviceId={serviceId}
+                  form={form}
+                  set={set}
+                  canEdit={canDeploy}
+                  saved={saved}
+                />
+              ) : (
+                <HealthCard
+                  service={service}
+                  serviceId={serviceId}
+                  form={form}
+                  set={set}
+                  canEdit={canDeploy}
+                  saved={saved}
+                />
+              )}
             </Section>
           )}
 
@@ -2688,6 +2706,7 @@ function HealthCard({
   set,
   canEdit,
   saved,
+  worker = false,
 }: {
   service: Service;
   serviceId: string;
@@ -2695,14 +2714,19 @@ function HealthCard({
   set: (p: Partial<ConfigForm>) => void;
   canEdit: boolean;
   saved: ConfigForm;
+  /** WorkerCheckField's: no attempts of 0 (None is how a worker turns it
+   *  off), and a worker takes no traffic. */
+  worker?: boolean;
 }) {
   const last = service.last_health_check;
   const hhmm = (iso: string) => new Date(iso).toTimeString().slice(0, 5);
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13px] leading-5 text-fg/85">
-        Each deploy waits for this path to answer before the new version takes
-        traffic. While live it is checked every minute: a failure marks{" "}
+        {worker
+          ? "Each deploy waits for this path to answer before it finishes."
+          : "Each deploy waits for this path to answer before the new version takes traffic."}{" "}
+        While live it is checked every minute: a failure marks{" "}
         {service.name} unhealthy and alerts, without taking it offline.
         Requested from inside the container&apos;s network, so the image needs
         no curl.
@@ -2748,19 +2772,23 @@ function HealthCard({
         <Field
           id="set-hretries"
           labelText="Attempts"
-          hint="0 turns both checks off."
+          hint={worker ? "1 to 10." : "0 turns both checks off."}
         >
           <input
             id="set-hretries"
             type="number"
-            min={0}
+            min={worker ? 1 : 0}
             max={10}
             className={cn(input, "font-mono")}
             value={form.health_check_retries}
             disabled={!canEdit}
-            onChange={(e) =>
-              set({ health_check_retries: parseInt(e.target.value) || 0 })
-            }
+            onChange={(e) => {
+              const n = parseInt(e.target.value) || 0;
+              set({
+                health_check_retries:
+                  worker && n < 1 ? form.health_check_retries : n,
+              });
+            }}
           />
         </Field>
         <Field
@@ -2811,7 +2839,9 @@ function HealthCard({
       <p className="text-[13px] text-fg/85">
         {(service.health_check_retries ?? 0) === 0 ? (
           <span className="text-muted">
-            Off: no check at deploys or while live.
+            {form.health_check_retries > 0
+              ? "Off until you save and deploy."
+              : "Off: no check at deploys or while live."}
           </span>
         ) : last ? (
           <>
@@ -2926,6 +2956,127 @@ export function ContainerCheckField({
         </Field>
       )}
     </fieldset>
+  );
+}
+
+/** A worker's check: often nothing answers HTTP in it, so it picks one kind
+ *  first. HTTP is Toft's check (attempts above 0); the others are Docker's
+ *  container check, with Toft's off. */
+export function WorkerCheckField({
+  service,
+  serviceId,
+  form,
+  set,
+  canEdit,
+  saved,
+}: {
+  service: Service;
+  serviceId: string;
+  form: ConfigForm;
+  set: (p: Partial<ConfigForm>) => void;
+  canEdit: boolean;
+  saved: ConfigForm;
+}) {
+  const kind =
+    form.health_check_retries > 0
+      ? "http"
+      : form.container_health === "off"
+        ? "none"
+        : form.container_health;
+  const pick = (k: typeof kind) =>
+    set(
+      k === "http"
+        ? {
+            health_check_retries: saved.health_check_retries || 5,
+            container_health: saved.container_health,
+          }
+        : {
+            health_check_retries: 0,
+            container_health: k === "none" ? "off" : k,
+          },
+    );
+  return (
+    <div className="flex flex-col gap-4">
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className={cn(label, "mb-1.5")}>Check</legend>
+        <div
+          role="radiogroup"
+          className="grid grid-cols-2 gap-0.5 self-start rounded-lg border border-subtle bg-ground p-0.5 sm:inline-flex"
+        >
+          {(
+            [
+              ["image", "The image's"],
+              ["command", "Command"],
+              ["http", "HTTP"],
+              ["none", "None"],
+            ] as const
+          ).map(([v, l]) => (
+            <label
+              key={v}
+              className={cn(
+                "inline-flex h-8 cursor-pointer items-center gap-2 rounded-md px-2.5 text-[13px] pointer-coarse:min-h-11 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60",
+                kind === v ? "bg-raised text-fg" : "text-muted hover:text-fg",
+              )}
+            >
+              <input
+                type="radio"
+                name="worker-check"
+                value={v}
+                checked={kind === v}
+                disabled={!canEdit}
+                onChange={() => pick(v)}
+                className="h-3.5 w-3.5 accent-[var(--link)]"
+              />
+              {l}
+            </label>
+          ))}
+        </div>
+        {kind === "http" && form.port <= 0 && (
+          <p className={help}>
+            Needs the port {service.name} answers on: set it under Domains.
+          </p>
+        )}
+        {kind !== "http" && (
+          <p className={help}>
+            {kind === "command"
+              ? `Docker runs this in ${service.name}'s containers with /bin/sh, at the image's interval and retries (every 30 s, 3 tries, if it sets none); exit 0 is healthy.`
+              : kind === "image"
+                ? `Docker runs the image's HEALTHCHECK, if it has one, and ${service.name} shows unhealthy while it fails. A worker built from a web service's Dockerfile inherits that service's.`
+                : `Toft checks nothing at deploys or while live, and Docker runs no check in ${service.name}'s containers, whatever the image says.`}{" "}
+            Applies from the next deploy.
+          </p>
+        )}
+      </fieldset>
+      {kind === "command" && (
+        <Field
+          id="set-wcheck"
+          labelText="Command"
+          hint="One line, run by the container's shell."
+        >
+          <input
+            id="set-wcheck"
+            className={cn(input, "font-mono")}
+            aria-invalid={!form.container_health_command.trim() || undefined}
+            value={form.container_health_command}
+            maxLength={1024}
+            disabled={!canEdit}
+            onChange={(e) => set({ container_health_command: e.target.value })}
+            spellCheck={false}
+          />
+        </Field>
+      )}
+      {kind === "http" && (
+        <HealthCard
+          service={service}
+          serviceId={serviceId}
+          form={form}
+          set={set}
+          canEdit={canEdit}
+          saved={saved}
+          worker
+        />
+      )}
+    </div>
   );
 }
 
