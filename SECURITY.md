@@ -33,7 +33,8 @@ A proof of concept helps, but a clear description is enough.
 
 ## Supported versions
 
-Until v1.0, only the latest release gets security fixes. Upgrade from
+Security fixes go into the latest minor release, as a new
+patch release. Older minor releases get none: upgrade to the latest from
 Instance → Overview in the panel, or with `toft upgrade --to <version>`.
 
 ## In scope
