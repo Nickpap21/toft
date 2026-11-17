@@ -37,10 +37,10 @@ func TestFailureReason(t *testing.T) {
 			"Cloning into 'x'...\nerror: first\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
 			"could not read Username for 'https://github.com': terminal prompts disabled",
 		},
-		"no fatal: last line, progress split on CR": {"Cloning into 'x'...\rReceiving objects: 10%\rReceiving objects: 20%", "Receiving objects: 20%"},
-		"nothing":                       {"", ""},
-		"user:token in the URL":         {"fatal: unable to access 'https://bot:ghp_secret@github.com/a/b.git/': 403", "unable to access 'https://github.com/a/b.git/': 403"},
-		"token only, ssh, odd password": {"fatal: ssh://git:p@ss@host.example/a/b.git not found", "ssh://host.example/a/b.git not found"},
+		"no fatal: none, not a progress line": {"Cloning into 'x'...\rReceiving objects: 10%\rReceiving objects: 20%", ""},
+		"nothing":                             {"", ""},
+		"user:token in the URL":               {"fatal: unable to access 'https://bot:ghp_secret@github.com/a/b.git/': 403", "unable to access 'https://github.com/a/b.git/': 403"},
+		"token only, ssh, odd password":       {"fatal: ssh://git:p@ss@host.example/a/b.git not found", "ssh://host.example/a/b.git not found"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := Reason([]byte(tc.out))
