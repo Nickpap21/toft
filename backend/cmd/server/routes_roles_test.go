@@ -749,6 +749,7 @@ func (ownedServices) GetByID(_ context.Context, id string) (*service.Service, er
 func (ownedServices) PidsLimit(context.Context, string) (int, error)          { return 0, nil }
 func (ownedServices) DeployTimeout(context.Context, string) (int, error)      { return 0, nil }
 func (ownedServices) RollbackImagesKept(context.Context, string) (int, error) { return 0, nil }
+func (ownedServices) HealthPassBelow(context.Context, string) (int, error)    { return 500, nil }
 func (ownedServices) ContainerHealth(context.Context, string) (string, string, error) {
 	return service.ContainerHealthImage, "", nil
 }

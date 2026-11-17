@@ -406,7 +406,10 @@ func (r *PostgresRepository) Create(ctx context.Context, environmentID string, i
 	if healthCheckTimeout == 0 {
 		healthCheckTimeout = 5
 	}
-	healthCheckRetries := input.HealthCheckRetries
+	healthCheckRetries := 0
+	if input.HealthCheckRetries != nil {
+		healthCheckRetries = *input.HealthCheckRetries
+	}
 
 	var parsedServerID pgtype.UUID
 	if input.ServerID != "" {
@@ -476,7 +479,7 @@ func (r *PostgresRepository) Create(ctx context.Context, environmentID string, i
 		return nil, fmt.Errorf("Create service: commit: %w", err)
 	}
 
-	return r.GetByID(ctx, uuidString(newID))
+	return r.created(ctx, uuidString(newID))
 }
 
 func (r *PostgresRepository) RuntimeStatuses(ctx context.Context, serviceID string, ids []string) (map[string]ServiceStatus, error) {
@@ -638,6 +641,19 @@ func (r *PostgresRepository) ListOrgScoped(ctx context.Context, orgID string) ([
 	return result, rows.Err()
 }
 
+// created reads a new service back, with what GetByID's scan leaves out
+// that a create response carries.
+func (r *PostgresRepository) created(ctx context.Context, id string) (*Service, error) {
+	svc, err := r.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if svc.HealthCheckPassBelow, err = r.HealthPassBelow(ctx, id); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
 func (r *PostgresRepository) CreateProjectScoped(ctx context.Context, projectID string, input CreateInput) (*Service, error) {
 	parsedProjectID, err := uuid.Parse(projectID)
 	if err != nil {
@@ -698,6 +714,10 @@ func (r *PostgresRepository) createScoped(ctx context.Context, scope Scope, proj
 	if healthCheckTimeout == 0 {
 		healthCheckTimeout = 5
 	}
+	healthCheckRetries := 0
+	if input.HealthCheckRetries != nil {
+		healthCheckRetries = *input.HealthCheckRetries
+	}
 
 	var parsedServerID pgtype.UUID
 	if input.ServerID != "" {
@@ -732,7 +752,7 @@ func (r *PostgresRepository) createScoped(ctx context.Context, scope Scope, proj
 		marshalVolumes(input.Volumes),
 		optString(input.GitUsername), encGitToken,
 		input.PreDeployCommands, input.PostDeployCommands,
-		healthCheckPath, int32(healthCheckTimeout), int32(input.HealthCheckRetries),
+		healthCheckPath, int32(healthCheckTimeout), int32(healthCheckRetries),
 		input.RequiredEnvVars, input.MigrateCommand, marshalDependencies(input.Dependencies),
 		input.ComposeRouteService, newID,
 	).Scan(&newID)
@@ -757,7 +777,7 @@ func (r *PostgresRepository) createScoped(ctx context.Context, scope Scope, proj
 		return nil, fmt.Errorf("CreateScoped service: commit: %w", err)
 	}
 
-	return r.GetByID(ctx, uuidString(newID))
+	return r.created(ctx, uuidString(newID))
 }
 
 func (r *PostgresRepository) UpdateConfig(ctx context.Context, id string, input UpdateConfigInput) (*Service, error) {
@@ -1389,7 +1409,7 @@ func (r *PostgresRepository) ListRunningMetricsTargets(ctx context.Context) ([]M
 			t.ContainerHealth = row.ContainerHealth
 		}
 		if row.HealthCheckRetries > 0 && row.Port > 0 && row.SourceType != string(SourceTypeDockerCompose) && row.HealthCheckPath != "" {
-			t.HealthPath, t.Port, t.HealthTimeout = row.HealthCheckPath, int(row.Port), int(row.HealthCheckTimeout)
+			t.HealthPath, t.Port, t.HealthTimeout, t.HealthPassBelow = row.HealthCheckPath, int(row.Port), int(row.HealthCheckTimeout), int(row.HealthCheckPassBelow)
 		}
 		out = append(out, t)
 	}
@@ -1747,6 +1767,29 @@ func (r *PostgresRepository) SetRollbackImagesKept(ctx context.Context, id strin
 	}
 	if err := r.queries.SetServiceRollbackImagesKept(ctx, sqlcdb.SetServiceRollbackImagesKeptParams{RollbackImagesKept: v, ID: pgtype.UUID{Bytes: parsed, Valid: true}}); err != nil {
 		return fmt.Errorf("SetServiceRollbackImagesKept: %w", err)
+	}
+	return nil
+}
+
+func (r *PostgresRepository) HealthPassBelow(ctx context.Context, id string) (int, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return 0, fmt.Errorf("invalid service id %q: %w", id, err)
+	}
+	n, err := sqlcdb.New(dbtx.On(ctx, r.db)).GetServiceHealthPassBelow(ctx, pgtype.UUID{Bytes: parsed, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("GetServiceHealthPassBelow: %w", err)
+	}
+	return int(n), nil
+}
+
+func (r *PostgresRepository) SetHealthPassBelow(ctx context.Context, id string, status int) error {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid service id %q: %w", id, err)
+	}
+	if err := r.queries.SetServiceHealthPassBelow(ctx, sqlcdb.SetServiceHealthPassBelowParams{HealthCheckPassBelow: int16(status), ID: pgtype.UUID{Bytes: parsed, Valid: true}}); err != nil {
+		return fmt.Errorf("SetServiceHealthPassBelow: %w", err)
 	}
 	return nil
 }

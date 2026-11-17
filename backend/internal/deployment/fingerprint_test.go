@@ -178,7 +178,7 @@ var (
 		"Isolation", "EffectiveIsolation", "ComposeContent", "ComposeRepoURL", "ComposeFilePath",
 		"ComposeRouteService", "DeployStrategy", "RegistryServer", "RegistryUsername", "RegistryPassword",
 		"HasRegistryPassword", "AddonSlug", "NetworkAlias", "Volumes", "GitUsername", "GitToken", "HasGitToken",
-		"PreDeployCommands", "PostDeployCommands", "HealthCheckPath", "HealthCheckTimeout", "HealthCheckRetries",
+		"PreDeployCommands", "PostDeployCommands", "HealthCheckPath", "HealthCheckTimeout", "HealthCheckRetries", "HealthCheckPassBelow",
 		"RequiredEnvVars", "MigrateCommand", "Dependencies", "BasicAuthUser", "BasicAuthPassword", "IPAllowlist",
 		"ContainerHealth", "ContainerHealthCommand",
 	}

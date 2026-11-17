@@ -298,3 +298,59 @@ BEGIN
         END IF;
     END LOOP;
 END $$;
+
+-- 0084 (issue #12): a health check's answer passes below
+-- health_check_pass_below. The services from before keep what they had,
+-- curl -f's rule (below 400); schema.sql's default, 500, is a new
+-- service's. And a timeout or attempt count outside what the API takes
+-- (1 to 60 s, 0 to 10) is brought into it: 0 or less is the default, 5 s;
+-- more is the most. A path without its leading / (the API took one, and the
+-- check asked http://host:3000health) gets one. Each change goes in the workspace's audit log as
+-- Toft's own act (no actor), with what it was, so the next release's
+-- CHECKs (contract.sql) hold. Irreversible, short of setting them back by
+-- hand from the audit log.
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    IF to_regclass('public.services') IS NULL THEN
+        RETURN;
+    END IF;
+    -- Only once: ADD COLUMN IF NOT EXISTS still takes its lock on every run.
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'services' AND column_name = 'health_check_pass_below'
+    ) THEN
+        -- The old release still serves: give up rather than queue it behind the ALTER.
+        PERFORM set_config('lock_timeout', '5s', true);
+        ALTER TABLE services ADD COLUMN health_check_pass_below SMALLINT NOT NULL DEFAULT 400;
+    END IF;
+    FOR r IN
+        UPDATE services s
+        SET health_check_timeout = CASE WHEN s.health_check_timeout < 1 THEN 5 ELSE LEAST(s.health_check_timeout, 60) END,
+            health_check_retries = LEAST(GREATEST(s.health_check_retries, 0), 10),
+            health_check_path = CASE WHEN s.health_check_path NOT LIKE '/%' AND s.health_check_path <> ''
+                                     THEN '/' || s.health_check_path ELSE s.health_check_path END
+        FROM (
+            SELECT sv.id, sv.health_check_path AS path, sv.health_check_timeout AS timeout, sv.health_check_retries AS retries,
+                   COALESCE(sv.scoped_org_id, p.org_id) AS org_id
+            FROM services sv
+            LEFT JOIN environments e ON e.id = sv.environment_id
+            LEFT JOIN projects p ON p.id = COALESCE(sv.project_id, e.project_id)
+            WHERE sv.health_check_timeout NOT BETWEEN 1 AND 60 OR sv.health_check_retries NOT BETWEEN 0 AND 10
+               OR sv.health_check_path NOT LIKE '/%' AND sv.health_check_path <> ''
+        ) d
+        WHERE d.id = s.id
+        RETURNING s.id, s.name, d.path, d.timeout, d.retries, s.health_check_path AS new_path, s.health_check_timeout AS new_timeout,
+                  s.health_check_retries AS new_retries, d.org_id
+    LOOP
+        -- A project whose workspace was deleted has no log to write to.
+        IF r.org_id IS NOT NULL THEN
+            INSERT INTO audit_log (org_id, action, resource, metadata)
+            VALUES (r.org_id, 'service.health_check_clamped', 'service:' || r.id,
+                    jsonb_build_object('name', r.name,
+                        'from', jsonb_build_object('path', r.path, 'timeout', r.timeout, 'retries', r.retries),
+                        'to', jsonb_build_object('path', r.new_path, 'timeout', r.new_timeout, 'retries', r.new_retries)));
+        END IF;
+    END LOOP;
+END $$;

@@ -15,3 +15,21 @@
 -- without red, services_preview_no_migrate) ran on its upgrade; the same
 -- constraints are in schema.sql, which Atlas keeps applying (the founders,
 -- 2026-11-04: v0.36.0 empties this file).
+
+-- The next release (issue #12, 0084): the health check's ranges in the
+-- database. This release's API refuses a timeout outside 1 to 60 s and an
+-- attempt count outside 0 to 10, and its premigrate step brings the rows
+-- from before into them, so the CHECKs hold once no release that writes
+-- other values runs. Uncomment them then, with the same two CHECKs in
+-- schema.sql. Not now: a CHECK that narrows breaks the rollback to the
+-- release before, which wrote any value (D-63).
+--
+-- SET lock_timeout = '5s';
+-- BEGIN;
+-- ALTER TABLE services DROP CONSTRAINT IF EXISTS services_health_check_timeout_check;
+-- ALTER TABLE services ADD CONSTRAINT services_health_check_timeout_check
+--     CHECK (health_check_timeout BETWEEN 1 AND 60);
+-- ALTER TABLE services DROP CONSTRAINT IF EXISTS services_health_check_retries_check;
+-- ALTER TABLE services ADD CONSTRAINT services_health_check_retries_check
+--     CHECK (health_check_retries BETWEEN 0 AND 10);
+-- COMMIT;

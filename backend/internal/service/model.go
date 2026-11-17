@@ -201,22 +201,26 @@ type Service struct {
 	ConnectTo *ConnectAddress `json:"connect_to,omitempty"`
 	Volumes   []VolumeMount   `json:"volumes,omitempty"`
 	// Git credentials (token never returned from API)
-	GitUsername        string    `json:"git_username,omitempty"`
-	GitToken           string    `json:"-"`                              // decrypted at read; never serialised to JSON
-	HasGitToken        bool      `json:"has_git_token"`                  // true when a token is stored
-	PreDeployCommands  string    `json:"pre_deploy_commands,omitempty"`  // newline-separated shell commands
-	PostDeployCommands string    `json:"post_deploy_commands,omitempty"` // "service:command" per line; runs inside container after deploy
-	HealthCheckPath    string    `json:"health_check_path"`
-	HealthCheckTimeout int       `json:"health_check_timeout"`
-	HealthCheckRetries int       `json:"health_check_retries"`
-	RequiredEnvVars    string    `json:"required_env_vars"`      // newline-separated list of required env var keys
-	MigrateCommand     string    `json:"migrate_command"`        // docker run --rm command before container start
-	Dependencies       []string  `json:"dependencies,omitempty"` // service IDs that must be running before deploy
-	BasicAuthUser      string    `json:"basic_auth_user,omitempty"`
-	BasicAuthPassword  string    `json:"-"` // decrypted at read; never serialised
-	IPAllowlist        []string  `json:"ip_allowlist,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	GitUsername        string `json:"git_username,omitempty"`
+	GitToken           string `json:"-"`                              // decrypted at read; never serialised to JSON
+	HasGitToken        bool   `json:"has_git_token"`                  // true when a token is stored
+	PreDeployCommands  string `json:"pre_deploy_commands,omitempty"`  // newline-separated shell commands
+	PostDeployCommands string `json:"post_deploy_commands,omitempty"` // "service:command" per line; runs inside container after deploy
+	HealthCheckPath    string `json:"health_check_path"`
+	HealthCheckTimeout int    `json:"health_check_timeout"`
+	HealthCheckRetries int    `json:"health_check_retries"`
+	// HealthCheckPassBelow: an answer below this status passes its health
+	// check, 400 or 500 (issue #12; 400 for services from before). Lists
+	// leave it out: their scan doesn't read it.
+	HealthCheckPassBelow int       `json:"health_check_pass_below,omitempty"`
+	RequiredEnvVars      string    `json:"required_env_vars"`      // newline-separated list of required env var keys
+	MigrateCommand       string    `json:"migrate_command"`        // docker run --rm command before container start
+	Dependencies         []string  `json:"dependencies,omitempty"` // service IDs that must be running before deploy
+	BasicAuthUser        string    `json:"basic_auth_user,omitempty"`
+	BasicAuthPassword    string    `json:"-"` // decrypted at read; never serialised
+	IPAllowlist          []string  `json:"ip_allowlist,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 
 	// Deploying: a deployment of the service is pending or building. The API
 	// shows it as runtime_status "deploying" (MarshalJSON); RuntimeStatus
@@ -357,13 +361,15 @@ type CreateInput struct {
 	PostDeployCommands  string        `json:"post_deploy_commands"`
 	HealthCheckPath     string        `json:"health_check_path"`
 	HealthCheckTimeout  int           `json:"health_check_timeout"`
-	HealthCheckRetries  int           `json:"health_check_retries"`
-	RequiredEnvVars     string        `json:"required_env_vars"`
-	MigrateCommand      string        `json:"migrate_command"`
-	Dependencies        []string      `json:"dependencies"`
-	BasicAuthUser       string        `json:"basic_auth_user,omitempty"`
-	BasicAuthPassword   string        `json:"basic_auth_password,omitempty"`
-	IPAllowlist         []string      `json:"ip_allowlist,omitempty"`
+	// HealthCheckRetries: absent is the default, on (5) for a web app and
+	// off for anything else (withDefaultHealthCheck).
+	HealthCheckRetries *int     `json:"health_check_retries"`
+	RequiredEnvVars    string   `json:"required_env_vars"`
+	MigrateCommand     string   `json:"migrate_command"`
+	Dependencies       []string `json:"dependencies"`
+	BasicAuthUser      string   `json:"basic_auth_user,omitempty"`
+	BasicAuthPassword  string   `json:"basic_auth_password,omitempty"`
+	IPAllowlist        []string `json:"ip_allowlist,omitempty"`
 	// ContainerHealth: see Service.ContainerHealth; "" is the image's.
 	ContainerHealth        string `json:"container_health"`
 	ContainerHealthCommand string `json:"container_health_command"`
@@ -521,6 +527,8 @@ type MetricsTarget struct {
 	HealthPath    string
 	Port          int
 	HealthTimeout int
+	// HealthPassBelow: an answer below this status passes (400 or 500).
+	HealthPassBelow int
 	// Preview: one of a preview's services, which raises no alerts (its
 	// pull request's checks say how it does; D-97).
 	Preview bool
@@ -568,6 +576,8 @@ type UpdateConfigInput struct {
 	// DeployTimeoutMinutes: absent keeps it, 0 goes back to the default,
 	// else 5 to 240 (D-125).
 	DeployTimeoutMinutes *int `json:"deploy_timeout_minutes"`
+	// HealthCheckPassBelow: absent keeps it, else 400 or 500.
+	HealthCheckPassBelow *int `json:"health_check_pass_below"`
 	// RollbackImagesKept: absent keeps it, 0 goes back to the default,
 	// else 1 to 100 (D-135).
 	RollbackImagesKept *int `json:"rollback_images_kept"`

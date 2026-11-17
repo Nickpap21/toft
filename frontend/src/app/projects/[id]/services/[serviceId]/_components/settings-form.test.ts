@@ -132,6 +132,15 @@ describe("the container check", () => {
     expect(onlyEdited("health", off, saved, false, payloadOf(off, [], false))).toEqual({ container_health: "off" });
   });
 
+  it("shows what passes the HTTP check, and saves it only when edited (issue #12)", () => {
+    expect(initForm(service).health_check_pass_below).toBe(400);
+    const saved = initForm({ ...service, health_check_pass_below: 500 });
+    expect(saved.health_check_pass_below).toBe(500);
+    const form = { ...saved, health_check_pass_below: 400 as const };
+    expect(onlyEdited("health", form, saved, false, payloadOf(form, [], false))).toEqual({ health_check_pass_below: 400 });
+    expect(onlyEdited("health", saved, saved, false, payloadOf(saved, [], false))).toEqual({});
+  });
+
   it("needs a one-line command in command mode", () => {
     expect(containerCheckProblem("image", "")).toBe("");
     expect(containerCheckProblem("off", "")).toBe("");

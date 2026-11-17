@@ -111,6 +111,8 @@ export interface Service {
     health_check_path?: string;
     health_check_timeout?: number;
     health_check_retries?: number;
+    /** An answer below this status passes the health check (issue #12). */
+    health_check_pass_below?: 400 | 500;
     container_health?: components["schemas"]["Service"]["container_health"];
     container_health_command?: string;
     required_env_vars?: string;
@@ -235,6 +237,7 @@ export interface UpdateServiceConfigInput {
     health_check_path?: string;
     health_check_timeout?: number;
     health_check_retries?: number;
+    health_check_pass_below?: 400 | 500;
     container_health?: components["schemas"]["UpdateConfigInput"]["container_health"];
     container_health_command?: string;
     required_env_vars?: string;
