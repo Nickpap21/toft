@@ -95,3 +95,19 @@ func TestClonedCommitReadsTheCheckout(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, deployment.Commit{SHA: sha256}, got, "a SHA-256 repository, and a commit with no subject")
 }
+
+// A failed local clone's error says git's reason, not only the exit status.
+func TestCloneFailureNamesGitsReason(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		testenv.Skip(t, "needs git")
+	}
+	src := t.TempDir()
+	out, err := exec.Command("git", "-C", src, "init", "--quiet", "-b", "main").CombinedOutput()
+	require.NoError(t, err, string(out))
+	out, err = exec.Command("git", "-C", src, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "init").CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	_, _, err = cloneRepository(context.Background(), "file://"+src, "no-such-branch", "", func(string) {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Remote branch no-such-branch not found")
+}

@@ -43,7 +43,9 @@ type fakeHost struct {
 	uploads map[string]string
 	exec    func(ctx context.Context, cmd string) (string, error)
 	stream  func(ctx context.Context, cmd string) error
-	docker  *fakedocker.Docker
+	// streamLines are the lines every ExecStream delivers before stream runs.
+	streamLines []string
+	docker      *fakedocker.Docker
 	// subsystem answers SubsystemStream (nil: an error).
 	subsystem func(name, stdin string, lineFn func(string)) error
 }
@@ -89,10 +91,13 @@ func (f *fakeHost) ExecInput(ctx context.Context, cmd string, stdin io.Reader) (
 	return f.Exec(ctx, cmd)
 }
 
-func (f *fakeHost) ExecStream(ctx context.Context, cmd string, _ func(string)) error {
+func (f *fakeHost) ExecStream(ctx context.Context, cmd string, lineFn func(string)) error {
 	f.record(ctx, "stream", cmd)
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	for _, l := range f.streamLines {
+		lineFn(l)
 	}
 	if f.stream == nil {
 		return nil
@@ -1055,6 +1060,18 @@ func TestRemoteCloneEndsOptionsBeforeTheURL(t *testing.T) {
 	clone, ok := h.find("git clone")
 	require.True(t, ok)
 	assert.Contains(t, clone.cmd, "--branch 'main' -- '--upload-pack=id' /tmp/paas-build-abc")
+}
+
+// A failed clone on a server says git's reason, from the streamed output.
+func TestRemoteCloneFailureNamesGitsReason(t *testing.T) {
+	h := &fakeHost{
+		streamLines: []string{"Cloning into '/tmp/x'...", "fatal: Remote branch nope not found in upstream origin"},
+		stream:      func(context.Context, string) error { return errors.New("Process exited with status 128") },
+	}
+	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
+	err := o.cloneOnRemote(context.Background(), "https://example.com/r.git", "nope", "/tmp/x", func(string) {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Remote branch nope not found in upstream origin")
 }
 
 // A build from the project's own repository (D-77) sends the tree on

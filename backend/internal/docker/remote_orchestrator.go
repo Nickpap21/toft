@@ -541,8 +541,17 @@ func (o *RemoteOrchestrator) cloneOnRemote(ctx context.Context, repoURL, branch,
 	}
 	// "--" ends the options, so the quoted URL is never read as one.
 	cloneCmd := fmt.Sprintf("git %sclone --depth 1 --branch %s -- %s %s 2>&1", gitOpts, shellEscape(branch), shellEscape(cloneURL), dir)
-	if err := o.host.ExecStream(ctx, cloneCmd, logFn); err != nil {
-		return fmt.Errorf("git clone: %w", err)
+	// The command's stderr is merged into the stream: keep its tail for the
+	// error, which should say git's reason.
+	var tail []string
+	err := o.host.ExecStream(ctx, cloneCmd, func(line string) {
+		if tail = append(tail, line); len(tail) > 20 {
+			tail = tail[1:]
+		}
+		logFn(line)
+	})
+	if err != nil {
+		return gitcred.Failure("git clone", []byte(strings.Join(tail, "\n")), err)
 	}
 	return nil
 }

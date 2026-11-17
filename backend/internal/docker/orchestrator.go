@@ -1221,7 +1221,7 @@ func cloneRepository(ctx context.Context, repoURL, branch, baseDirectory string,
 	}
 	if err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("git clone failed: %w", err)
+		return "", nil, gitcred.Failure("git clone failed", output, err)
 	}
 
 	buildDir, err := service.JoinBaseDirectory(tmpDir, baseDirectory)
