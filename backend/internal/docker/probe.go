@@ -27,7 +27,11 @@ import (
 // a container that one reports starting or unhealthy, so a flaky endpoint
 // would take the service offline; this only reports.
 
-// probeScript requests http://localhost:$1$2 with a $3-second timeout and
+// probeScript requests http://localhost:$1$2 with a $3-second timeout on the
+// whole request (wget's own -T is per read, so a body that trickles never
+// trips it: a request that took $3 s or more is "no answer within $3s",
+// whatever status it sent. Not busybox timeout: it leaves its watcher a
+// zombie of the app's PID 1, one a minute) and
 // judges it by the first status line, before any redirect, as the deploy's
 // check does: below $4 (400 or 500; none is 400) is healthy (exit 0); $4 or
 // more, or no answer, is unhealthy (exit 1, the reason on the next line). Either way its first
@@ -40,6 +44,7 @@ const probeScript = `B=` + rollout.ProbeMountPath + `/bin/busybox
 t=$EPOCHREALTIME; t0=${t%.*}${t#*.}
 out=$($B wget -S -O /dev/null -T "$3" "http://localhost:$1$2" 2>&1)
 t=$EPOCHREALTIME; t1=${t%.*}${t#*.}
+[ $((t1-t0)) -ge $(($3*1000000)) ] && out="no answer within $3s"
 code=$(echo "$out" | $B sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | $B head -n 1)
 echo "toft-probe ${code:-000} $(((t1-t0+500)/1000))"
 [ -n "$code" ] && [ "$code" -lt "${4:-400}" ] && exit 0
