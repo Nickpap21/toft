@@ -232,11 +232,16 @@ WHERE sealed IS NOT NULL
 
 -- name: FindOpenAgentApproval :one
 -- The same call again attaches to its request: waiting, or approved and run
--- within its window, so a call that dropped can read the result.
-SELECT id FROM agent_approvals
-WHERE connection_id = $1 AND request_hash = $2 AND expires_at > NOW()
-  AND (state = 'waiting' OR (state = 'approved' AND executed_at IS NOT NULL))
-ORDER BY created_at DESC LIMIT 1;
+-- within its window, so a call that dropped can read the result. A deploy's
+-- run only while it is running or the deployment it started is pending,
+-- queued or building (D-164): once that is over, or the run started none,
+-- the same deploy is a new request.
+SELECT a.id FROM agent_approvals a
+LEFT JOIN deployments d ON d.id = a.deployment_id
+WHERE a.connection_id = $1 AND a.request_hash = $2 AND a.expires_at > NOW()
+  AND (a.state = 'waiting' OR (a.state = 'approved' AND a.executed_at IS NOT NULL
+       AND (a.tool <> 'deploy' OR a.result IS NULL OR d.status IN ('pending', 'queued', 'building'))))
+ORDER BY a.created_at DESC LIMIT 1;
 
 -- name: GetAgentApproval :one
 -- With what a deploy's approval allows (D-146): the deployment it rolls
