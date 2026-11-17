@@ -164,7 +164,7 @@ jobs:
           - { check: test, shard: 1/2, timeout: 11 }
           - { check: test, shard: 2/2, timeout: 11 }
           - { check: a11y, shard: 1/3, timeout: 30 }
-          - { check: a11y, shard: 2/3, timeout: 30 }
+          - { check: a11y, shard: 2/3, timeout: 1 } # demo: this shard times out
           - { check: a11y, shard: 3/3, timeout: 30 }
     defaults:
       run:
