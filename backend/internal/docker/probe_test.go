@@ -76,6 +76,36 @@ exec ` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /cgi-
 	assert.Less(t, ms, 1000)
 }
 
+// The timeout bounds the whole request, not each read: busybox wget's -T is
+// per read, so an endpoint that answers 200 and then trickles its body took
+// 10 s and passed a 5 s timeout. Here the body takes 6 s at a 2 s timeout.
+func TestProbeScriptTimeoutBoundsTheWholeRequest(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("needs docker")
+	}
+	const setup = `mkdir -p ` + rollout.ProbeMountPath + `/bin /www/cgi-bin && ln -s /bin/busybox ` + rollout.ProbeMountPath + `/bin/busybox
+cat > /www/cgi-bin/trickle <<'CGI'
+#!/bin/sh
+echo "Content-type: text/plain"
+echo
+i=0; while [ $i -lt 6 ]; do echo x; sleep 1; i=$((i+1)); done
+CGI
+chmod +x /www/cgi-bin/trickle
+httpd -p 8080 -h /www
+` + rollout.ProbeMountPath + `/bin/busybox sh -c "$0" toft-probe 8080 /cgi-bin/trickle 2; echo "exit $?"`
+	out, err := exec.Command("docker", "run", "--rm", rollout.ProbeToolImage, "sh", "-c", setup, probeScript).Output()
+	require.NoError(t, err, "%s", out)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	require.Len(t, lines, 3, "%s", out)
+	f := strings.Fields(lines[0])
+	require.Len(t, f, 3, "%s", out)
+	ms, err := strconv.Atoi(f[2])
+	require.NoError(t, err)
+	assert.Less(t, ms, 4000, "the request is cut at the timeout")
+	assert.Equal(t, "no answer within 2s", lines[1])
+	assert.Equal(t, "exit 1", lines[2])
+}
+
 // What passes is an answer below the service's pass-below status ($4): a
 // 404 is healthy at 500 (a new service's) and not at 400 (one from before,
 // and an exec from a panel that passes none).
