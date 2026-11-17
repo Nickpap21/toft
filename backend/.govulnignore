@@ -7,3 +7,9 @@
 # the packages. Remove when a fixed release is published and adopted.
 GO-2026-4887
 GO-2026-4883
+
+# Not listed, and not to be: GO-2026-5617, GO-2026-5668 and GO-2026-5746
+# (docker cp and the archive endpoint; no fixed release either). They name
+# functions of the daemon package, which the backend doesn't import, so
+# govulncheck doesn't report them as reached and a line here would be
+# called stale. The engine on a server is internal/advisory/known.go's.
