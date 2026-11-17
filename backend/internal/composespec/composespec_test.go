@@ -112,7 +112,7 @@ func TestValidate_OneCasePerRule(t *testing.T) {
 		{"volume driver nfs as a bind", "volumes: [\"n:/host\"]", "volumes:\n  n:\n    driver_opts: {type: nfs, device: /etc, o: \"rw,rbind\"}", composespec.RuleHostBindMount, "volumes.n.driver_opts.device"},
 		{"volume nfs share", "volumes: [\"share:/data\"]", "volumes:\n  share:\n    driver_opts: {type: nfs, o: \"addr=10.0.0.5,rw\", device: \":/exports/data\"}", composespec.RuleVolumeDriver, "volumes.share.driver_opts.type"},
 		{"volume cifs share", "volumes: [\"share:/data\"]", "volumes:\n  share:\n    driver: local\n    driver_opts: {type: cifs, o: \"addr=10.0.0.5\", device: \"//10.0.0.5/data\"}", composespec.RuleVolumeDriver, "volumes.share.driver_opts.type"},
-		{"volume nfs as a bind is still a bind", "volumes: [\"n:/host\"]", "volumes:\n  n:\n    driver_opts: {type: nfs, device: /etc, o: \"rw,rbind\"}", composespec.RuleVolumeDriver, "volumes.n.driver_opts.type"},
+		{"volume nfs as a bind is also a share", "volumes: [\"n:/host\"]", "volumes:\n  n:\n    driver_opts: {type: nfs, device: /etc, o: \"rw,rbind\"}", composespec.RuleVolumeDriver, "volumes.n.driver_opts.type"},
 		{"volume plugin", "volumes: [\"p:/data\"]", "volumes:\n  p:\n    driver: rexray/ebs", composespec.RuleVolumeDriver, "volumes.p.driver"},
 		{"external volume", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    external: true\n    name: paas-postgres-data", composespec.RuleExternalVolume, "volumes.pg.external"},
 		{"volume explicit name", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    name: control-panel-paas_postgres_data", composespec.RuleExternalVolume, "volumes.pg.name"},
@@ -163,7 +163,12 @@ func TestValidate_OneCasePerRule(t *testing.T) {
 func TestValidate_VolumeDriverValueIsTheWholeSource(t *testing.T) {
 	vs := validateInline(t, "services:\n  app:\n    image: alpine\n    volumes: [\"share:/data\"]\nvolumes:\n  share:\n    driver_opts: {type: nfs, o: \"addr=10.0.0.5,rw\", device: \":/exports/data\"}\n", nil)
 	require.Len(t, vs, 1)
-	assert.Equal(t, "local device=:/exports/data o=addr=10.0.0.5,rw type=nfs", vs[0].Value)
+	assert.Equal(t, `local {"device":":/exports/data","o":"addr=10.0.0.5,rw","type":"nfs"}`, vs[0].Value)
+
+	// The same for a host disk: an exception for /dev/sdb1 doesn't cover /dev/vda1.
+	vs = validateInline(t, "services:\n  app:\n    image: alpine\n    volumes: [\"disk:/data\"]\nvolumes:\n  disk:\n    driver_opts: {type: ext4, device: /dev/sdb1}\n", nil)
+	require.Len(t, vs, 1)
+	assert.Equal(t, `local {"device":"/dev/sdb1","type":"ext4"}`, vs[0].Value)
 }
 
 func TestValidate_PrivilegedFalseIsFine(t *testing.T) {

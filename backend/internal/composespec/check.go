@@ -409,13 +409,9 @@ func (c *checker) build(service, field string, b *types.BuildConfig) {
 var networkVolumeTypes = map[string]bool{"nfs": true, "nfs4": true, "cifs": true, "smb3": true}
 
 // volumeSource is what a volume mounts, which an exception pins: its driver
-// and every driver option.
+// and every driver option, as JSON so no option's text reads as another's.
 func volumeSource(v types.VolumeConfig) string {
-	parts := []string{firstNonEmpty(v.Driver, "local")}
-	for _, k := range sortedKeys(v.DriverOpts) {
-		parts = append(parts, k+"="+v.DriverOpts[k])
-	}
-	return strings.Join(parts, " ")
+	return firstNonEmpty(v.Driver, "local") + " " + asJSON(v.DriverOpts)
 }
 
 func (c *checker) volumes() {
@@ -441,7 +437,9 @@ func (c *checker) volumes() {
 				// overlay of host directories, which a container then reads
 				// and writes like any volume. Whatever o holds: "bind" in it
 				// may be part of a path, which is no bind option to Docker.
-				c.addValue(RuleHostBindMount, "", field+".driver_opts.type", v.DriverOpts["type"], "volume type %q can mount a host disk or host directories; only tmpfs volumes are allowed, and nfs or cifs with an operator's exception", v.DriverOpts["type"])
+				// The value is the whole source: an exception for one disk
+				// must not cover another.
+				c.addValue(RuleHostBindMount, "", field+".driver_opts.type", volumeSource(v), "volume type %q can mount a host disk or host directories; a volume's type may be tmpfs, or nfs or cifs with an operator's exception", v.DriverOpts["type"])
 			case device != "" && (strings.Contains(o, "bind") || typ == "none" || typ == ""):
 				if !c.inside(device) {
 					rule := hostMountRule(device)

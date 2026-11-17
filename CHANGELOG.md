@@ -21,8 +21,9 @@ Toft's own code reached none of. No migration: a failed upgrade starts
   The policy refused only bind-style options, so a workspace developer
   could deploy a volume of `type: ext4` over the server's disk, or an
   `overlay` of its directories, and read and write the server's files.
-  A volume's type may now be `tmpfs`; any other type is `host_bind_mount`.
-  Reported in pull request #24.
+  A volume of any type but `tmpfs` and the network shares below is now
+  `host_bind_mount`, and an exception for one is pinned to the volume's
+  device and options. Reported in pull request #24.
 - **Network share volumes and volume plugins need an operator's
   exception** (new rule `volume_driver`). The server mounts an `nfs` or
   `cifs` share itself, from its own network, and a volume plugin runs on
