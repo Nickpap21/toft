@@ -6,6 +6,21 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.1.1 (2026-11-17)
+
+Dependencies at the versions that fix published advisories. Toft's own
+code reached none of them. No migration: a failed upgrade starts 1.1.0
+again without restoring the database. Upgrade from 1.1.0.
+
+- **Next.js 16.4.5 in the panel** (CVE-2026-119790: a cached function
+  called through `unstable_cache()` could give one route's root
+  parameters to another). The panel caches nothing that way.
+- **OpenTelemetry 1.47.0 in the backend and the agent** (CVE-2026-128085:
+  some attribute values got past the limit on their length). It comes
+  with the Docker client; Toft sets no such limit and records no traces.
+- The docs site builds with Astro 7.4.12 and the panel's lint with
+  minimatch 11. Neither is in a release image.
+
 ## 1.1.0 (2026-11-16)
 
 Builds run on BuildKit with a build cache per service, a deploy's registry
