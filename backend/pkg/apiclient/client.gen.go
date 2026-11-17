@@ -235,6 +235,12 @@ const (
 	CreatedServiceEffectiveIsolationStandard        CreatedServiceEffectiveIsolation = "standard"
 )
 
+// Defines values for CreatedServiceHealthCheckPassBelow.
+const (
+	CreatedServiceHealthCheckPassBelowN400 CreatedServiceHealthCheckPassBelow = 400
+	CreatedServiceHealthCheckPassBelowN500 CreatedServiceHealthCheckPassBelow = 500
+)
+
 // Defines values for CreatedServiceIsolation.
 const (
 	CreatedServiceIsolationSandboxed       CreatedServiceIsolation = "sandboxed"
@@ -1130,6 +1136,12 @@ const (
 	ServiceEffectiveIsolationStandard        ServiceEffectiveIsolation = "standard"
 )
 
+// Defines values for ServiceHealthCheckPassBelow.
+const (
+	ServiceHealthCheckPassBelowN400 ServiceHealthCheckPassBelow = 400
+	ServiceHealthCheckPassBelowN500 ServiceHealthCheckPassBelow = 500
+)
+
 // Defines values for ServiceIsolation.
 const (
 	ServiceIsolationSandboxed       ServiceIsolation = "sandboxed"
@@ -1246,6 +1258,12 @@ const (
 	UpdateConfigInputContainerHealthCommand UpdateConfigInputContainerHealth = "command"
 	UpdateConfigInputContainerHealthImage   UpdateConfigInputContainerHealth = "image"
 	UpdateConfigInputContainerHealthOff     UpdateConfigInputContainerHealth = "off"
+)
+
+// Defines values for UpdateConfigInputHealthCheckPassBelow.
+const (
+	N400 UpdateConfigInputHealthCheckPassBelow = 400
+	N500 UpdateConfigInputHealthCheckPassBelow = 500
 )
 
 // Defines values for UpdateConfigInputIsolation.
@@ -2467,17 +2485,20 @@ type CreatedService struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	} `json:"generated_secrets,omitempty"`
-	GitBranch           *string   `json:"git_branch,omitempty"`
-	GitRepoUrl          *string   `json:"git_repo_url,omitempty"`
-	GitUsername         *string   `json:"git_username,omitempty"`
-	HasGitToken         bool      `json:"has_git_token"`
-	HasRegistryPassword bool      `json:"has_registry_password"`
-	HealthCheckPath     string    `json:"health_check_path"`
-	HealthCheckRetries  int       `json:"health_check_retries"`
-	HealthCheckTimeout  int       `json:"health_check_timeout"`
-	Id                  string    `json:"id"`
-	InstallCommand      *string   `json:"install_command,omitempty"`
-	IpAllowlist         *[]string `json:"ip_allowlist,omitempty"`
+	GitBranch           *string `json:"git_branch,omitempty"`
+	GitRepoUrl          *string `json:"git_repo_url,omitempty"`
+	GitUsername         *string `json:"git_username,omitempty"`
+	HasGitToken         bool    `json:"has_git_token"`
+	HasRegistryPassword bool    `json:"has_registry_password"`
+
+	// HealthCheckPassBelow An answer below this status passes the health check. 500 for a service created since issue
+	HealthCheckPassBelow *CreatedServiceHealthCheckPassBelow `json:"health_check_pass_below,omitempty"`
+	HealthCheckPath      string                              `json:"health_check_path"`
+	HealthCheckRetries   int                                 `json:"health_check_retries"`
+	HealthCheckTimeout   int                                 `json:"health_check_timeout"`
+	Id                   string                              `json:"id"`
+	InstallCommand       *string                             `json:"install_command,omitempty"`
+	IpAllowlist          *[]string                           `json:"ip_allowlist,omitempty"`
 
 	// Isolation The service's own isolation level (D-95, D-115); absent follows the workspace's default_isolation.
 	Isolation *CreatedServiceIsolation `json:"isolation,omitempty"`
@@ -2538,6 +2559,9 @@ type CreatedServiceContainerHealth string
 
 // CreatedServiceEffectiveIsolation The level the service's next deploy runs at.
 type CreatedServiceEffectiveIsolation string
+
+// CreatedServiceHealthCheckPassBelow An answer below this status passes the health check. 500 for a service created since issue
+type CreatedServiceHealthCheckPassBelow int
 
 // CreatedServiceIsolation The service's own isolation level (D-95, D-115); absent follows the workspace's default_isolation.
 type CreatedServiceIsolation string
@@ -6097,12 +6121,15 @@ type Service struct {
 	GitUsername         *string                    `json:"git_username,omitempty"`
 	HasGitToken         bool                       `json:"has_git_token"`
 	HasRegistryPassword bool                       `json:"has_registry_password"`
-	HealthCheckPath     string                     `json:"health_check_path"`
-	HealthCheckRetries  int                        `json:"health_check_retries"`
-	HealthCheckTimeout  int                        `json:"health_check_timeout"`
-	Id                  string                     `json:"id"`
-	InstallCommand      *string                    `json:"install_command,omitempty"`
-	IpAllowlist         *[]string                  `json:"ip_allowlist,omitempty"`
+
+	// HealthCheckPassBelow An answer below this status passes the health check. 500 for a service created since issue
+	HealthCheckPassBelow *ServiceHealthCheckPassBelow `json:"health_check_pass_below,omitempty"`
+	HealthCheckPath      string                       `json:"health_check_path"`
+	HealthCheckRetries   int                          `json:"health_check_retries"`
+	HealthCheckTimeout   int                          `json:"health_check_timeout"`
+	Id                   string                       `json:"id"`
+	InstallCommand       *string                      `json:"install_command,omitempty"`
+	IpAllowlist          *[]string                    `json:"ip_allowlist,omitempty"`
 
 	// Isolation The service's own isolation level (D-95, D-115); absent follows the workspace's default_isolation.
 	Isolation *ServiceIsolation `json:"isolation,omitempty"`
@@ -6157,6 +6184,9 @@ type ServiceContainerHealth string
 
 // ServiceEffectiveIsolation The level the service's next deploy runs at.
 type ServiceEffectiveIsolation string
+
+// ServiceHealthCheckPassBelow An answer below this status passes the health check. 500 for a service created since issue
+type ServiceHealthCheckPassBelow int
 
 // ServiceIsolation The service's own isolation level (D-95, D-115); absent follows the workspace's default_isolation.
 type ServiceIsolation string
@@ -6216,13 +6246,19 @@ type ServiceCreateInput struct {
 	DockerImage  *string `json:"docker_image,omitempty"`
 
 	// Force With deploy, creates it past the capacity gate for a caller the gate allows to bypass (can_bypass), as POST /services/{serviceID}/deployments?force=true; its first deploy is started past the gate too. Defaults to false.
-	Force              *bool     `json:"force,omitempty"`
-	GitBranch          *string   `json:"git_branch,omitempty"`
-	GitRepoUrl         *string   `json:"git_repo_url,omitempty"`
-	GitToken           *string   `json:"git_token,omitempty"`
-	GitUsername        *string   `json:"git_username,omitempty"`
-	HealthCheckPath    *string   `json:"health_check_path,omitempty"`
-	HealthCheckRetries *int      `json:"health_check_retries,omitempty"`
+	Force       *bool   `json:"force,omitempty"`
+	GitBranch   *string `json:"git_branch,omitempty"`
+	GitRepoUrl  *string `json:"git_repo_url,omitempty"`
+	GitToken    *string `json:"git_token,omitempty"`
+	GitUsername *string `json:"git_username,omitempty"`
+
+	// HealthCheckPath The path the health check asks for, GET; absent is "/".
+	HealthCheckPath *string `json:"health_check_path,omitempty"`
+
+	// HealthCheckRetries Attempts, 2 s apart, before the deploy fails; 0 turns the check off. Absent is 5 for a web app built from git or an image without a catalog add-on, and 0 for anything else.
+	HealthCheckRetries *int `json:"health_check_retries,omitempty"`
+
+	// HealthCheckTimeout Seconds each attempt waits for an answer, 1 to 60; 0 or absent is the default, 5.
 	HealthCheckTimeout *int      `json:"health_check_timeout,omitempty"`
 	InstallCommand     *string   `json:"install_command,omitempty"`
 	IpAllowlist        *[]string `json:"ip_allowlist,omitempty"`
@@ -6664,17 +6700,24 @@ type UpdateConfigInput struct {
 	DeployStrategy *string `json:"deploy_strategy,omitempty"`
 
 	// DeployTimeoutMinutes Absent or null keeps it; 0 goes back to the default (60); else 5 to 240 (D-125). Applies from the next deploy.
-	DeployTimeoutMinutes *int      `json:"deploy_timeout_minutes"`
-	DockerImage          *string   `json:"docker_image,omitempty"`
-	GitBranch            *string   `json:"git_branch,omitempty"`
-	GitRepoUrl           *string   `json:"git_repo_url,omitempty"`
-	GitToken             *string   `json:"git_token,omitempty"`
-	GitUsername          *string   `json:"git_username,omitempty"`
-	HealthCheckPath      *string   `json:"health_check_path,omitempty"`
-	HealthCheckRetries   *int      `json:"health_check_retries,omitempty"`
-	HealthCheckTimeout   *int      `json:"health_check_timeout,omitempty"`
-	InstallCommand       *string   `json:"install_command,omitempty"`
-	IpAllowlist          *[]string `json:"ip_allowlist,omitempty"`
+	DeployTimeoutMinutes *int    `json:"deploy_timeout_minutes"`
+	DockerImage          *string `json:"docker_image,omitempty"`
+	GitBranch            *string `json:"git_branch,omitempty"`
+	GitRepoUrl           *string `json:"git_repo_url,omitempty"`
+	GitToken             *string `json:"git_token,omitempty"`
+	GitUsername          *string `json:"git_username,omitempty"`
+
+	// HealthCheckPassBelow Absent or null keeps it; an answer below this status passes the health check.
+	HealthCheckPassBelow *UpdateConfigInputHealthCheckPassBelow `json:"health_check_pass_below"`
+	HealthCheckPath      *string                                `json:"health_check_path,omitempty"`
+
+	// HealthCheckRetries 0 to 10 attempts; 0 turns the check off.
+	HealthCheckRetries *int `json:"health_check_retries,omitempty"`
+
+	// HealthCheckTimeout 1 to 60 seconds; 0 is the default, 5.
+	HealthCheckTimeout *int      `json:"health_check_timeout,omitempty"`
+	InstallCommand     *string   `json:"install_command,omitempty"`
+	IpAllowlist        *[]string `json:"ip_allowlist,omitempty"`
 
 	// Isolation Absent keeps it; default follows the workspace's (D-95). The order is standard, sandboxed, sandboxed_strict (D-115). Owners and developers; a level below the workspace's default is the owners' (403 isolation_needs_owner); API keys can't change it (403 session_required). Applies from the next deploy; in the audit log as service.isolation_changed.
 	Isolation      *UpdateConfigInputIsolation `json:"isolation,omitempty"`
@@ -6704,6 +6747,9 @@ type UpdateConfigInput struct {
 
 // UpdateConfigInputContainerHealth Absent or null keeps it. The Docker health check the service's containers are created with: image keeps the image's HEALTHCHECK, off turns it off, command runs container_health_command in the container's shell at the image's interval, timeout and retries. Not for compose services (400). Applies from the next deploy; on a server whose agent hasn't upgraded yet, a deploy with off or command fails and says so.
 type UpdateConfigInputContainerHealth string
+
+// UpdateConfigInputHealthCheckPassBelow Absent or null keeps it; an answer below this status passes the health check.
+type UpdateConfigInputHealthCheckPassBelow int
 
 // UpdateConfigInputIsolation Absent keeps it; default follows the workspace's (D-95). The order is standard, sandboxed, sandboxed_strict (D-115). Owners and developers; a level below the workspace's default is the owners' (403 isolation_needs_owner); API keys can't change it (403 session_required). Applies from the next deploy; in the audit log as service.isolation_changed.
 type UpdateConfigInputIsolation string

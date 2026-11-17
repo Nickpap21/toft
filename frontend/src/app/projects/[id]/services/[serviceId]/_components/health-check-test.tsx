@@ -30,16 +30,18 @@ export function nonHttpPortWarning(port: number): string | null {
 
 /** "Test" for Settings → Health Check: asks the running container for the
  *  form's path, once, as the deploy will, before the check is saved. */
-export function HealthCheckTest({ serviceId, path, port, timeout, running }: {
+export function HealthCheckTest({ serviceId, path, port, timeout, passBelow, running }: {
   serviceId: string;
   path: string;
   port: number;
   timeout: number;
+  /** An answer below this status passes, as at the deploy. */
+  passBelow: number;
   running: boolean;
 }) {
   // A result stands for the values it was tested with: editing the path,
-  // port or timeout hides it.
-  const tested = `${path.trim()}|${port}|${timeout}`;
+  // port, timeout or what passes hides it.
+  const tested = `${path.trim()}|${port}|${timeout}|${passBelow}`;
   const [shown, setShown] = useState<{ key: string; ok: boolean; text: string } | null>(null);
   const result = shown?.key === tested ? shown : null;
   const test = useMutation({
@@ -49,9 +51,9 @@ export function HealthCheckTest({ serviceId, path, port, timeout, running }: {
         key: tested,
         ...(r.status === 0
           ? { ok: false, text: r.detail || "No answer" }
-          : r.status < 400
+          : r.status < passBelow
             ? { ok: true, text: `HTTP ${r.status} in ${r.ms} ms: the check passes` }
-            : { ok: false, text: `HTTP ${r.status} in ${r.ms} ms: the check fails (400 or more)` }),
+            : { ok: false, text: `HTTP ${r.status} in ${r.ms} ms: the check fails (${passBelow} or more)` }),
       }),
     onError: (err: unknown) =>
       setShown({ key: tested, ok: false, text: err instanceof ApiError || err instanceof Error ? err.message : "Could not test" }),

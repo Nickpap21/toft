@@ -17619,10 +17619,18 @@ components:
           type: string
         health_check_path:
           type: string
+          pattern: '^/'
+          description: The path the health check asks for, GET; absent is "/".
         health_check_timeout:
           type: integer
+          minimum: 0
+          maximum: 60
+          description: Seconds each attempt waits for an answer, 1 to 60; 0 or absent is the default, 5.
         health_check_retries:
           type: integer
+          minimum: 0
+          maximum: 10
+          description: Attempts, 2 s apart, before the deploy fails; 0 turns the check off. Absent is 5 for a web app built from git or an image without a catalog add-on, and 0 for anything else.
         required_env_vars:
           type: string
         migrate_command:
@@ -17863,6 +17871,10 @@ components:
           type: integer
         health_check_retries:
           type: integer
+        health_check_pass_below:
+          type: integer
+          enum: [400, 500]
+          description: An answer below this status passes the health check. 500 for a service created since issue #12 (a 404 is an app that is up), 400 for one from before. Absent in lists; a single service's read has it.
         required_env_vars:
           type: string
         migrate_command:
@@ -18041,10 +18053,22 @@ components:
           type: string
         health_check_path:
           type: string
+          pattern: '^/'
         health_check_timeout:
           type: integer
+          minimum: 0
+          maximum: 60
+          description: 1 to 60 seconds; 0 is the default, 5.
         health_check_retries:
           type: integer
+          minimum: 0
+          maximum: 10
+          description: 0 to 10 attempts; 0 turns the check off.
+        health_check_pass_below:
+          type: integer
+          nullable: true
+          enum: [400, 500]
+          description: Absent or null keeps it; an answer below this status passes the health check.
         required_env_vars:
           type: string
         migrate_command:

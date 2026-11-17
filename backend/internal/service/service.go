@@ -444,6 +444,42 @@ func withDefaultMemory(in CreateInput) CreateInput {
 	return in
 }
 
+// withDefaultHealthCheck gives a new web app an HTTP health check from its
+// first deploy (issue #12): GET / five times, 2 s apart, where an answer
+// below 500 passes (the column's default for a new row). A worker, a
+// database, a cache, an admin tool, a catalog add-on or a compose stack
+// (whose file has its own) gets none unless the caller asks, nor does an app
+// with no port to ask.
+func withDefaultHealthCheck(in CreateInput) CreateInput {
+	if in.HealthCheckPath == "" {
+		in.HealthCheckPath = "/"
+	}
+	if in.HealthCheckRetries == nil && in.Type == TypeWeb && in.Port > 0 && in.SourceType != SourceTypeDockerCompose &&
+		in.AddonSlug == "" && resources.NewKindOf(in.AddonSlug, in.DockerImage) == resources.KindApp {
+		retries := 5
+		in.HealthCheckRetries = &retries
+	}
+	return in
+}
+
+// validateHealthCheck holds the ranges the panel's inputs show: a path
+// that starts with "/" ("" is the default), a timeout of 1 to 60 s (0 is
+// the default, 5), 0 to 10 attempts, and passBelow (nil: unchanged) 400 or
+// 500. The database's CHECKs follow one release later (contract.sql).
+func validateHealthCheck(path string, timeout, retries int, passBelow *int) error {
+	switch {
+	case path != "" && !strings.HasPrefix(path, "/"):
+		return fmt.Errorf("%w: health_check_path starts with /", ErrInvalidConfig)
+	case timeout < 0 || timeout > 60:
+		return fmt.Errorf("%w: health_check_timeout is 1 to 60 seconds, or 0 for the default", ErrInvalidConfig)
+	case retries < 0 || retries > 10:
+		return fmt.Errorf("%w: health_check_retries is 0 to 10", ErrInvalidConfig)
+	case passBelow != nil && *passBelow != 400 && *passBelow != 500:
+		return fmt.Errorf("%w: health_check_pass_below is 400 or 500", ErrInvalidConfig)
+	}
+	return nil
+}
+
 // addComposeDefaults gives a new inline stack's compose services without a
 // memory limit their kind's default (D-41). The service is created by then,
 // so an error is logged: the first deploy names the limit to set.
@@ -481,7 +517,7 @@ func (s *ServiceManager) Create(ctx context.Context, environmentID, userID strin
 	if err := s.checkRepository(ctx, input.RepositoryID, environmentID, ""); err != nil {
 		return nil, err
 	}
-	input, generated, login := withGenerated(withDefaultMemory(input))
+	input, generated, login := withGenerated(withDefaultHealthCheck(withDefaultMemory(input)))
 	nameAddress := func() error {
 		a, err := s.AddressFor(ctx, environmentID, AddressQuery{Name: input.Name, Type: string(input.Type), ServerID: input.ServerID,
 			AddonSlug: input.AddonSlug, DockerImage: input.DockerImage, Port: input.Port})
@@ -592,6 +628,9 @@ func (s *ServiceManager) Get(ctx context.Context, id string) (*Service, error) {
 		return nil, err
 	}
 	if svc.RollbackImagesKept, err = s.repo.RollbackImagesKept(ctx, id); err != nil {
+		return nil, err
+	}
+	if svc.HealthCheckPassBelow, err = s.repo.HealthPassBelow(ctx, id); err != nil {
 		return nil, err
 	}
 	if svc.ContainerHealth, svc.ContainerHealthCommand, err = s.repo.ContainerHealth(ctx, id); err != nil {
@@ -750,7 +789,7 @@ func (s *ServiceManager) CreateProjectScoped(ctx context.Context, projectID, use
 	if err := s.checkRepository(ctx, input.RepositoryID, "", projectID); err != nil {
 		return nil, err
 	}
-	input, generated, login := withGenerated(withDefaultMemory(input))
+	input, generated, login := withGenerated(withDefaultHealthCheck(withDefaultMemory(input)))
 	warnings, err := s.checkPolicy(ctx, saveCheckFromCreate(input))
 	if err != nil {
 		return nil, err
@@ -783,7 +822,7 @@ func (s *ServiceManager) CreateOrgScoped(ctx context.Context, orgID, userID stri
 	if input.RepositoryID != "" {
 		return nil, fmt.Errorf("%w: a workspace service builds from a repository URL; a project's repositories are for its own services", ErrInvalidConfig)
 	}
-	input, generated, login := withGenerated(withDefaultMemory(input))
+	input, generated, login := withGenerated(withDefaultHealthCheck(withDefaultMemory(input)))
 	warnings, err := s.checkPolicy(ctx, saveCheckFromCreate(input))
 	if err != nil {
 		return nil, err
@@ -891,6 +930,7 @@ func changedSettings(before, after *Service) []string {
 		{"pids_limit", before.PidsLimit == after.PidsLimit},
 		{"deploy_timeout_minutes", before.DeployTimeoutMinutes == after.DeployTimeoutMinutes},
 		{"rollback_images_kept", before.RollbackImagesKept == after.RollbackImagesKept},
+		{"health_check_pass_below", before.HealthCheckPassBelow == after.HealthCheckPassBelow},
 		{"container_health", before.ContainerHealth == after.ContainerHealth},
 		{"container_health_command", before.ContainerHealthCommand == after.ContainerHealthCommand},
 		{"compose_content", before.ComposeContent == after.ComposeContent},
@@ -958,6 +998,12 @@ func (s *ServiceManager) UpdateConfig(ctx context.Context, id string, input Upda
 	}
 	if k := input.RollbackImagesKept; k != nil && (*k < 0 || *k > 100) {
 		return nil, fmt.Errorf("%w: rollback_images_kept is 1 to 100, or 0 for the default", ErrInvalidConfig)
+	}
+	if err := validateHealthCheck(input.HealthCheckPath, input.HealthCheckTimeout, input.HealthCheckRetries, input.HealthCheckPassBelow); err != nil {
+		return nil, err
+	}
+	if input.HealthCheckTimeout == 0 { // the default, as at create: curl reads 0 as no limit
+		input.HealthCheckTimeout = 5
 	}
 	if l := input.Isolation; l != nil && *l != isolationDefault && *l != IsolationStandard && *l != IsolationSandboxed && *l != IsolationSandboxedStrict {
 		return nil, fmt.Errorf("%w: isolation is default, standard, sandboxed or sandboxed_strict", ErrInvalidConfig)
@@ -1074,6 +1120,11 @@ func (s *ServiceManager) UpdateConfig(ctx context.Context, id string, input Upda
 			return nil, err
 		}
 	}
+	if input.HealthCheckPassBelow != nil {
+		if err := s.repo.SetHealthPassBelow(ctx, id, *input.HealthCheckPassBelow); err != nil {
+			return nil, err
+		}
+	}
 	if checkChanged {
 		if err := s.repo.SetContainerHealth(ctx, id, checkMode, checkCommand); err != nil {
 			return nil, err
@@ -1095,6 +1146,9 @@ func (s *ServiceManager) UpdateConfig(ctx context.Context, id string, input Upda
 		return nil, err
 	}
 	if svc.RollbackImagesKept, err = s.repo.RollbackImagesKept(ctx, id); err != nil {
+		return nil, err
+	}
+	if svc.HealthCheckPassBelow, err = s.repo.HealthPassBelow(ctx, id); err != nil {
 		return nil, err
 	}
 	if svc.ContainerHealth, svc.ContainerHealthCommand, err = s.repo.ContainerHealth(ctx, id); err != nil {
@@ -2323,6 +2377,13 @@ func validateCreateInput(input CreateInput) error {
 		return err
 	}
 	if err := validateContainerHealth(input.ContainerHealth, input.ContainerHealthCommand, input.SourceType); err != nil {
+		return err
+	}
+	retries := 0
+	if input.HealthCheckRetries != nil {
+		retries = *input.HealthCheckRetries
+	}
+	if err := validateHealthCheck(input.HealthCheckPath, input.HealthCheckTimeout, retries, nil); err != nil {
 		return err
 	}
 	return validateComposeRouteService(input.ComposeRouteService)

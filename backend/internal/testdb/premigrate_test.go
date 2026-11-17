@@ -566,3 +566,77 @@ func TestPremigrateRenamesDuplicateAliases(t *testing.T) {
 		t.Fatalf("with the index: %v", err)
 	}
 }
+
+// 0084 (issue #12): on the upgrade that adds health_check_pass_below, the
+// services from before keep curl -f's rule (below 400 passes); a new one
+// gets 500 from schema.sql. A timeout or attempt count outside what the API
+// now takes is brought into it, and a path without its leading / gets one,
+// each change in its workspace's audit log as Toft's own act. Twice changes
+// nothing more.
+func TestPremigrateKeepsOldHealthChecksAndClampsTheirRanges(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	sql, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations", "premigrate.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := testdb.New(t)
+	ctx := context.Background()
+	q := func(query string, args ...any) string {
+		t.Helper()
+		var out string
+		if err := db.QueryRow(ctx, query, args...).Scan(&out); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return out
+	}
+	userID := q(`INSERT INTO users (email, name, password_hash) VALUES ('dev@toft.test', 'Dev', 'x') RETURNING id::text`)
+	orgID := q(`INSERT INTO organizations (name) VALUES ('Acme') RETURNING id::text`)
+	projectID := q(`INSERT INTO projects (user_id, org_id, name) VALUES ($1, $2, 'Shop') RETURNING id::text`, userID, orgID)
+	env := q(`INSERT INTO environments (project_id, name) VALUES ($1, 'production') RETURNING id::text`, projectID)
+	// As the release before the column left it.
+	if _, err := db.Exec(ctx, `ALTER TABLE services DROP COLUMN health_check_pass_below`); err != nil {
+		t.Fatal(err)
+	}
+	service := func(name string, timeout, retries int) string {
+		return q(`INSERT INTO services (environment_id, name, source_type, docker_image, health_check_timeout, health_check_retries)
+			VALUES ($1, $2, 'docker-image', 'web:1', $3, $4) RETURNING id::text`, env, name, timeout, retries)
+	}
+	fine := service("fine", 5, 3)
+	zero := service("zero", 0, 3)
+	slow := service("slow", 300, 50)
+	negative := service("negative", -1, -2)
+	noSlash := q(`INSERT INTO services (environment_id, name, source_type, docker_image, health_check_path)
+		VALUES ($1, 'no-slash', 'docker-image', 'web:1', 'health') RETURNING id::text`, env)
+	orgScoped := q(`INSERT INTO services (scope, scoped_org_id, name, source_type, docker_image, health_check_timeout)
+		VALUES ('org', $1, 'shared', 'docker-image', 'web:1', 90) RETURNING id::text`, orgID)
+
+	for i := range 2 {
+		if _, err := db.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	for id, want := range map[string]string{
+		fine: "/health 5 3 400", zero: "/health 5 3 400", slow: "/health 60 10 400", negative: "/health 5 0 400",
+		orgScoped: "/health 60 0 400",
+		noSlash:   "/health 5 0 400",
+	} {
+		if got := q(`SELECT concat_ws(' ', health_check_path, health_check_timeout, health_check_retries, health_check_pass_below) FROM services WHERE id = $1`, id); got != want {
+			t.Errorf("service %s: %q, want %q", id, got, want)
+		}
+	}
+	if got, want := q(`SELECT count(*)::text FROM audit_log WHERE action = 'service.health_check_clamped'`), "5"; got != want {
+		t.Errorf("%s audit entries, want %s", got, want)
+	}
+	if got, want := q(`SELECT concat_ws(' ', org_id, actor_id, metadata->>'name', metadata->'from', metadata->'to')
+		FROM audit_log WHERE action = 'service.health_check_clamped' AND resource = 'service:' || $1`, slow),
+		orgID+` slow {"path": "/health", "retries": 50, "timeout": 300} {"path": "/health", "retries": 10, "timeout": 60}`; got != want {
+		t.Errorf("audit entry %q, want %q", got, want)
+	}
+	// After the upgrade, schema.sql's default: a new service passes below 500.
+	if _, err := db.Exec(ctx, `ALTER TABLE services ALTER COLUMN health_check_pass_below SET DEFAULT 500`); err != nil {
+		t.Fatal(err)
+	}
+	if got := q(`SELECT health_check_pass_below::text FROM services WHERE id = $1`, service("new", 5, 5)); got != "500" {
+		t.Errorf("a new service: %s, want 500", got)
+	}
+}

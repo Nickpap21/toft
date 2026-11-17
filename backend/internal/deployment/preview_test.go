@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/server"
 	"github.com/Nickpap21/toft/backend/internal/service"
 )
@@ -99,4 +100,12 @@ func TestMakeRoomOnThePanelsServer(t *testing.T) {
 	s.MakeRoom(context.Background(), TriggerInput{ServiceID: "api", ServiceName: "api", OrgID: "ws"})
 	assert.Equal(t, []string{"pr-oldest", "pr-newer"}, e.stopped, "the panel's apps share is the ledger there")
 	assert.Equal(t, "api needed the memory on the panel's server", e.notes[0])
+}
+
+// The deploy's health check carries what passes it (issue #12): dropped, a
+// 404 would fail a new app again.
+func TestRolloutSpecCarriesTheHealthCheck(t *testing.T) {
+	spec := rolloutSpec("d-1", TriggerInput{HealthCheckPath: "/", HealthCheckTimeout: 5, HealthCheckRetries: 5, HealthCheckPassBelow: 500}, "t", false)
+	assert.Equal(t, &rollout.HealthCheck{Path: "/", TimeoutSec: 5, Retries: 5, PassBelow: 500}, spec.Health)
+	assert.Nil(t, rolloutSpec("d-1", TriggerInput{HealthCheckPath: "/", HealthCheckPassBelow: 500}, "t", false).Health, "0 attempts is off")
 }

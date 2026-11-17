@@ -204,7 +204,7 @@ func TestHandler_UpdateConfig_KeepsWhatTheBodyLeavesOut(t *testing.T) {
 // leaves it out.
 func TestConfigOverFillsEveryField(t *testing.T) {
 	keptByRepository := map[string]bool{
-		"RepositoryID": true, "DeployOnPush": true, "ComposeRouteService": true, "PidsLimit": true, "DeployTimeoutMinutes": true, "RollbackImagesKept": true, "Isolation": true,
+		"RepositoryID": true, "DeployOnPush": true, "ComposeRouteService": true, "PidsLimit": true, "DeployTimeoutMinutes": true, "RollbackImagesKept": true, "HealthCheckPassBelow": true, "Isolation": true,
 		"ContainerHealth": true, "ContainerHealthCommand": true,
 		"RegistryPassword": true, "GitToken": true, "BasicAuthPassword": true,
 		// Set by UpdateConfig alone (credentialsMoved), never from the stored service.

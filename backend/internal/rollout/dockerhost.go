@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -162,12 +163,21 @@ func (h DockerHost) WaitReady(ctx context.Context, name string, port int, logFn 
 // Health asks the health check's path from inside name's network namespace
 // (healthProbe), so the app's image needs no curl.
 func (h DockerHost) Health(ctx context.Context, name string, port int, hc HealthCheck) error {
-	code, err := healthProbe(ctx, h.Client, name, port, hc)
-	if err != nil {
+	exit, status, err := healthProbe(ctx, h.Client, name, port, hc)
+	switch {
+	case err != nil:
 		return err
+	case exit == 28: // curl's operation timeout
+		return fmt.Errorf("got no answer within %d s", hc.TimeoutSec)
+	case exit != 0:
+		return fmt.Errorf("got no answer on port %d (curl exit %d)", port, exit)
 	}
-	if code != 0 {
-		return fmt.Errorf("exit status %d", code)
+	passBelow := hc.PassBelow
+	if passBelow == 0 {
+		passBelow = 400
+	}
+	if code, convErr := strconv.Atoi(status); convErr != nil || code == 0 || code >= passBelow {
+		return fmt.Errorf("answered %s", status)
 	}
 	return nil
 }
@@ -273,19 +283,19 @@ func ProbeTarget(ctx context.Context, dc *client.Client, name string) (networkMo
 
 // healthProbe runs one health check request: a throwaway probe container
 // asks port/path from where ProbeTarget says, so distroless and slim images
-// without curl pass too. It returns curl's exit code: non-zero
-// on no answer, a timeout, or an HTTP status of 400 or more (curl -f).
-func healthProbe(ctx context.Context, dc *client.Client, name string, port int, hc HealthCheck) (int64, error) {
+// without curl pass too. It returns curl's exit code (non-zero: no answer
+// or a timeout) and the HTTP status it printed ("000": none).
+func healthProbe(ctx context.Context, dc *client.Client, name string, port int, hc HealthCheck) (exit int64, status string, err error) {
 	if err := ensureImage(ctx, dc, HealthProbeImage); err != nil {
-		return 0, fmt.Errorf("the probe image: %w", err)
+		return 0, "", fmt.Errorf("the probe image: %w", err)
 	}
 	networkMode, host, err := ProbeTarget(ctx, dc, name)
 	if err != nil {
-		return 0, fmt.Errorf("the probe's target: %w", err)
+		return 0, "", fmt.Errorf("the probe's target: %w", err)
 	}
 	pids := int64(64)
+	// Not AutoRemove: its output, the status, is read after it exits.
 	hostCfg := &container.HostConfig{
-		AutoRemove:  true,
 		NetworkMode: container.NetworkMode(networkMode),
 		SecurityOpt: []string{"no-new-privileges:true"},
 		CapDrop:     []string{"NET_RAW"},
@@ -294,27 +304,41 @@ func healthProbe(ctx context.Context, dc *client.Client, name string, port int, 
 	cfg := &container.Config{
 		Image:      HealthProbeImage,
 		Entrypoint: []string{"curl"},
-		Cmd:        []string{"-sf", "-o", "/dev/null", "--max-time", strconv.Itoa(hc.TimeoutSec), fmt.Sprintf("http://%s:%d%s", host, port, hc.Path)},
+		Cmd:        []string{"-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", strconv.Itoa(hc.TimeoutSec), fmt.Sprintf("http://%s:%d%s", host, port, hc.Path)},
 		Labels:     map[string]string{"traefik.enable": "false"},
 	}
 	resp, err := dc.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
-		return 0, fmt.Errorf("ContainerCreate (probe): %w", err)
+		return 0, "", fmt.Errorf("ContainerCreate (probe): %w", err)
 	}
+	defer func() {
+		rctx, cancel := settle(ctx)
+		defer cancel()
+		_ = dc.ContainerRemove(rctx, resp.ID, container.RemoveOptions{Force: true})
+	}()
 	// Registered before start, as runEphemeral's.
 	waitCtx, cancelWait := context.WithCancel(ctx)
 	defer cancelWait()
-	statusCh, errCh := dc.ContainerWait(waitCtx, resp.ID, container.WaitConditionRemoved)
+	statusCh, errCh := dc.ContainerWait(waitCtx, resp.ID, container.WaitConditionNextExit)
 	if err := dc.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		_ = dc.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
-		return 0, fmt.Errorf("ContainerStart (probe): %w", err)
+		return 0, "", fmt.Errorf("ContainerStart (probe): %w", err)
 	}
 	select {
 	case st := <-statusCh:
-		return st.StatusCode, nil
+		exit = st.StatusCode
 	case err := <-errCh:
-		return 0, fmt.Errorf("ContainerWait (probe): %w", err)
+		return 0, "", fmt.Errorf("ContainerWait (probe): %w", err)
 	}
+	logs, err := dc.ContainerLogs(ctx, resp.ID, container.LogsOptions{ShowStdout: true})
+	if err != nil {
+		return 0, "", fmt.Errorf("ContainerLogs (probe): %w", err)
+	}
+	defer logs.Close()
+	var out bytes.Buffer
+	if _, err := stdcopy.StdCopy(&out, io.Discard, io.LimitReader(logs, 1024)); err != nil {
+		return 0, "", fmt.Errorf("ContainerLogs (probe): %w", err)
+	}
+	return exit, strings.TrimSpace(out.String()), nil
 }
 
 // ensureImage pulls image when the host lacks it.

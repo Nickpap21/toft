@@ -76,16 +76,36 @@ func TestHealthProbesFromTheSlotsNetwork(t *testing.T) {
 	f.Add(slotGreen, container.StateRunning, svcLabels(slotSvcID))
 	h := DockerHost{Client: f.Client()}
 
+	f.RunOutput = "200"
 	require.NoError(t, h.Health(context.Background(), slotGreen, 8080, HealthCheck{Path: "/health", TimeoutSec: 5}))
-	probe := f.Containers[len(f.Containers)-1]
+	require.Len(t, f.Removed, 1, "the probe container is removed once its answer is read")
+	probe := f.Removed[0]
 	assert.Equal(t, HealthProbeImage, probe.Image)
 	assert.Equal(t, []string{"curl"}, probe.Entrypoint)
-	assert.Equal(t, []string{"-sf", "-o", "/dev/null", "--max-time", "5", "http://localhost:8080/health"}, probe.Cmd)
+	assert.Equal(t, []string{"-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "http://localhost:8080/health"}, probe.Cmd)
 	assert.Equal(t, []string{"CAP_NET_RAW"}, probe.CapDrop, "the client sends it normalised")
 	assert.Equal(t, "false", probe.Labels["traefik.enable"])
+}
 
-	f.ExitCode = 22
-	assert.EqualError(t, h.Health(context.Background(), slotGreen, 8080, HealthCheck{Path: "/health", TimeoutSec: 5}), "exit status 22")
+// What passes is an answer below PassBelow: 400 (a service from before
+// the setting: curl -f's rule) or 500 (a new service's: a 404 is an app that
+// is up). A failure names the status, or that nothing answered.
+func TestHealthJudgesTheStatus(t *testing.T) {
+	f := fakedocker.New(t)
+	f.Add(slotGreen, container.StateRunning, svcLabels(slotSvcID))
+	h := DockerHost{Client: f.Client()}
+	check := func(passBelow int, output string, exit int) error {
+		f.RunOutput, f.ExitCode = output, exit
+		return h.Health(context.Background(), slotGreen, 8080, HealthCheck{Path: "/", TimeoutSec: 5, PassBelow: passBelow})
+	}
+
+	require.NoError(t, check(0, "302", 0), "a redirect passes")
+	assert.EqualError(t, check(0, "404", 0), "answered 404")
+	assert.EqualError(t, check(400, "404", 0), "answered 404")
+	require.NoError(t, check(500, "404", 0))
+	assert.EqualError(t, check(500, "503", 0), "answered 503")
+	assert.EqualError(t, check(500, "000", 28), "got no answer within 5 s")
+	assert.EqualError(t, check(500, "000", 7), "got no answer on port 8080 (curl exit 7)")
 }
 
 func TestExecReportsTheExitCode(t *testing.T) {

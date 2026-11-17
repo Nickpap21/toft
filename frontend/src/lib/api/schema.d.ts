@@ -9183,8 +9183,11 @@ export interface components {
             git_token?: string;
             pre_deploy_commands?: string;
             post_deploy_commands?: string;
+            /** @description The path the health check asks for, GET; absent is "/". */
             health_check_path?: string;
+            /** @description Seconds each attempt waits for an answer, 1 to 60; 0 or absent is the default, 5. */
             health_check_timeout?: number;
+            /** @description Attempts, 2 s apart, before the deploy fails; 0 turns the check off. Absent is 5 for a web app built from git or an image without a catalog add-on, and 0 for anything else. */
             health_check_retries?: number;
             required_env_vars?: string;
             migrate_command?: string;
@@ -9322,6 +9325,11 @@ export interface components {
             health_check_path: string;
             health_check_timeout: number;
             health_check_retries: number;
+            /**
+             * @description An answer below this status passes the health check. 500 for a service created since issue
+             * @enum {integer}
+             */
+            health_check_pass_below?: 400 | 500;
             required_env_vars: string;
             migrate_command: string;
             dependencies?: string[];
@@ -9411,8 +9419,15 @@ export interface components {
             pre_deploy_commands?: string;
             post_deploy_commands?: string;
             health_check_path?: string;
+            /** @description 1 to 60 seconds; 0 is the default, 5. */
             health_check_timeout?: number;
+            /** @description 0 to 10 attempts; 0 turns the check off. */
             health_check_retries?: number;
+            /**
+             * @description Absent or null keeps it; an answer below this status passes the health check.
+             * @enum {integer|null}
+             */
+            health_check_pass_below?: 400 | 500 | null;
             required_env_vars?: string;
             migrate_command?: string;
             dependencies?: string[];

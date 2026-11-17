@@ -938,6 +938,7 @@ type Service struct {
 	HealthCheckPath        string             `json:"health_check_path"`
 	HealthCheckTimeout     int32              `json:"health_check_timeout"`
 	HealthCheckRetries     int32              `json:"health_check_retries"`
+	HealthCheckPassBelow   int16              `json:"health_check_pass_below"`
 	RequiredEnvVars        string             `json:"required_env_vars"`
 	MigrateCommand         string             `json:"migrate_command"`
 	Dependencies           string             `json:"dependencies"`

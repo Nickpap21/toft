@@ -57,7 +57,7 @@ func (h *fakeHost) Health(context.Context, string, int, HealthCheck) error {
 	h.calls = append(h.calls, "health")
 	if h.healthFails > 0 {
 		h.healthFails--
-		return errors.New("exit status 7")
+		return errors.New("answered 404")
 	}
 	return nil
 }
@@ -108,6 +108,8 @@ func TestRunSteps(t *testing.T) {
 	assert.Equal(t, StepHealth, res.Step)
 	assert.True(t, res.PreviousServes)
 	assert.Equal(t, "abort "+slotGreen, h.calls[len(h.calls)-1])
+	assert.Equal(t, "health check failed: GET / answered 404 on all 3 attempts. Set its path, or what passes, in the service's Settings → Health check", res.Err,
+		"the failure names the answer and where to change the check")
 
 	h = &fakeHost{previous: []string{slotBlue}, execErr: errors.New("exit status 1")}
 	res = Run(context.Background(), h, spec, Hooks{Abandon: func() bool { return true }})

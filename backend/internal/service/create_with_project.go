@@ -78,7 +78,7 @@ func (s *ServiceManager) CreateWithProject(ctx context.Context, orgID, userID st
 	if err := checkKeysOnce(input); err != nil {
 		return nil, nil, err
 	}
-	input, generated, login := withGenerated(withDefaultMemory(input))
+	input, generated, login := withGenerated(withDefaultHealthCheck(withDefaultMemory(input)))
 	nameAddress := func(ctx context.Context) error {
 		a, err := s.AddressForNewProject(ctx, p.Name, AddressQuery{Name: input.Name, Type: string(input.Type), ServerID: input.ServerID,
 			AddonSlug: input.AddonSlug, DockerImage: input.DockerImage, Port: input.Port})
