@@ -295,3 +295,5 @@ schemas will be Apache-2.0 once they're in their own directories
 the project, not covered by the licence.
 
 [![M8ven Score](https://m8ven.ai/badge/mcp/nickpap21-toft-1aoh2h?v=d8de6561011e5955d2c651480fda1b86)](https://m8ven.ai/mcp/nickpap21-toft-1aoh2h?s=readme)
+
+<!-- CI demo: a documentation-only change. Never merged. -->
