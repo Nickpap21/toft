@@ -424,17 +424,18 @@ func (c *checker) volumes() {
 			o := strings.ToLower(v.DriverOpts["o"])
 			typ := strings.ToLower(v.DriverOpts["type"])
 			switch {
+			case typ != "" && typ != "none" && !localVolumeTypes[typ]:
+				// The local driver mounts device as this filesystem type on
+				// the host, as root: a host disk (ext4, xfs, btrfs...) or an
+				// overlay of host directories, which a container then reads
+				// and writes like any volume. Whatever o holds: "bind" in it
+				// may be part of a path, which is no bind option to Docker.
+				c.addValue(RuleHostBindMount, "", field+".driver_opts.type", v.DriverOpts["type"], "volume type %q can mount a host disk or host directories; only tmpfs, nfs and cifs volumes are allowed", v.DriverOpts["type"])
 			case device != "" && (strings.Contains(o, "bind") || typ == "none" || typ == ""):
 				if !c.inside(device) {
 					rule := hostMountRule(device)
 					c.addValue(rule, "", field+".driver_opts.device", device, "a volume backed by host path %s is a bind mount", device)
 				}
-			case typ != "" && !localVolumeTypes[typ]:
-				// The local driver mounts device as this filesystem type on
-				// the host, as root: a host disk (ext4, xfs, btrfs...) or an
-				// overlay of host directories, which a container then reads
-				// and writes like any volume.
-				c.addValue(RuleHostBindMount, "", field+".driver_opts.type", v.DriverOpts["type"], "volume type %q can mount a host disk or host directories; only tmpfs, nfs and cifs volumes are allowed", v.DriverOpts["type"])
 			}
 		}
 		for _, key := range sortedKeys(v.Labels) {

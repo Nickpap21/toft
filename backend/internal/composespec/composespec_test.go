@@ -109,6 +109,9 @@ func TestValidate_OneCasePerRule(t *testing.T) {
 		{"volume driver bind", "volumes: [\"hostroot:/host\"]", "volumes:\n  hostroot:\n    driver: local\n    driver_opts: {type: none, o: bind, device: /}", composespec.RuleHostBindMount, "volumes.hostroot.driver_opts.device"},
 		{"volume driver host disk", "volumes: [\"disk:/host\"]", "volumes:\n  disk:\n    driver: local\n    driver_opts: {type: ext4, device: /dev/vda1}", composespec.RuleHostBindMount, "volumes.disk.driver_opts.type"},
 		{"volume driver overlay", "volumes: [\"ov:/host\"]", "volumes:\n  ov:\n    driver_opts: {type: overlay, device: overlay, o: \"lowerdir=/etc,upperdir=/tmp/u,workdir=/tmp/w\"}", composespec.RuleHostBindMount, "volumes.ov.driver_opts.type"},
+		// "bind" inside a path is no bind option: the type still decides.
+		{"volume driver overlay, bind in a path", "volumes: [\"ov:/host\"]", "volumes:\n  ov:\n    driver_opts: {type: overlay, device: " + inlineRoot + "/ov, o: \"lowerdir=/etc:/srv/bindl\"}", composespec.RuleHostBindMount, "volumes.ov.driver_opts.type"},
+		{"volume driver nfs as a bind", "volumes: [\"n:/host\"]", "volumes:\n  n:\n    driver_opts: {type: nfs, device: /etc, o: \"rw,rbind\"}", composespec.RuleHostBindMount, "volumes.n.driver_opts.device"},
 		{"external volume", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    external: true\n    name: paas-postgres-data", composespec.RuleExternalVolume, "volumes.pg.external"},
 		{"volume explicit name", "volumes: [\"pg:/data\"]", "volumes:\n  pg:\n    name: control-panel-paas_postgres_data", composespec.RuleExternalVolume, "volumes.pg.name"},
 		{"secret file outside", "secrets: [creds]", "secrets:\n  creds:\n    file: /etc/shadow", composespec.RuleHostBindMount, "secrets.creds.file"},
