@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -296,14 +297,16 @@ func shellNixpacks(t *testing.T) {
 	t.Cleanup(func() { nixpacksSandboxed = was })
 }
 
-// On the panel's host the backend is root, and nixpacks runs as nobody in
-// a root of its own: no capabilities, no environment, nothing of the host
+// On the panel's host the backend is root, and nixpacks runs as
+// toft-sandbox (65532) in a root of its own: no capabilities, no environment, nothing of the host
 // but its own binary and the build's folder, and no way back out. The fake
 // nixpacks is a static Go program that tries each of these and says what
 // it found, and leaves a child running that tries to climb out once its
-// folder is handed back. It needs root on Linux, in a container of its own:
-// the sandbox kills every process of nobody's, and on a host those are the
-// host's. make test-linux and CI's step set TOFT_TEST_SANDBOX for it.
+// folder is handed back; a process of another user's, nobody's, outlives
+// the sandbox. It needs root on Linux, in a container of its own: the
+// sandbox kills every process of 65532's, and on a host some of those can
+// be other containers' (distroless images' nonroot). make test-linux and
+// CI's step set TOFT_TEST_SANDBOX for it.
 func TestLocalNixpacksRunsInItsSandbox(t *testing.T) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 || os.Getenv("TOFT_TEST_SANDBOX") != "1" {
 		t.Skip("needs root on Linux, in a container: make test-linux")
@@ -321,6 +324,10 @@ func TestLocalNixpacksRunsInItsSandbox(t *testing.T) {
 	t.Setenv("JWT_SECRET", "the backend's")
 	const escaped = "/tmp/toft-sandbox-escaped"
 	require.NoError(t, os.RemoveAll(escaped))
+	bystander := exec.Command("sleep", "60")
+	bystander.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
+	require.NoError(t, bystander.Start())
+	t.Cleanup(func() { _ = bystander.Process.Kill(); _ = bystander.Wait() })
 
 	got := map[string]string{}
 	linger := 0
@@ -336,7 +343,7 @@ func TestLocalNixpacksRunsInItsSandbox(t *testing.T) {
 	require.NoError(t, err)
 	const gone = "no such file or directory"
 	assert.Equal(t, map[string]string{
-		"ids":              "65534 65534 65534 65534 []",
+		"ids":              "65532 65532 65532 65532 []",
 		"capabilities":     "[0 0 0 0 0 0]",
 		"environment":      "[]",
 		"root":             "[nixpacks tmp]",
@@ -362,6 +369,9 @@ func TestLocalNixpacksRunsInItsSandbox(t *testing.T) {
 		assert.Regexp(t, `(?m)^Threads:\s+1$`, string(status), "a thread of nixpacks' child is still running")
 	}
 	assert.NoFileExists(t, escaped, "nixpacks' child climbed out of the sandbox")
+	status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", bystander.Process.Pid))
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^State:\s+S`, string(status), "the sandbox killed a process of another user's")
 	files, err := os.ReadFile(filepath.Join(dir, "context"))
 	require.NoError(t, err)
 	assert.Equal(t, "./.nixpacks/Dockerfile\n./package.json\n", string(files), "the build got its folder back, with nixpacks' Dockerfile")

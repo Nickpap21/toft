@@ -207,6 +207,9 @@ services:
     container_name: paas-backend
     logging: *logging
     restart: unless-stopped
+    # An init as pid 1 reaps what the server doesn't: Nixpacks' sandbox
+    # kills whatever a build leaves running, and those are orphans here.
+    init: true
     env_file: .env
     environment:
       TOFT_DATA_DIR: ${TOFT_DATA_DIR:-/var/paas}

@@ -67,6 +67,10 @@ RUN case "$TARGETARCH" in \
 # repositories' volume and the socket's directory start out owned by it.
 RUN adduser -D -H -u 10001 -s /sbin/nologin git && \
     install -d -o 10001 -g 10001 -m 0750 /var/lib/toft/git /run/toft-git
+# Nixpacks' sandbox on the panel's server runs as toft-sandbox (uid 65532,
+# internal/docker sandboxUser), and kills every process of its: nothing
+# else in this image may run as it.
+RUN adduser -D -H -u 65532 -s /sbin/nologin toft-sandbox
 ARG TOFT_VERSION=dev
 LABEL org.opencontainers.image.version=$TOFT_VERSION
 WORKDIR /app

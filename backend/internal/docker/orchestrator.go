@@ -907,29 +907,30 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 // is a shell script turns it off: the sandbox has no /bin/sh.
 var nixpacksSandboxed = os.Geteuid() == 0
 
-// sandboxUser is the user nixpacks runs as in its sandbox: nobody, as on a
-// server (nixpacksSandbox).
-const sandboxUser = 65534
+// sandboxUser is the user and group nixpacks runs as in its sandbox:
+// toft-sandbox, Toft's image's, which nothing else runs as. The sandbox kills
+// every process of its, so it must stay that user's alone.
+const sandboxUser = 65532
 
 // nixpacksJail is nixpacks' sandbox on the panel's host, the local twin of
 // nixpacksSandbox: a new root directory that holds a copy of the nixpacks
-// binary and dir, moved in at its own path and handed to nobody. nix's
-// commands run chrooted there, as nobody, so with no capabilities and no
-// other group, and with an empty environment. They see no /proc, /dev or
-// /etc, no Docker socket, no other build's folder, none of the backend's
-// variables. The network stays: taking it away needs namespaces, which
+// binary and dir, moved in at its own path and handed to sandboxUser.
+// nix's commands run chrooted there, as sandboxUser, so with no
+// capabilities and no other group, and with an empty environment. They see
+// no /proc, /dev or /etc, no Docker socket, no other build's folder, none
+// of the backend's variables. The network stays: taking it away needs namespaces, which
 // need SYS_ADMIN, which the backend doesn't hold. nixpacks must be the
 // static build, Toft's image's, as on a server.
 //
-// undo first kills every process of nobody's: one nixpacks left running
+// undo first kills every process of sandboxUser's: one nixpacks left running
 // (in a session of its own, past the command's kill) would otherwise sit
 // in dir as it moves out of the root, and climb out from there. Then it
 // hands dir back to root at its own path and removes the rest; with a
 // process it couldn't kill, it removes dir too. It can run more than once.
 // The sandbox kills them before it starts as well, and won't start beside
 // one. Killing by user is why one sandbox runs at a time: jailMu, from here
-// to undo. It is also why the backend must be alone in its pid namespace
-// with nobody's processes, as in its container.
+// to undo. The processes it kills are orphans, which the container's init
+// reaps (docker-compose.yml's init: true).
 func nixpacksJail(dir string) (nix func(ctx context.Context, args ...string) *exec.Cmd, undo func() error, err error) {
 	bin, err := exec.LookPath("nixpacks")
 	if err != nil {
@@ -968,7 +969,7 @@ func nixpacksJail(dir string) (nix func(ctx context.Context, args ...string) *ex
 		func() error { return copyFile(bin, filepath.Join(root, "nixpacks"), 0o555) },
 		func() error { return os.MkdirAll(filepath.Dir(jailed), 0o755) },
 		func() error { return os.Rename(dir, jailed) },
-		// Handed to nobody, a file loses any setuid bit it came with.
+		// Handed to sandboxUser, a file loses any setuid bit it came with.
 		func() error { return chownTree(jailed, sandboxUser) },
 	} {
 		if err := step(); err != nil {
