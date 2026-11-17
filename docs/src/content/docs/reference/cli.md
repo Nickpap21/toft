@@ -170,7 +170,7 @@ A one-project key needs one or more of these:
 
 | Scope | Label in the panel | Allows |
 | --- | --- | --- |
-| `deploy` | Deploy, follow and roll back | Deploys, rollbacks and their logs, and a service's live logs. |
+| `deploy` | Deploy, roll back and read live logs | Deploys, rollbacks and their logs, and a service's live logs. |
 | `variables` | Variables and secrets | Reading and setting variables, and setting secrets. |
 | `code_read` | Clone and fetch its code | Cloning and fetching the project's repositories. |
 | `code_write` | Push to its code | Pushing too; includes `code_read`. |

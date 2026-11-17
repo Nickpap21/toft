@@ -215,7 +215,8 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	}
 
 	// Every service of the workspace, for the sidebar and the command palette.
-	// Not in a project-scoped API key's routes, so those keys get 403.
+	// A project key with deploy gets its own project's services (only those
+	// it names, if it names any), narrowed in the handler (issue #11).
 	r.GET("/workspace/services", h.handleListWorkspace)
 	r.GET("/observability/logs", h.handleLogDrivers)
 

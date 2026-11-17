@@ -54,7 +54,7 @@ import {
 } from "@/components/settings/settings-frame";
 
 const SCOPE_LABEL: Record<APIKeyScope, string> = {
-  deploy: "Deploy, follow and roll back",
+  deploy: "Deploy, roll back and read live logs",
   variables: "Variables and secrets",
   code_read: "Clone and fetch its code",
   code_write: "Push to its code",
