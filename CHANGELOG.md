@@ -16,7 +16,7 @@ Toft's own code reached none of. No migration: a failed upgrade starts
 ### Security
 
 - **A compose volume can't mount a host disk or host directories**
-  (High). The local volume driver mounts a volume's `driver_opts.device`
+  (Critical, GHSA-762m-rmcx-c8h5). The local volume driver mounts a volume's `driver_opts.device`
   on the server, as root, with whatever filesystem type the stack names.
   The policy refused only bind-style options, so a workspace developer
   could deploy a volume of `type: ext4` over the server's disk, or an
@@ -107,7 +107,8 @@ alias). Upgrade from 1.0.4.
   write. A plan that names one outside Nixpacks' folder now fails the
   build before anything is written, on every server. Until 1.0.4 this
   reached a server you added that has Nixpacks installed, as its login;
-  the panel's own server had no Nixpacks before this release.
+  the panel's own server had no Nixpacks before this release
+  (Critical, GHSA-rhvx-832w-cx8f).
 - A build on a server you add no longer has buildx run `git` in the
   repository's files, as on the panel's server since this release.
 - Build and compose output arrive in the deploy log as they are written.
