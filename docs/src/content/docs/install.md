@@ -19,7 +19,7 @@ stops it with the reason, and nothing is changed.
 | --- | --- |
 | User | Runs as root (`sudo sh`). |
 | CPU | 64-bit: `x86_64` (amd64) or `aarch64` (arm64). |
-| OS | Ubuntu 22.04+, Debian 12+, Rocky Linux 9+ or AlmaLinux 9+. Other distributions get a "best effort" warning, not a refusal. |
+| OS | Ubuntu 22.04+ or Debian 12+. Other distributions, Rocky Linux and AlmaLinux among them, get a "best effort" warning, not a refusal. |
 | Kernel | 5.10 or newer. |
 | Init | systemd running. Toft needs it for the host firewall and backups. |
 | cgroups | cgroup v2 (the unified hierarchy) mounted. |
