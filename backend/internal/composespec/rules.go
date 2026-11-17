@@ -32,6 +32,7 @@ const (
 	RuleHostBindMount      Rule = "host_bind_mount"     // bind mounts of host paths outside the project
 	RuleExternalVolume     Rule = "external_volume"     // external named volumes (another stack's data)
 	RuleHostExec           Rule = "host_exec"           // commands run on the host (pre-deploy commands, compose providers)
+	RuleVolumeDriver       Rule = "volume_driver"       // nfs and cifs volumes, volume plugins
 	// RuleControlPlane is not a property of the configuration: while apps on
 	// the control-plane server share its network (TOFT_APP_NETWORKS=legacy),
 	// deploys there are limited to instance operators (D-19 stopgap).
@@ -193,6 +194,9 @@ var ruleInfos = []RuleInfo{
 	{Rule: RuleHostExec, Grantable: true, Description: "Commands run on the host (pre-deploy commands, compose providers)",
 		Why: "These commands run as root on the server itself, outside any container.",
 		Fix: "Move the step into the image, or into the migrate command, which runs inside the app's container."},
+	{Rule: RuleVolumeDriver, Grantable: true, Description: "Network share volumes (nfs, cifs) and volume plugins",
+		Why: "The server mounts the share itself, as root and from its own network, so a stack could reach file servers that trust the server. A volume plugin runs on the server and mounts whatever it is told.",
+		Fix: "Use a named volume, or a shared volume for files several services share (Settings → Storage). If the app needs the share, an operator can grant it; the exception is pinned to the share's address and options."},
 	{Rule: RuleControlPlane, Grantable: true, Description: "Deploys to the control-plane server by developers and git-push webhooks, while apps there share its network",
 		Why: "While apps on the panel's own server share its network, an app there could reach the panel's services.",
 		Fix: "Deploy the service to a remote server, or switch the panel's server to isolated app networks."},

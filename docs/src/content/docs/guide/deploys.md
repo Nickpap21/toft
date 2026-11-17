@@ -269,6 +269,8 @@ server. It checks each save and each deploy, and refuses, for example:
 - privileged containers, added capabilities and devices;
 - host networking, and host PID, IPC or UTS namespaces;
 - the Docker socket, and bind mounts of host paths;
+- volumes that mount a host disk, a network share (nfs, cifs) or come from
+  a volume plugin;
 - another stack's external volumes, or networks outside the service's
   environment;
 - commands run on the server's host (Settings → Lifecycle hooks → Before
