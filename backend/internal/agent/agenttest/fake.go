@@ -64,7 +64,7 @@ type Repo struct {
 	// DeploymentStatus is a deployment's status, by id, as a test sets it;
 	// FindOpenApproval reads it as the database's join does.
 	DeploymentStatus map[string]string
-	Released    []string
+	Released         []string
 }
 
 func New() *Repo {
