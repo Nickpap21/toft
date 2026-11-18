@@ -12,6 +12,7 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/testenv"
 
 	"github.com/Nickpap21/toft/backend/internal/deployment"
+	"github.com/Nickpap21/toft/backend/pkg/gitcred"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,8 +54,11 @@ func TestLocalCloneKeepsTheTokenOffTheCommandLine(t *testing.T) {
 		if strings.Contains(strings.SplitN(calls, "\n", 2)[0], "ghp_secret") {
 			t.Errorf("the token reached a command line: %s", calls)
 		}
-		if !strings.Contains(calls, "https://github.com/acme/app.git") || !strings.Contains(calls, "CREDS "+tc.creds+"\n") {
-			t.Errorf("want the plain URL and the credentials %q in a file:\n%s", tc.creds, calls)
+		if !strings.Contains(calls, " -- https://github.com/acme/app.git") || !strings.Contains(calls, "CREDS "+tc.creds+"\n") {
+			t.Errorf("want the plain URL after \"--\" and the credentials %q in a file:\n%s", tc.creds, calls)
+		}
+		if !strings.HasPrefix(calls, "ARGS "+strings.Join(gitcred.ProtocolArgs(), " ")+" ") {
+			t.Errorf("the clone is not limited to https, http, ssh and git:\n%s", calls)
 		}
 	}
 }
@@ -107,7 +111,7 @@ func TestCloneFailureNamesGitsReason(t *testing.T) {
 	out, err = exec.Command("git", "-C", src, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "init").CombinedOutput()
 	require.NoError(t, err, string(out))
 
-	_, _, err = cloneRepository(context.Background(), "file://"+src, "no-such-branch", "", func(string) {})
+	_, _, err = cloneRepository(context.Background(), testenv.GitURL(t, src), "no-such-branch", "", func(string) {})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Remote branch no-such-branch not found")
 }

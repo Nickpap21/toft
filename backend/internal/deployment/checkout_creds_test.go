@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Nickpap21/toft/backend/pkg/gitcred"
 )
 
 // fakeGit puts a git on PATH that records each call's arguments and the
@@ -57,8 +59,11 @@ func TestCheckoutRepoKeepsTheTokenOffTheCommandLine(t *testing.T) {
 					t.Errorf("the token reached a command line: %s", line)
 				}
 			}
-			if !strings.Contains(calls, "https://github.com/acme/infra.git") {
-				t.Errorf("git is not given the plain URL:\n%s", calls)
+			if !strings.Contains(calls, " -- https://github.com/acme/infra.git") {
+				t.Errorf("git is not given the plain URL after \"--\":\n%s", calls)
+			}
+			if !strings.Contains(calls, "ARGS "+strings.Join(gitcred.ProtocolArgs(), " ")+" ") {
+				t.Errorf("the fetching call is not limited to https, http, ssh and git:\n%s", calls)
 			}
 			if !strings.Contains(calls, "CREDS "+tc.creds+"\n") {
 				t.Errorf("the fetching call did not get the credentials %q:\n%s", tc.creds, calls)

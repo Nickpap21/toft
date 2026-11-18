@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -906,7 +907,8 @@ func TestTrigger_WarnModeLogsAndDeploys(t *testing.T) {
 }
 
 // infraRepo creates a local git repository with files committed on main, to
-// stand in for an infra repo; it returns its file:// URL.
+// stand in for an infra repo; it returns its URL, served over HTTP (deploy
+// clones refuse file://).
 func infraRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -928,7 +930,13 @@ func infraRepo(t *testing.T, files map[string]string) string {
 	}
 	runGit("add", ".")
 	runGit("commit", "-q", "-m", "init")
-	return "file://" + src
+	return testenv.GitURL(t, src)
+}
+
+// repoDir is the directory of the repository infraRepo made.
+func repoDir(repoURL string) string {
+	u, _ := url.Parse(repoURL)
+	return u.Path
 }
 
 func TestPipeline_ComposeRepoViolationFailsAfterClone(t *testing.T) {
@@ -996,7 +1004,7 @@ func TestPipeline_ComposeCloneFailureNamesGitsReason(t *testing.T) {
 // a rollback gets the same files. A pinned deploy records the pinned commit.
 func TestPipeline_ComposeRepoRecordsTheCommitCheckedOut(t *testing.T) {
 	src := infraRepo(t, map[string]string{"docker-compose.yml": "services:\n  a:\n    image: alpine\n"})
-	out, err := exec.Command("git", "-C", strings.TrimPrefix(src, "file://"), "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "-C", repoDir(src), "rev-parse", "HEAD").Output()
 	require.NoError(t, err)
 	head := strings.TrimSpace(string(out))
 
@@ -2025,7 +2033,7 @@ func (o *repoReadingOrchestrator) RunComposeFromRepo(_ context.Context, _ string
 // commitTo adds a commit to the repository infraRepo made and returns its SHA.
 func commitTo(t *testing.T, repoURL string, files map[string]string) string {
 	t.Helper()
-	dir := strings.TrimPrefix(repoURL, "file://")
+	dir := repoDir(repoURL)
 	for name, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
 	}
@@ -2567,7 +2575,7 @@ func TestPipeline_ComposeRepoSymlinkNotLoadedForMemory(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.yml")
 	require.NoError(t, os.WriteFile(outside, []byte("services:\n  a:\n    image: x\n"), 0o644))
 	src := infraRepo(t, map[string]string{"README": "infra\n"})
-	dir := strings.TrimPrefix(src, "file://")
+	dir := repoDir(src)
 	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "docker-compose.yml")))
 	for _, args := range [][]string{{"add", "."}, {"commit", "-q", "-m", "link"}} {
 		cmd := exec.Command("git", args...)

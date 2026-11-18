@@ -530,14 +530,18 @@ func remoteActiveContainerName(ctx context.Context, sc interface {
 // prompt for the missing password if it came from a credential file.
 func (o *RemoteOrchestrator) cloneOnRemote(ctx context.Context, repoURL, branch, dir string, logFn func(string)) error {
 	cloneURL, credLine := gitcred.Split(repoURL)
-	gitOpts := ""
+	opts := gitcred.ProtocolArgs()
 	if credLine != "" {
 		credFile := dir + ".git-credentials"
 		if err := o.uploadPrivate(ctx, credFile, []byte(credLine+"\n")); err != nil {
 			return fmt.Errorf("upload git credentials: %w", err)
 		}
 		defer o.cleanup(ctx, "rm -f "+shellEscape(credFile))
-		gitOpts = "-c credential.helper= -c " + shellEscape("credential.helper=store --file="+credFile) + " "
+		opts = append(opts, gitcred.HelperArgs(credFile)...)
+	}
+	gitOpts := ""
+	for _, opt := range opts {
+		gitOpts += shellEscape(opt) + " "
 	}
 	// "--" ends the options, so the quoted URL is never read as one.
 	cloneCmd := fmt.Sprintf("git %sclone --depth 1 --branch %s -- %s %s 2>&1", gitOpts, shellEscape(branch), shellEscape(cloneURL), dir)
