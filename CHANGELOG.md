@@ -6,6 +6,52 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.2.2 (2026-11-18)
+
+Hardening of git clones and of a deploy's git ref. No migration: a
+failed upgrade starts 1.2.1 again without restoring the database.
+Upgrade from 1.2.1.
+
+### Before upgrading
+
+- **`toft deploy --ref` needs the 1.2.2 CLI.** A deploy's `git_ref` now
+  needs `git_ref_type` (`branch` or `tag`); one sent without it is
+  refused with 400 `invalid_config`. Until now it was ignored, and the
+  deploy ran from the service's own branch. The CLI from 1.2.1 and
+  before sends `--ref` without a type, so its `--ref` gets the 400:
+  update it. A script or agent that sends `git_ref` adds
+  `git_ref_type`. The panel always sends one.
+- **An agent's deploy waiting for approval when you upgrade**, one that
+  sent `git_ref` without `git_ref_type`, is refused once approved: ask
+  the agent again. After the upgrade, a request like it is refused at
+  once and never waits for approval.
+
+### Deploys
+
+- **A deploy's clone uses https, http, ssh or git only.** Every clone
+  and fetch of a service's repository, its compose repository or a
+  pinned commit, on the panel's server and on added servers, refuses
+  other git transports (`ext::`, `fd::`, `file://`, a local path) and
+  ends git's options before the URL. A tag's name is checked by the
+  same rules as a branch's. URLs Toft accepted before are unchanged
+  (#43).
+- **A deploy's `git_ref` says whether it is a branch or a tag**, as
+  above. A deploy's invalid fields (`commit_sha`, `image_tag`,
+  `git_ref`) answer 400 with the code `invalid_config`, and a refused
+  ref is named `git_ref` in the message, not `git_branch` (#45).
+- **An agent's deploy that can only fail is refused before the agent
+  policy**, so nobody is asked to approve it (#45).
+
+### CLI
+
+- **`toft deploy --ref REF` deploys a branch**, which becomes the
+  service's branch; add `--ref-type tag` to deploy a tag once (#45).
+
+### Tests
+
+- A log test that failed now and then (`TestLogHub_SlowViewerIsCutOff`)
+  no longer races its own fast viewer. The log hub is unchanged (#44).
+
 ## 1.2.1 (2026-11-17)
 
 Fixes for agent deploys, health checks and clone errors, and a health
