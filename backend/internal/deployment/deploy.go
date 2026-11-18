@@ -165,6 +165,11 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 		// A build from the project's own repository builds commit_sha (D-77).
 		return nil, &refusal{refusedInvalid, "commit_sha must be a full 40-character commit SHA"}
 	}
+	// A tag goes to git's --branch as a branch does, with the same rules;
+	// checked before any override is saved.
+	if err := serviceManager.ValidateGitBranch(body.GitRef); err != nil {
+		return nil, &refusal{refusedInvalid, err.Error()}
+	}
 	// What the override replaced (the image and a registry password it
 	// cleared), put back if no deploy starts.
 	previousImage, clearedPassword := "", ""
@@ -210,9 +215,6 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 		}
 	}
 	if body.GitRef != "" && body.GitRefType == "branch" {
-		if err := serviceManager.ValidateGitBranch(body.GitRef); err != nil {
-			return nil, &refusal{refusedInvalid, err.Error()}
-		}
 		if err := s.serviceManager.UpdateGitBranch(ctx, serviceID, body.GitRef); err != nil {
 			s.log.Warn("failed to persist git branch override", zap.Error(err), zap.String("service_id", serviceID))
 		} else {

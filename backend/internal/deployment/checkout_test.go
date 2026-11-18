@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nickpap21/toft/backend/internal/testenv"
 
@@ -49,7 +50,7 @@ func TestCheckoutRepoPinsCommit(t *testing.T) {
 	}
 
 	pinned := t.TempDir()
-	if out, err := checkoutRepo(context.Background(), "file://"+src, "main", first, pinned); err != nil {
+	if out, err := checkoutRepo(context.Background(), testenv.GitURL(t, src), "main", first, pinned); err != nil {
 		t.Fatalf("checkout at SHA: %v\n%s", err, out)
 	}
 	if got := read(pinned); got != "v1" {
@@ -57,11 +58,59 @@ func TestCheckoutRepoPinsCommit(t *testing.T) {
 	}
 
 	tip := t.TempDir()
-	if out, err := checkoutRepo(context.Background(), "file://"+src, "main", "", tip); err != nil {
+	if out, err := checkoutRepo(context.Background(), testenv.GitURL(t, src), "main", "", tip); err != nil {
 		t.Fatalf("checkout at branch: %v\n%s", err, out)
 	}
 	if got := read(tip); got != "v2" {
 		t.Fatalf("branch checkout has %q, want v2", got)
+	}
+}
+
+// An ssh host that starts with "-" would be ssh's option: git refuses it,
+// at the branch tip and at a commit. That "--" ends git's own options
+// before the URL is asserted on the checkout's arguments
+// (TestCheckoutRepoKeepsTheTokenOffTheCommandLine). CodeQL #49.
+func TestCheckoutRepoRefusesAnSSHHostThatIsAnOption(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		testenv.Skip(t, "needs ssh")
+	}
+	_, marker := testenv.GitMarker(t)
+	t.Setenv("TOFT_TEST_MARKER", marker)
+	const url = "ssh://-oProxyCommand=touch $TOFT_TEST_MARKER/r.git"
+	for _, sha := range []string{"", strings.Repeat("a", 40)} {
+		out, _ := checkoutRepo(context.Background(), url, "main", sha, filepath.Join(t.TempDir(), "c"))
+		if _, err := os.Stat(marker); err == nil {
+			t.Fatalf("sha %q: git ran the command\n%s", sha, out)
+		}
+		if !strings.Contains(string(out), "strange hostname") {
+			t.Errorf("sha %q: want git's refusal of the host, got\n%s", sha, out)
+		}
+	}
+}
+
+// A compose checkout uses https, http, ssh or git only: ext:: and fd:: would
+// run or read what the URL names, and file:// or a path would clone the
+// panel's own disk.
+func TestCheckoutRepoRefusesOtherTransports(t *testing.T) {
+	src, marker := testenv.GitMarker(t)
+	for _, url := range []string{
+		"ext::sh -c touch% " + marker,
+		"fd::0",
+		"file://" + src,
+		src,
+	} {
+		for _, sha := range []string{"", strings.Repeat("a", 40)} {
+			// fd::0 waits on stdin when git lets it through.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			out, err := checkoutRepo(ctx, url, "main", sha, filepath.Join(t.TempDir(), "c"))
+			cancel()
+			if _, statErr := os.Stat(marker); statErr == nil {
+				t.Fatalf("%q: git ran the command\n%s", url, out)
+			}
+			if err == nil || !strings.Contains(string(out), "not allowed") {
+				t.Errorf("%q (sha %q): want git's refusal of the transport, got %v\n%s", url, sha, err, out)
+			}
+		}
 	}
 }
 

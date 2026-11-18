@@ -227,7 +227,7 @@ func TestRemoteBuildCleansUpAfterCancel(t *testing.T) {
 		_, err := newTestRemote(h).BuildFromGit(ctx, "https://example.com/r.git", "main", "", "paas/x:1", nil, nil, func(string) {})
 		done <- err
 	}()
-	require.Eventually(t, func() bool { _, ok := h.find("git clone"); return ok }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { _, ok := h.find(" clone --depth 1 "); return ok }, time.Second, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 
@@ -660,7 +660,7 @@ func TestRemoteCloneKeepsTheTokenOffTheCommandLine(t *testing.T) {
 		for _, c := range h.recorded() {
 			assert.NotContains(t, c.cmd, "ghp_secret", "the token reached a command line: %s", c.cmd)
 		}
-		clone, ok := h.find("git -c credential.helper=")
+		clone, ok := h.find("'-c' 'credential.helper=' ")
 		require.True(t, ok, repo)
 		assert.Contains(t, clone.cmd, "'https://github.com/acme/app.git'")
 		_, ok = h.find("rm -f '/tmp/paas-build-abc.git-credentials'")
@@ -1057,7 +1057,7 @@ func TestRemoteCloneEndsOptionsBeforeTheURL(t *testing.T) {
 	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
 	_, _ = o.BuildFromGitNixpacks(context.Background(), "--upload-pack=id", "main", "", "img:1",
 		deployment.NixpacksCommands{}, nil, nil, func(string) {})
-	clone, ok := h.find("git clone")
+	clone, ok := h.find(" clone --depth 1 ")
 	require.True(t, ok)
 	assert.Contains(t, clone.cmd, "--branch 'main' -- '--upload-pack=id' /tmp/paas-build-abc")
 }

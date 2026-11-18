@@ -204,4 +204,18 @@ func TestDeployAfterCreateAndDeployIsOneDeploy(t *testing.T) {
 	_, err := dh.DeployCreated(ctx, service.DeployCaller{OrgID: orgID, UserID: userID, Role: orgPkg.RoleViewer}, id, false)
 	assert.Equal(t, &service.DeployRefused{Message: "viewers cannot deploy"}, err)
 	assert.Equal(t, 3, deployments(id))
+
+	// A ref that starts with "-" is refused, a tag as a branch is: both go
+	// to git's --branch. The image the same call overrides is not saved.
+	for _, typ := range []string{"branch", "tag"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/services/"+id+"/deployments",
+			strings.NewReader(`{"image_tag":"nginx:1.28","git_ref":"--upload-pack=id","git_ref_type":"`+typ+`"}`)))
+		assert.Equal(t, http.StatusBadRequest, w.Code, "%s: %s", typ, w.Body.String())
+		assert.Contains(t, w.Body.String(), "cannot start with '-'", typ)
+		var image string
+		require.NoError(t, db.QueryRow(ctx, `SELECT docker_image FROM services WHERE id = $1`, id).Scan(&image))
+		assert.Equal(t, "nginx:1.27", image, "%s: nothing is saved", typ)
+	}
+	assert.Equal(t, 3, deployments(id))
 }

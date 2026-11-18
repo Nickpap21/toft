@@ -36,9 +36,10 @@ func TestLocalWritesAPrivateFileAndRemovesIt(t *testing.T) {
 	cloneURL, args, cleanup, err := Local("https://bot:ghp_secret@github.com/acme/app.git")
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/acme/app.git", cloneURL)
-	require.Len(t, args, 4)
+	require.Len(t, args, len(ProtocolArgs())+4)
+	assert.Equal(t, ProtocolArgs(), args[:len(ProtocolArgs())])
 	assert.NotContains(t, strings.Join(args, " "), "ghp_secret")
-	path := strings.TrimPrefix(args[3], "credential.helper=store --file=")
+	path := strings.TrimPrefix(args[len(args)-1], "credential.helper=store --file=")
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
@@ -54,7 +55,7 @@ func TestLocalWritesAPrivateFileAndRemovesIt(t *testing.T) {
 	plain, args, cleanup, err := Local("https://github.com/acme/app.git")
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/acme/app.git", plain)
-	assert.Empty(t, args)
+	assert.Equal(t, ProtocolArgs(), args, "without credentials, the protocol limit alone")
 	cleanup()
 }
 
