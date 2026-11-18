@@ -6653,8 +6653,10 @@ type TriggerDeploymentInput struct {
 	// CommitSha Recorded; a compose deploy checks its repository out at it, and a service building from one of the project's repositories builds exactly that commit (D-77).
 	CommitSha *string `json:"commit_sha,omitempty"`
 
-	// GitRef Overrides the git ref for this deploy.
-	GitRef     *string                           `json:"git_ref,omitempty"`
+	// GitRef Overrides the git ref for this deploy. Needs git_ref_type; a branch becomes the service's branch, a tag is deployed once.
+	GitRef *string `json:"git_ref,omitempty"`
+
+	// GitRefType What git_ref names. Required with git_ref.
 	GitRefType *TriggerDeploymentInputGitRefType `json:"git_ref_type,omitempty"`
 
 	// ImageTag Overrides docker_image and persists; for compose, sets IMAGE_TAG.
@@ -6664,7 +6666,7 @@ type TriggerDeploymentInput struct {
 	ServerId *string `json:"server_id"`
 }
 
-// TriggerDeploymentInputGitRefType defines model for TriggerDeploymentInput.GitRefType.
+// TriggerDeploymentInputGitRefType What git_ref names. Required with git_ref.
 type TriggerDeploymentInputGitRefType string
 
 // UpdateCapacityInput defines model for UpdateCapacityInput.

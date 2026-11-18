@@ -70,13 +70,14 @@ its own line.
 Starts a deploy of a service.
 
 ```sh
-toft deploy <service> [--image TAG | --ref REF] [--wait]
+toft deploy <service> [--image TAG | --ref REF [--ref-type tag]] [--wait]
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--image TAG` | Deploy this image tag. |
-| `--ref REF` | Deploy this git branch or tag. |
+| `--ref REF` | Deploy this git branch, which becomes the service's branch. |
+| `--ref-type tag` | `--ref` names a tag: deployed this once, the service's branch unchanged. |
 | `--wait` | Follow the deploy's log and exit with its result. |
 
 Without `--wait`, it prints the deployment's ID and returns once the deploy

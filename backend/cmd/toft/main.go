@@ -30,7 +30,7 @@ func main() {
 const usage = `usage: toft [-url URL] [-key KEY] [-org ID] [-json] <command> [flags] <service>
 
 commands:
-  deploy   <service> [--image TAG | --ref REF] [--wait]   start a deploy
+  deploy   <service> [--image TAG | --ref REF [--ref-type tag]] [--wait]   start a deploy
   logs     <service> [--follow] [--tail N]                the container's logs
   rollback <service> [--to DEPLOYMENT_ID] [--wait]        deploy an earlier version again
   upgrade  --to vX.Y.Z                                    on the panel host, as root: move to a release
@@ -118,7 +118,7 @@ func splitService(args []string) (service string, flags []string) {
 
 func takesValue(flag string) bool {
 	switch strings.TrimLeft(flag, "-") {
-	case "image", "ref", "to", "tail":
+	case "image", "ref", "ref-type", "to", "tail":
 		return !strings.Contains(flag, "=")
 	}
 	return false
@@ -135,10 +135,19 @@ func deploy(ctx context.Context, c *client, args []string, asJSON bool, stdout, 
 	fs.SetOutput(stderr)
 	image := fs.String("image", "", "deploy this image tag")
 	ref := fs.String("ref", "", "deploy this git branch or tag")
+	refType := fs.String("ref-type", "branch", "what --ref names: branch (it becomes the service's branch) or tag")
 	wait := fs.Bool("wait", false, "follow the deploy and exit with its result")
 	service, flags := splitService(args)
 	if err := fs.Parse(flags); err != nil || service == "" || fs.NArg() != 0 {
 		return usageError("deploy needs one <service>")
+	}
+	if *refType != "branch" && *refType != "tag" {
+		return usageError("--ref-type is branch or tag")
+	}
+	refTypeSet := false
+	fs.Visit(func(f *flag.Flag) { refTypeSet = refTypeSet || f.Name == "ref-type" })
+	if refTypeSet && *ref == "" {
+		return usageError("--ref-type needs --ref")
 	}
 	id, err := c.resolve(ctx, service)
 	if err != nil {
@@ -150,6 +159,8 @@ func deploy(ctx context.Context, c *client, args []string, asJSON bool, stdout, 
 	}
 	if *ref != "" {
 		in.GitRef = ref
+		t := apiclient.TriggerDeploymentInputGitRefType(*refType)
+		in.GitRefType = &t
 	}
 	var d apiclient.Deployment
 	if err := c.do(ctx, http.MethodPost, "/api/v1/services/"+id+"/deployments", in, &d); err != nil {

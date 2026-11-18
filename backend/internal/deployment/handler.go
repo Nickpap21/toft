@@ -358,6 +358,9 @@ func (h *Handler) problem(err error) *answer {
 	var pv *composespec.ViolationsError
 	switch {
 	case errors.As(err, &r):
+		if r.kind == refusedInvalid {
+			return &answer{refusalStatus(r.kind), r.msg, gin.H{"code": "invalid_config"}}
+		}
 		return &answer{refusalStatus(r.kind), r.msg, nil}
 	case errors.Is(err, ErrPreviewService):
 		return &answer{http.StatusConflict, err.Error(), gin.H{"code": "preview_service"}}

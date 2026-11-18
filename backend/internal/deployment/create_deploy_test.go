@@ -206,16 +206,26 @@ func TestDeployAfterCreateAndDeployIsOneDeploy(t *testing.T) {
 	assert.Equal(t, 3, deployments(id))
 
 	// A ref that starts with "-" is refused, a tag as a branch is: both go
-	// to git's --branch. The image the same call overrides is not saved.
-	for _, typ := range []string{"branch", "tag"} {
+	// to git's --branch. So is a ref that doesn't say what it is, which
+	// was ignored. The image the same call overrides is not saved.
+	for body, msg := range map[string]string{
+		`{"image_tag":"nginx:1.28","git_ref":"--upload-pack=id","git_ref_type":"branch"}`: "git_ref cannot start with '-'",
+		`{"image_tag":"nginx:1.28","git_ref":"--upload-pack=id","git_ref_type":"tag"}`:    "git_ref cannot start with '-'",
+		`{"image_tag":"nginx:1.28","git_ref":"main"}`:                                     "git_ref needs git_ref_type: branch or tag",
+		`{"image_tag":"nginx:1.28","git_ref":"main","git_ref_type":"commit"}`:             "git_ref needs git_ref_type: branch or tag",
+	} {
+		path := "/api/v1/services/" + id + "/deployments"
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/services/"+id+"/deployments",
-			strings.NewReader(`{"image_tag":"nginx:1.28","git_ref":"--upload-pack=id","git_ref_type":"`+typ+`"}`)))
-		assert.Equal(t, http.StatusBadRequest, w.Code, "%s: %s", typ, w.Body.String())
-		assert.Contains(t, w.Body.String(), "cannot start with '-'", typ)
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		require.Equal(t, http.StatusBadRequest, w.Code, "%s: %s", body, w.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+		apispec.Check(t, http.MethodPost, path, w.Code, out)
+		assert.Equal(t, "invalid_config", out["code"], body)
+		assert.Contains(t, out["error"], msg, body)
 		var image string
 		require.NoError(t, db.QueryRow(ctx, `SELECT docker_image FROM services WHERE id = $1`, id).Scan(&image))
-		assert.Equal(t, "nginx:1.27", image, "%s: nothing is saved", typ)
+		assert.Equal(t, "nginx:1.27", image, "%s: nothing is saved", body)
 	}
 	assert.Equal(t, 3, deployments(id))
 }

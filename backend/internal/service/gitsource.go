@@ -53,15 +53,16 @@ func ValidateGitURL(field, raw string) error {
 
 // ValidateGitBranch accepts what git check-ref-format --branch does, and
 // nothing that starts with "-". Empty is accepted (the default branch).
-// Errors wrap ErrInvalidConfig.
-func ValidateGitBranch(branch string) error {
+// Errors name field (git_ref is a branch or a tag) and wrap
+// ErrInvalidConfig.
+func ValidateGitBranch(field, branch string) error {
 	switch {
 	case branch == "":
 		return nil
 	case strings.HasPrefix(branch, "-"):
-		return fmt.Errorf("%w: git_branch cannot start with '-'", ErrInvalidConfig)
+		return fmt.Errorf("%w: %s cannot start with '-'", ErrInvalidConfig, field)
 	case len(branch) > 255:
-		return fmt.Errorf("%w: git_branch is too long (255 characters at most)", ErrInvalidConfig)
+		return fmt.Errorf("%w: %s is too long (255 characters at most)", ErrInvalidConfig, field)
 	case branchForbidden.MatchString(branch),
 		strings.Contains(branch, ".."),
 		strings.Contains(branch, "@{"),
@@ -71,7 +72,11 @@ func ValidateGitBranch(branch string) error {
 		strings.HasPrefix(branch, "/"),
 		strings.Contains(branch, "//"),
 		strings.Contains(branch, "/."):
-		return fmt.Errorf("%w: git_branch %q is not a valid branch name", ErrInvalidConfig, branch)
+		kind := "branch"
+		if field == "git_ref" {
+			kind = "ref"
+		}
+		return fmt.Errorf("%w: %s %q is not a valid %s name", ErrInvalidConfig, field, branch, kind)
 	}
 	return nil
 }
@@ -122,7 +127,7 @@ func validateGitSource(gitRepoURL, composeRepoURL, branch string) error {
 	if err := ValidateGitURL("compose_repo_url", composeRepoURL); err != nil {
 		return err
 	}
-	return ValidateGitBranch(branch)
+	return ValidateGitBranch("git_branch", branch)
 }
 
 // credentialsMoved says which saved credential an update would send

@@ -1609,7 +1609,7 @@ func (s *ServiceManager) PutBackDockerImage(ctx context.Context, id, from, image
 
 // UpdateGitBranch persists a new git_branch value for the service.
 func (s *ServiceManager) UpdateGitBranch(ctx context.Context, id, branch string) error {
-	if err := ValidateGitBranch(branch); err != nil {
+	if err := ValidateGitBranch("git_branch", branch); err != nil {
 		return err
 	}
 	return s.repo.UpdateGitBranch(ctx, id, branch)

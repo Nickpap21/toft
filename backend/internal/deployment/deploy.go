@@ -71,6 +71,16 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 	if who.Role == "viewer" {
 		return nil, &refusal{refusedForbidden, "viewers cannot deploy"}
 	}
+	// A ref says whether it is a branch or a tag, and a tag goes to git's
+	// --branch as a branch does, with the same rules. These read the body
+	// alone, so they run before the agent policy (D-169): a request that
+	// can only fail never becomes an approval.
+	if body.GitRef != "" && body.GitRefType != "branch" && body.GitRefType != "tag" {
+		return nil, &refusal{refusedInvalid, "git_ref needs git_ref_type: branch or tag"}
+	}
+	if err := serviceManager.ValidateGitBranch("git_ref", body.GitRef); err != nil {
+		return nil, &refusal{refusedInvalid, err.Error()}
+	}
 
 	svc, err := s.serviceManager.Get(ctx, serviceID)
 	if err != nil {
@@ -164,11 +174,6 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 	if body.CommitSHA != "" && svc.RepositoryID != "" && !isFullSHA(body.CommitSHA) {
 		// A build from the project's own repository builds commit_sha (D-77).
 		return nil, &refusal{refusedInvalid, "commit_sha must be a full 40-character commit SHA"}
-	}
-	// A tag goes to git's --branch as a branch does, with the same rules;
-	// checked before any override is saved.
-	if err := serviceManager.ValidateGitBranch(body.GitRef); err != nil {
-		return nil, &refusal{refusedInvalid, err.Error()}
 	}
 	// What the override replaced (the image and a registry password it
 	// cleared), put back if no deploy starts.

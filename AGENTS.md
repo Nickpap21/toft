@@ -105,7 +105,11 @@ The project was called "paas" before it was Toft.
   `toft_oat_` token, plus the active workspace) and `apikey.EnforceScopes`
   (project-scoped keys, and agents: deny by default, `AgentScopeFor`). A
   route that acts for an agent runs the agent policy in its use case
-  (`deployment.Service.CheckAgent`) before anything else.
+  (`deployment.Service.CheckAgent`). The agent policy runs after the
+  workspace and role checks and before anything with side effects.
+  Checks that can only refuse, and that read only the request body or
+  what the caller may already see (the service it addressed, a
+  preview's copy), may run before it.
 - `cmd/server/routes_roles_test.go` records each route's minimum role,
   session and password requirement. A change to who may call a route
   changes its entry on purpose.
