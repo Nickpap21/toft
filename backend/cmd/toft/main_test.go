@@ -100,8 +100,9 @@ func TestDeployRefSendsItsType(t *testing.T) {
 	getenv := func(k string) string { return env[k] }
 
 	var out, errOut bytes.Buffer
-	for _, args := range [][]string{{"--ref", "feature/login"}, {"--ref", "v1.2.0", "--ref-type", "tag"}} {
-		if code := run(append([]string{"deploy", "storefront/production/api"}, args...), getenv, &out, &errOut); code != 0 {
+	// The flags may come before the service: --ref-type's value is not it.
+	for _, args := range [][]string{{"deploy", "storefront/production/api", "--ref", "feature/login"}, {"deploy", "--ref-type", "tag", "--ref", "v1.2.0", "storefront/production/api"}} {
+		if code := run(args, getenv, &out, &errOut); code != 0 {
 			t.Fatalf("%v: exit %d: %s", args, code, errOut.String())
 		}
 	}
