@@ -6,6 +6,40 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.2.1 (2026-11-17)
+
+Fixes for agent deploys, health checks and clone errors, and a health
+check of their own for workers. No migration: a failed upgrade starts
+1.2.0 again without restoring the database. Upgrade from 1.2.0.
+
+### Agents
+
+- **An agent's repeated `deploy` starts a new deploy once the last one
+  has finished.** Within 30 minutes of an approved deploy, the same call
+  again returned that earlier deployment as if it were new. It now waits
+  on the earlier deployment only while it is pending, queued or building;
+  after that, the call is a new request, under the workspace's agent
+  policy like any other.
+
+### Health checks
+
+- **The minute check fails a request that takes its timeout or longer.**
+  The check timed each read, not the whole request, so an app that sent
+  its answer slowly passed, and its last check read longer than its
+  timeout. A request that ends after the timeout now counts as no answer.
+  Known limit: an answer that keeps trickling for more than 5 s past the
+  timeout leaves that minute's check unread, and its request open in the
+  container until the app ends it.
+- **A worker picks its check**: the image's own, a command Docker runs in
+  its containers, HTTP, or none. Workers saw only the HTTP fields before,
+  though most answer no HTTP. Each applies from the worker's next deploy.
+
+### Deploys
+
+- **A failed clone says why.** The deploy's error carries git's own
+  reason, such as `Remote branch nope not found in upstream origin`,
+  beside the exit status, with any `user:token@` in a URL removed.
+
 ## 1.2.0 (2026-11-17)
 
 New web apps get a health check by default, live logs get an API key
