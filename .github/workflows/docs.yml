@@ -50,7 +50,27 @@ jobs:
           cache-dependency-path: docs/package-lock.json
       - run: npm ci
       - name: npm audit (high and above)
-        run: npm audit --audit-level=high
+        # One dated exception: picomatch's ReDoS,
+        # https://github.com/advisories/GHSA-fc5q-39xc-vjpf (high, <= 4.0.7,
+        # no fixed release on 2026-11-18). It runs only while the site
+        # builds, through astro, starlight, vite and tinyglobby, on the
+        # site's own globs. After EXCEPT_UNTIL it fails the audit again.
+        # Any other high or critical advisory fails it, and so does an
+        # audit that returns no report.
+        env:
+          EXCEPT_ID: GHSA-fc5q-39xc-vjpf
+          EXCEPT_UNTIL: "2026-12-18"
+        run: |
+          npm audit --json > "$RUNNER_TEMP/audit.json" || true
+          jq -e '.vulnerabilities | type == "object"' "$RUNNER_TEMP/audit.json" > /dev/null || { echo "npm audit returned no report"; exit 1; }
+          excepted=""
+          if [[ "$(date -u +%F)" < "$EXCEPT_UNTIL" || "$(date -u +%F)" == "$EXCEPT_UNTIL" ]]; then excepted="$EXCEPT_ID"; fi
+          left=$(jq -r --arg id "$excepted" '[.vulnerabilities[].via[] | objects
+            | select(.severity == "high" or .severity == "critical")
+            | select($id == "" or (.url | endswith("/" + $id) | not))
+            | "\(.severity) \(.name): \(.title) \(.url)"] | unique | .[]' "$RUNNER_TEMP/audit.json") || exit 1
+          if [ -n "$left" ]; then echo "$left"; exit 1; fi
+          if [ -n "$excepted" ]; then echo "excepted until $EXCEPT_UNTIL: $EXCEPT_ID"; fi
       - run: npm run build
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
