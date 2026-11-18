@@ -182,6 +182,11 @@ func TestTrigger_CapacityRefusalIsAProblem(t *testing.T) {
 	assert.Equal(t, "Conflict", body["title"])
 	assert.Equal(t, "capacity_exceeded", body["data"].(map[string]any)["code"])
 	apispec.Check(t, http.MethodPost, "/api/v1/services/svc-1/deployments", w.Code, body)
+
+	// A request that is wrong in itself says so first, on a full server too.
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/services/svc-1/deployments", strings.NewReader(`{"git_ref":"main"}`)))
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
 
 // moveRefusals is guestService whose Get and CheckMove a test sets.

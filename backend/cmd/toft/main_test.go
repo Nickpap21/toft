@@ -75,6 +75,57 @@ func TestDeployWaitAndProblem(t *testing.T) {
 	}
 }
 
+// --ref sends what the ref is, a branch unless --ref-type says tag: the
+// server refuses a git_ref without it.
+func TestDeployRefSendsItsType(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/projects":
+			_, _ = w.Write([]byte(`{"data":[{"id":"p1","name":"storefront"}]}`))
+		case "GET /api/v1/workspace/services":
+			_, _ = w.Write([]byte(`{"data":[{"id":"s1","name":"api","project_id":"p1","environment_name":"production"}]}`))
+		case "POST /api/v1/services/s1/deployments":
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			bodies = append(bodies, in)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"data":{"id":"d1","service_id":"s1","status":"pending"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	env := map[string]string{"TOFT_URL": srv.URL, "TOFT_API_KEY": "paas_k", "TOFT_ORG": "org-1"}
+	getenv := func(k string) string { return env[k] }
+
+	var out, errOut bytes.Buffer
+	for _, args := range [][]string{{"--ref", "feature/login"}, {"--ref", "v1.2.0", "--ref-type", "tag"}} {
+		if code := run(append([]string{"deploy", "storefront/production/api"}, args...), getenv, &out, &errOut); code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, code, errOut.String())
+		}
+	}
+	want := []map[string]any{
+		{"git_ref": "feature/login", "git_ref_type": "branch", "server_id": nil},
+		{"git_ref": "v1.2.0", "git_ref_type": "tag", "server_id": nil},
+	}
+	if got, _ := json.Marshal(bodies); string(got) != mustJSON(t, want) {
+		t.Errorf("bodies = %s, want %s", got, mustJSON(t, want))
+	}
+	if code := run([]string{"deploy", "storefront/production/api", "--ref", "v1", "--ref-type", "commit"}, getenv, &out, &errOut); code != 2 {
+		t.Errorf("--ref-type commit: exit %d, want the usage error", code)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 // toft logs with a key that lacks the logs scope says which scope it needs,
 // not just that the key is limited, whether the name lookup or the stream
 // refuses it (issue #11); another 403 passes through as it is.

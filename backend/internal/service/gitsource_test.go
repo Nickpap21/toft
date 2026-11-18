@@ -111,7 +111,7 @@ func TestValidateGitURL(t *testing.T) {
 func TestValidateGitBranch(t *testing.T) {
 	ok := []string{"", "main", "feature/login-form", "release-1.2.3", "v2", "user/nikos/wip_2", "HEAD"}
 	for _, b := range ok {
-		if err := ValidateGitBranch(b); err != nil {
+		if err := ValidateGitBranch("git_branch", b); err != nil {
 			t.Errorf("%q: unexpected error %v", b, err)
 		}
 	}
@@ -120,7 +120,7 @@ func TestValidateGitBranch(t *testing.T) {
 		"a\\b", "/a", "a/", "a//b", "a/.b", "a.", "a\x01b",
 	}
 	for _, b := range bad {
-		err := ValidateGitBranch(b)
+		err := ValidateGitBranch("git_branch", b)
 		if err == nil {
 			t.Errorf("%q: accepted", b)
 		} else if !errors.Is(err, ErrInvalidConfig) {
