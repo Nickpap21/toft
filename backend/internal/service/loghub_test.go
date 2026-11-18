@@ -91,7 +91,10 @@ func (v *viewer) seen() []string {
 
 func (v *viewer) has(t *testing.T, want ...string) {
 	t.Helper()
-	require.Eventually(t, func() bool { return fmt.Sprint(v.seen()) == fmt.Sprint(want) }, time.Second, time.Millisecond, "got %q", v.seen())
+	if !assert.Eventually(t, func() bool { return fmt.Sprint(v.seen()) == fmt.Sprint(want) }, time.Second, time.Millisecond) {
+		got := v.seen()
+		t.Fatalf("got %d lines, want %d; the last: %q", len(got), len(want), got[max(0, len(got)-3):])
+	}
 }
 
 func viewersOf(h *logHub, key string) int {
@@ -166,20 +169,28 @@ func TestLogHub_LateViewerGetsItsTailFromTheSharedLines(t *testing.T) {
 }
 
 // A viewer that reads slower than the log is written is cut off; the
-// others keep receiving.
+// others keep receiving. Both read nothing while a buffer's worth of lines
+// is written, so neither is cut off for that, whenever the scheduler runs
+// them; two lines more cut off the one still not reading.
 func TestLogHub_SlowViewerIsCutOff(t *testing.T) {
 	u := &upstream{live: make(chan string)}
 	h := &logHub{}
-	slow := make(chan struct{})
+	slow, behind := make(chan struct{}), make(chan struct{})
 	s := watch(t, h, u, 1, slow, 1)
-	fast := watch(t, h, u, 1, nil, 2)
+	fast := watch(t, h, u, 1, behind, 2)
 
 	var want []string
-	for i := range logKeep + logViewerBuffer + 2 {
-		l := fmt.Sprint("l", i)
-		u.live <- l
-		want = append(want, l)
+	send := func(n int) {
+		for range n {
+			l := fmt.Sprint("l", len(want))
+			u.live <- l
+			want = append(want, l)
+		}
 	}
+	send(logKeep + logViewerBuffer)
+	close(behind)
+	fast.has(t, want...)
+	send(2)
 	fast.has(t, want...)
 	close(slow)
 	select {
