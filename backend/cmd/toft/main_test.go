@@ -112,8 +112,13 @@ func TestDeployRefSendsItsType(t *testing.T) {
 	if got, _ := json.Marshal(bodies); string(got) != mustJSON(t, want) {
 		t.Errorf("bodies = %s, want %s", got, mustJSON(t, want))
 	}
-	if code := run([]string{"deploy", "storefront/production/api", "--ref", "v1", "--ref-type", "commit"}, getenv, &out, &errOut); code != 2 {
-		t.Errorf("--ref-type commit: exit %d, want the usage error", code)
+	for _, args := range [][]string{{"--ref", "v1", "--ref-type", "commit"}, {"--ref-type", "tag"}, {"--image", "1.2.3", "--ref-type", "tag"}} {
+		if code := run(append([]string{"deploy", "storefront/production/api"}, args...), getenv, &out, &errOut); code != 2 {
+			t.Errorf("%v: exit %d, want the usage error", args, code)
+		}
+	}
+	if len(bodies) != 2 {
+		t.Errorf("a refused flag sent a deploy: %d bodies", len(bodies))
 	}
 }
 

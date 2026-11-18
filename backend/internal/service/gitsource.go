@@ -53,7 +53,8 @@ func ValidateGitURL(field, raw string) error {
 
 // ValidateGitBranch accepts what git check-ref-format --branch does, and
 // nothing that starts with "-". Empty is accepted (the default branch).
-// Errors name field and wrap ErrInvalidConfig.
+// Errors name field (git_ref is a branch or a tag) and wrap
+// ErrInvalidConfig.
 func ValidateGitBranch(field, branch string) error {
 	switch {
 	case branch == "":
@@ -71,7 +72,11 @@ func ValidateGitBranch(field, branch string) error {
 		strings.HasPrefix(branch, "/"),
 		strings.Contains(branch, "//"),
 		strings.Contains(branch, "/."):
-		return fmt.Errorf("%w: %s %q is not a valid branch name", ErrInvalidConfig, field, branch)
+		kind := "branch"
+		if field == "git_ref" {
+			kind = "ref"
+		}
+		return fmt.Errorf("%w: %s %q is not a valid %s name", ErrInvalidConfig, field, branch, kind)
 	}
 	return nil
 }

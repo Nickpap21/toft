@@ -71,6 +71,16 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 	if who.Role == "viewer" {
 		return nil, &refusal{refusedForbidden, "viewers cannot deploy"}
 	}
+	// A ref says whether it is a branch or a tag, and a tag goes to git's
+	// --branch as a branch does, with the same rules. These read the body
+	// alone, so they run before the agent policy (D-169): a request that
+	// can only fail never becomes an approval.
+	if body.GitRef != "" && body.GitRefType != "branch" && body.GitRefType != "tag" {
+		return nil, &refusal{refusedInvalid, "git_ref needs git_ref_type: branch or tag"}
+	}
+	if err := serviceManager.ValidateGitBranch("git_ref", body.GitRef); err != nil {
+		return nil, &refusal{refusedInvalid, err.Error()}
+	}
 
 	svc, err := s.serviceManager.Get(ctx, serviceID)
 	if err != nil {
@@ -82,15 +92,6 @@ func (s *Service) Deploy(ctx context.Context, who serviceManager.DeployCaller, s
 	}
 	if err := s.agentGate(ctx, serviceID, ""); err != nil {
 		return nil, err
-	}
-	// A ref says whether it is a branch or a tag, and a tag goes to git's
-	// --branch as a branch does, with the same rules; checked before
-	// anything is saved or a preview stopped to make room.
-	if body.GitRef != "" && body.GitRefType != "branch" && body.GitRefType != "tag" {
-		return nil, &refusal{refusedInvalid, "git_ref needs git_ref_type: branch or tag"}
-	}
-	if err := serviceManager.ValidateGitBranch("git_ref", body.GitRef); err != nil {
-		return nil, &refusal{refusedInvalid, err.Error()}
 	}
 
 	// Block deploy if any declared dependencies are not running.

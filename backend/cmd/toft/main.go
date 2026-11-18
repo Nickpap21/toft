@@ -118,7 +118,7 @@ func splitService(args []string) (service string, flags []string) {
 
 func takesValue(flag string) bool {
 	switch strings.TrimLeft(flag, "-") {
-	case "image", "ref", "to", "tail":
+	case "image", "ref", "ref-type", "to", "tail":
 		return !strings.Contains(flag, "=")
 	}
 	return false
@@ -143,6 +143,11 @@ func deploy(ctx context.Context, c *client, args []string, asJSON bool, stdout, 
 	}
 	if *refType != "branch" && *refType != "tag" {
 		return usageError("--ref-type is branch or tag")
+	}
+	refTypeSet := false
+	fs.Visit(func(f *flag.Flag) { refTypeSet = refTypeSet || f.Name == "ref-type" })
+	if refTypeSet && *ref == "" {
+		return usageError("--ref-type needs --ref")
 	}
 	id, err := c.resolve(ctx, service)
 	if err != nil {
