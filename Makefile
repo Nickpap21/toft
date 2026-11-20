@@ -9,7 +9,7 @@
         .atlas-dev-db migrate migrate-plan migrate-inspect db-shell \
         db-env-migrate db-backfill db-backfill-envs \
         backend-dev frontend-dev \
-        network-rollback \
+        network-rollback boards \
         test test-linux test-db test-db-down lint audit clean reset
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -284,6 +284,14 @@ ps: ## Show running containers for this project
 	$(COMPOSE) ps
 
 status: ps ## Alias for ps
+
+# The design boards (private/design/canvas) with their pinned runtime. BOARDS
+# names the boards (all of them when empty), VIEW one view of a board, WIDTH
+# another width: make boards BOARDS=ServerAgent VIEW=frozen WIDTH=390
+BOARDS_DIR := private/design/canvas
+boards: ## Render the design boards to PNG (BOARDS="A B", VIEW=<view>, WIDTH=<px>)
+	@VIEW="$(VIEW)" WIDTH="$(WIDTH)" PLAYWRIGHT_MODULE="$(CURDIR)/frontend/node_modules/playwright" \
+		node $(BOARDS_DIR)/render.cjs $(BOARDS_DIR) $(BOARDS_DIR)/runtime/dc-runtime.js $(BOARDS_DIR)/png $(BOARDS)
 
 clean: ## Remove stopped containers and dangling images
 	$(COMPOSE) down --remove-orphans
