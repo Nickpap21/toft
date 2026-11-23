@@ -98,9 +98,10 @@ An untrusted preview runs walled off:
 - Its memory limit is the original's plus 64 MiB for gVisor.
 
 Before an untrusted commit builds, Toft refuses a service that mounts a
-shared volume or a server path, or that builds with Nixpacks (whose
-Dockerfile is written during the build, so it can't be checked first). Such a
-service needs a Dockerfile.
+shared volume or a server path, that builds with Nixpacks (whose
+Dockerfile is written during the build, so it can't be checked first), or
+that is a Compose stack (whose own networks the firewall's untrusted rules
+don't cover). Such a service needs a Dockerfile.
 
 An untrusted preview starts only where the copied environment's servers can
 run Sandboxed (an instance operator installs gVisor from the server's page)

@@ -181,3 +181,16 @@ func TestUntrustedRefusalOfNixpacks(t *testing.T) {
 		t.Fatal("a Dockerfile service is not refused here")
 	}
 }
+
+// A Compose stack is refused: its containers are on the stack's own
+// networks, whose Docker-named bridges the host firewall's untrusted rules
+// (toft-u…) never match, so they would reach private addresses and SMTP.
+func TestUntrustedRefusalOfCompose(t *testing.T) {
+	got := untrustedRefusal(SourceService{Name: "stack", SourceType: "docker-compose"})
+	if want := "stack is a Compose stack, whose own networks the untrusted preview's firewall rules don't cover: a preview opened with an API key needs a Dockerfile service"; got != want {
+		t.Fatalf("untrustedRefusal = %q, want %q", got, want)
+	}
+	if untrustedRefusal(SourceService{Name: "web", SourceType: "git", BuildPack: "dockerfile"}) != "" {
+		t.Fatal("a git Dockerfile service is not refused here")
+	}
+}
