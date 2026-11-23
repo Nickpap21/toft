@@ -1252,6 +1252,35 @@ func TestDeeperIssues(t *testing.T) {
 	if code, _ := call(agent, "POST", "/api/v1/projects/p2/issues", map[string]any{"title": "Refunds", "parent": epic}); code != 404 {
 		t.Errorf("an agent opens under another project's issue: %d", code)
 	}
+	if code, out := call(agent, "POST", clone+"/clone", map[string]any{"project_id": "p1"}); code != 403 || data(out)["code"] != "insufficient_scope" {
+		t.Errorf("an agent connected to p2 clones into p1: %d %v", code, out)
+	}
+	// A person puts a sub-task in p1 under p2's issue: a key or an agent
+	// cloning that issue with its sub-tasks doesn't copy p1's into p2.
+	types, _ := repo.Types(context.Background(), "o1")
+	subtask := ""
+	for _, ty := range types {
+		if ty.Kind == "subtask" {
+			subtask = ty.ID
+		}
+	}
+	_, out = call(dev, "GET", clone, nil)
+	if code, out := call(dev, "POST", base+"/issues", map[string]any{"title": "p1's own plan", "description": "p1 only",
+		"type_id": subtask, "parent": data(out)["key"]}); code != 201 {
+		t.Fatalf("a sub-task in p1 under p2's issue: %d %v", code, out)
+	}
+	for name, h := range map[string]http.Handler{"key": key, "agent": agent} {
+		code, out := call(h, "POST", clone+"/clone", map[string]any{"keep": []string{"subtasks"}})
+		if code != 201 {
+			t.Fatalf("%s clones within p2: %d %v", name, code, out)
+		}
+		if kids, _ := data(out)["children"].([]any); len(kids) != 0 {
+			t.Errorf("%s's clone copied another project's sub-task: %v", name, kids)
+		}
+	}
+	if code, out := call(dev, "POST", clone+"/clone", map[string]any{"keep": []string{"subtasks"}}); code != 201 || len(data(out)["children"].([]any)) != 1 {
+		t.Errorf("a person's clone keeps the sub-task: %d %v", code, data(out)["children"])
+	}
 	if _, out = call(dev, "GET", base+"/issues/4", nil); len(data(out)["relations"].([]any)) != before {
 		t.Errorf("p1's issue was related: %v", data(out)["relations"])
 	}

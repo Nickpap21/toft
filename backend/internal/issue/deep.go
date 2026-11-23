@@ -504,6 +504,9 @@ func (s *Service) Clone(ctx context.Context, projectID string, number int, actor
 			if typeOf(types, k.TypeID).Kind != "subtask" {
 				continue
 			}
+			if in.Projects != nil && !slices.Contains(in.Projects, k.ProjectID) {
+				continue // another project's, which the caller doesn't reach
+			}
 			child, err := s.repo.Get(ctx, k.ProjectID, k.Number)
 			if err != nil {
 				return nil, err

@@ -224,6 +224,10 @@ type CloneInput struct {
 	Title     string   `json:"title"`
 	ProjectID string   `json:"project_id"`
 	Keep      []string `json:"keep"`
+	// Projects are the ones a project-scoped key or an agent limited to
+	// some projects reaches (the handler sets them; nil for anyone else):
+	// sub-tasks in another project are not cloned (D-100).
+	Projects []string `json:"-"`
 }
 
 // Person is an account, as the API shows it.

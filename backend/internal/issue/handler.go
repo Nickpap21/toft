@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -473,10 +474,21 @@ func (h *Handler) clone(c *gin.Context) {
 		respond.ErrorData(c, http.StatusBadRequest, ErrBadTitle.Error(), gin.H{"code": "bad_title"})
 		return
 	}
+	// A project-scoped key clones within its project, an agent limited to
+	// some projects within those (D-100); neither copies a sub-task of
+	// another project.
+	if keyProject, _, scoped := middleware.APIKeyScopeFrom(c); scoped {
+		in.Projects = []string{keyProject}
+	} else if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
+		in.Projects = append([]string{}, a.ProjectIDs...)
+	}
 	if in.ProjectID != "" {
-		// A project-scoped key clones within its project.
-		if keyProject, _, scoped := middleware.APIKeyScopeFrom(c); scoped && keyProject != in.ProjectID {
-			respond.ErrorData(c, http.StatusForbidden, "this API key is limited to its scopes in one project", gin.H{"code": "insufficient_scope"})
+		if in.Projects != nil && !slices.Contains(in.Projects, in.ProjectID) {
+			msg := "this API key is limited to its scopes in one project"
+			if _, agent := middleware.AgentFrom(c); agent {
+				msg = "this agent's connection doesn't reach that project"
+			}
+			respond.ErrorData(c, http.StatusForbidden, msg, gin.H{"code": "insufficient_scope"})
 			return
 		}
 		if owned, err := h.projects.CheckOwnership(c.Request.Context(), in.ProjectID, middleware.OrgIDFrom(c)); err != nil || !owned {
