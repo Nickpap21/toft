@@ -1261,12 +1261,15 @@ func noLinksOut(dir string) error {
 	if err != nil {
 		return fmt.Errorf("the build folder: %w", err)
 	}
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	// The walk starts at root, not dir: a dir that is itself a link (a
+	// base_directory linked to another folder of the repository) would be
+	// walked as one entry, the link, and nothing under it checked.
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.Type()&fs.ModeSymlink == 0 {
 			return err
 		}
 		if real, err := filepath.EvalSymlinks(path); err != nil || (real != root && !strings.HasPrefix(real, root+string(filepath.Separator))) {
-			rel, _ := filepath.Rel(dir, path)
+			rel, _ := filepath.Rel(root, path)
 			return fmt.Errorf("%w: %s is a link that doesn't stay in the build folder", service.ErrInvalidConfig, rel)
 		}
 		return nil
