@@ -85,12 +85,11 @@ func (o *LocalOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, b
 	}
 	logFn(fmt.Sprintf("[1/2] Cloning %s @ %s...", sanitizeRepoURL(repoURL), branch))
 
-	repoRoot, cleanup, err := cloneRepository(ctx, repoURL, branch, "", logFn)
+	repoRoot, commit, cleanup, err := cloneRepository(ctx, repoURL, branch, "", logFn)
 	if err != nil {
 		return deployment.Commit{}, err
 	}
 	defer cleanup()
-	commit := clonedCommit(branch, logFn, func() (string, error) { return gitHead(ctx, repoRoot) })
 	// .git stays out of the build context: a fresh clone's differs every
 	// time, so the layer cache would miss even on the same commit.
 	if err := os.RemoveAll(filepath.Join(repoRoot, ".git")); err != nil {
@@ -148,12 +147,11 @@ func (o *LocalOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, b
 	}
 	logFn(fmt.Sprintf("[1/2] Cloning %s @ %s...", sanitizeRepoURL(repoURL), branch))
 
-	buildDir, cleanup, err := cloneRepository(ctx, repoURL, branch, baseDir, logFn)
+	buildDir, commit, cleanup, err := cloneRepository(ctx, repoURL, branch, baseDir, logFn)
 	if err != nil {
-		return deployment.Commit{}, err
+		return commit, err
 	}
 	defer cleanup()
-	commit := clonedCommit(branch, logFn, func() (string, error) { return gitHead(ctx, buildDir) })
 	// As in BuildFromGit; with a baseDir, the clone's .git is outside buildDir already.
 	if err := os.RemoveAll(filepath.Join(buildDir, ".git")); err != nil {
 		return commit, fmt.Errorf("remove .git from the build context: %w", err)
@@ -515,6 +513,11 @@ func localCompose(ctx context.Context, dir string, serviceEnv map[string]string,
 	cmd.WaitDelay = 30 * time.Second
 	cmd.Dir = dir
 	cmd.Env = localComposeEnv(serviceEnv) // never nil: a nil Env would inherit everything
+	// A compose build invokes buildx, which otherwise reads git from the
+	// build context — the repository's own working tree. Toft needs none of
+	// it, and the context is the repository's to shape, so buildx runs no
+	// git there (as localBuild does for a Dockerfile build).
+	cmd.Env = append(cmd.Env, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false")
 	return cmd
 }
 
@@ -1197,17 +1200,21 @@ func stopContainer(ctx context.Context, dc *client.Client, serviceID string) err
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-func cloneRepository(ctx context.Context, repoURL, branch, baseDirectory string, logFn func(string)) (string, func(), error) {
+// cloneRepository clones branch of repoURL into a temporary directory and
+// returns the build folder in it (baseDirectory, or the clone itself) and
+// the commit checked out, read from the clone's own .git.
+func cloneRepository(ctx context.Context, repoURL, branch, baseDirectory string, logFn func(string)) (string, deployment.Commit, func(), error) {
+	var none deployment.Commit
 	tmpDir, err := os.MkdirTemp("", "paas-build-*")
 	if err != nil {
-		return "", nil, fmt.Errorf("create temp dir: %w", err)
+		return "", none, nil, fmt.Errorf("create temp dir: %w", err)
 	}
 	cleanup := func() { os.RemoveAll(tmpDir) }
 
 	cloneURL, gitArgs, forget, err := gitcred.Local(repoURL)
 	if err != nil {
 		cleanup()
-		return "", nil, err
+		return "", none, nil, err
 	}
 	defer forget()
 	// "--" ends the options: a URL or branch is never read as one, whatever
@@ -1221,8 +1228,9 @@ func cloneRepository(ctx context.Context, repoURL, branch, baseDirectory string,
 	}
 	if err != nil {
 		cleanup()
-		return "", nil, gitcred.Failure("git clone failed", output, err)
+		return "", none, nil, gitcred.Failure("git clone failed", output, err)
 	}
+	commit := clonedCommit(branch, logFn, func() (string, error) { return gitHead(ctx, tmpDir) })
 
 	buildDir, err := service.JoinBaseDirectory(tmpDir, baseDirectory)
 	if err == nil {
@@ -1230,9 +1238,9 @@ func cloneRepository(ctx context.Context, repoURL, branch, baseDirectory string,
 	}
 	if err != nil {
 		cleanup()
-		return "", nil, err
+		return "", commit, nil, err
 	}
-	return buildDir, cleanup, nil
+	return buildDir, commit, cleanup, nil
 }
 
 // insideBuild refuses dir, which nixpacks reads, when a link in the
@@ -1273,9 +1281,11 @@ func noLinksOut(dir string) error {
 	})
 }
 
-// gitHead is `git log -1 --format=%H%n%s` in dir, a clone on this host.
+// gitHead is `git log -1 --format=%H%n%s` of the clone at dir on this host.
+// It names the clone's .git: git never looks for a repository among the
+// clone's files.
 func gitHead(ctx context.Context, dir string) (string, error) {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "log", "-1", "--format=%H%n%s").Output()
+	out, err := exec.CommandContext(ctx, "git", "--git-dir", filepath.Join(dir, ".git"), "log", "-1", "--format=%H%n%s").Output()
 	if err != nil {
 		return "", fmt.Errorf("git log: %w", err)
 	}
@@ -1284,7 +1294,7 @@ func gitHead(ctx context.Context, dir string) (string, error) {
 
 // gitHeadCmd is gitHead's command for a clone on a remote server.
 func gitHeadCmd(dir string) string {
-	return "git -C " + shellEscape(dir) + " log -1 " + shellEscape("--format=%H%n%s")
+	return "git --git-dir " + shellEscape(dir+"/.git") + " log -1 " + shellEscape("--format=%H%n%s")
 }
 
 var fullCommitSHA = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)

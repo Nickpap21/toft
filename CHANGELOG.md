@@ -6,6 +6,41 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
+## 1.2.3 (2026-11-21)
+
+A security fix: a build could run git among the files of the repository
+it built. No migration: a failed upgrade starts 1.2.2 again without
+restoring the database. Upgrade from 1.2.2.
+
+### After upgrading
+
+- **Check the agent's version on every server connected through the
+  agent.** The panel upgrades an agent when it reconnects after the
+  upgrade, and compose runs in the agent on those servers: until a
+  server shows agent 1.2.3, a compose build on it still runs git in its
+  build context.
+
+### Security
+
+- **A build runs no git among a repository's files** (Critical,
+  GHSA-jhmq-756m-44h5). Git treats a folder that holds a repository's
+  own files as a repository and reads its configuration, which can name
+  commands to run; a repository can commit such a folder under any
+  name. A compose service with `build:` builds through buildx, which
+  ran git in the build context, on the panel's server, over SSH and in
+  the agent; and a Nixpacks build from a git URL with a base directory
+  read its commit with git run in that directory, on the panel's
+  server. A workspace developer, or anyone who could push to a
+  repository a service builds from, could run a command as root in the
+  panel's container or on a server. Every `docker compose` command now
+  sets `BUILDX_GIT_INFO=false` and `BUILDX_GIT_LABELS=false`, as
+  Dockerfile builds already did, and the commit a build cloned is read
+  from the clone's own `.git`.
+- **The panel's image sets git's `safe.bareRepository=explicit`.** Git
+  there uses a bare repository only when it is named with `--git-dir`
+  or `GIT_DIR`, never one it finds where it runs. A second layer behind
+  the fix above; servers get the same setting in a later release.
+
 ## 1.2.2 (2026-11-18)
 
 Hardening of git clones and of a deploy's git ref. No migration: a

@@ -680,7 +680,7 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 					return "/tmp/paas-docker-abc", nil
 				case strings.HasPrefix(cmd, "mktemp"):
 					return "/tmp/paas-build-abc", nil
-				case strings.HasPrefix(cmd, "git -C "):
+				case strings.HasPrefix(cmd, "git --git-dir "):
 					return sha + "\nFix nil pointer in cart totals", nil
 				case strings.Contains(cmd, "nixpacks plan"):
 					return `{"variables":{}}`, nil
@@ -707,15 +707,15 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 		assert.ErrorContains(t, err, "exit status 1", "the build failed")
 		assert.Equal(t, deployment.Commit{SHA: sha, Subject: "Fix nil pointer in cart totals"}, c)
 		assert.Contains(t, lines, "Cloned main at ddddddd")
-		head, ok := h.find("git -C ")
+		head, ok := h.find("git --git-dir ")
 		require.True(t, ok)
-		assert.Equal(t, "git -C '/tmp/paas-build-abc' log -1 '--format=%H%n%s'", head.cmd)
+		assert.Equal(t, "git --git-dir '/tmp/paas-build-abc/.git' log -1 '--format=%H%n%s'", head.cmd)
 
 		// .git goes after the commit is read and before the build.
 		var order []string
 		for _, c := range h.recorded() {
 			switch {
-			case strings.HasPrefix(c.cmd, "git -C "):
+			case strings.HasPrefix(c.cmd, "git --git-dir "):
 				order = append(order, "head")
 			case c.cmd == "rm -rf '/tmp/paas-build-abc/.git'":
 				order = append(order, "drop .git")

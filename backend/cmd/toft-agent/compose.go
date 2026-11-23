@@ -107,6 +107,11 @@ func (m *rollouts) composeUp(ctx context.Context, id string, c rollout.ComposeUp
 		return fail("write the registry credentials: " + err.Error())
 	}
 	env = append(env, "DOCKER_CONFIG="+cfg)
+	// A compose build invokes buildx, which otherwise reads git from the
+	// build context — the repository's own working tree. Toft needs none of
+	// it, and the context is the repository's to shape, so buildx runs no
+	// git there.
+	env = append(env, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false")
 
 	logf, err := os.OpenFile(logFile(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

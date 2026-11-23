@@ -184,6 +184,80 @@ func TestBuildsOfOneServiceAreKeptFromAnothers(t *testing.T) {
 	})
 }
 
+// A compose build invokes buildx, which by default reads git from the build
+// context — the repository's own working tree, which a tenant shapes. A
+// deploy's compose build (localCompose) turns that off, so buildx starts no
+// git in the context. A git on PATH records every call: the build a deploy
+// runs records none, while the same build with buildx's default records some.
+func TestComposeBuildRunsNoGitInTheContext(t *testing.T) {
+	needsBuildKit(t)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		testenv.Skip(t, "needs git on PATH: %v", err)
+	}
+
+	// stack writes a buildable one-service stack into a fresh directory and a
+	// git on PATH that records it ran, then returns the compose arguments a
+	// deploy builds it with and the path the recorder writes to.
+	stack := func(t *testing.T) (dir, ran string, args []string) {
+		dir = t.TempDir()
+		ran = filepath.Join(t.TempDir(), "git-ran")
+		bin := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"),
+			[]byte("#!/bin/sh\necho called >> '"+ran+"'\nexec '"+realGit+"' \"$@\"\n"), 0o700))
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		n := rand.Text()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    build: .\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM "+isolationBase+"\nRUN echo "+n+"\n"), 0o644))
+		project := "toft-test-" + strings.ToLower(rand.Text())
+		t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", project+"-web").Run() })
+		args = []string{"--project-directory", dir, "--project-name", project, "-f", filepath.Join(dir, "docker-compose.yml"), "build"}
+		return
+	}
+
+	t.Run("buildx's default reads git, the control", func(t *testing.T) {
+		dir, ran, args := stack(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "docker", append([]string{"compose"}, args...)...)
+		cmd.Dir, cmd.Env = dir, localComposeEnv(nil) // the deploy's clean env, without Toft's BUILDX_GIT_* vars
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		assert.FileExists(t, ran, "with buildx's default the build reads git from the context")
+	})
+
+	t.Run("a deploy's build reads none", func(t *testing.T) {
+		dir, ran, args := stack(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		out, err := localCompose(ctx, dir, nil, args...).CombinedOutput()
+		require.NoError(t, err, string(out))
+		assert.NoFileExists(t, ran, "the deploy's compose build starts no git in the context")
+	})
+	// As a deploy from a repository runs it: the copy of the clone, with a
+	// build context further down that holds a repository's files.
+	t.Run("nor in a copied repository whose context holds a repository", func(t *testing.T) {
+		dir, ran, args := stack(t)
+		app := filepath.Join(dir, "app")
+		out, err := exec.Command(realGit, "init", "--quiet", "--bare", app).CombinedOutput()
+		require.NoError(t, err, string(out))
+		require.NoError(t, os.Rename(filepath.Join(dir, "Dockerfile"), filepath.Join(app, "Dockerfile")))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    build: ./app\n"), 0o644))
+		release := t.TempDir()
+		require.NoError(t, copyRepo(dir, release))
+		require.FileExists(t, filepath.Join(release, "app", "HEAD"), "the copy keeps the context's files")
+		for i, a := range args {
+			args[i] = strings.Replace(a, dir, release, 1)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		out, err = localCompose(ctx, release, nil, args...).CombinedOutput()
+		require.NoError(t, err, string(out))
+		assert.NoFileExists(t, ran, "the deploy's compose build starts no git in the context")
+	})
+}
+
 // A build on the panel's host leaves out what the repository's
 // .dockerignore names, as a build on a server does.
 func TestLocalBuildHonoursDockerignore(t *testing.T) {

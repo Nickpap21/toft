@@ -92,8 +92,12 @@ func TestAgentRunsAComposeUp(t *testing.T) {
 	if cfg := read(t, out+"/config"); !strings.Contains(cfg, `"ghcr.io"`) || !strings.Contains(cfg, "dTpodW50ZXIy") {
 		t.Fatalf("docker config %q", cfg)
 	}
-	if env := read(t, out+"/procenv"); strings.Contains(env, "JWT_SECRET") {
+	env := read(t, out+"/procenv")
+	if strings.Contains(env, "JWT_SECRET") {
 		t.Fatalf("compose ran with the agent's environment: %s", env)
+	}
+	if !strings.Contains(env, "BUILDX_GIT_INFO=false\n") || !strings.Contains(env, "BUILDX_GIT_LABELS=false\n") {
+		t.Fatalf("a build compose starts would read git in its context: %s", env)
 	}
 	for _, p := range []string{release + "/.env", filepath.Join(rolloutDir(), "dep-c.d")} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {

@@ -386,7 +386,8 @@ var RunEnv = []string{"PATH", "HOME", "DOCKER_HOST", "XDG_RUNTIME_DIR"}
 // reads name from the platform's own environment rather than from the
 // service's env vars. The orchestrators give it only PATH, HOME, DOCKER_HOST
 // and XDG_RUNTIME_DIR from the platform (a clean environment locally, env -i
-// on remote servers) plus the service's env vars; the docker CLI adds
+// on remote servers) plus the service's env vars and two fixed BUILDX_GIT_
+// values of their own; the docker CLI adds
 // DOCKER_CLI_PLUGIN_* and OTEL_RESOURCE_ATTRIBUTES when it starts the compose
 // plugin. Every one of those is either a reserved CLI name (IsReservedCLIEnv)
 // or OTEL_RESOURCE_ATTRIBUTES, which the docker CLI rewrites even when the

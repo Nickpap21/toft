@@ -23,7 +23,8 @@ import (
 // vars and nothing else of the platform's (composespec.IsPlatformEnv): a file
 // that reads PATH, HOME, DOCKER_HOST or XDG_RUNTIME_DIR is refused. Every
 // docker compose invocation must therefore run with exactly those four
-// platform variables plus the service's env vars, locally and over SSH, or
+// platform variables, the two fixed BUILDX_GIT_ values below (names a service
+// can't set) and the service's env vars, locally and over SSH, or
 // compose would interpolate a different file from the one that was checked
 // (a remote SSH session adds USER, SHELL, LANG, SSH_CONNECTION and whatever
 // the remote profile exports).
@@ -72,7 +73,14 @@ func localComposeEnv(envVars map[string]string) []string {
 // compose command would run on. composespec reserves that name, so no
 // compose file reads it. The quotes inside ${VAR:+"..."} keep a
 // value with spaces in one word.
+//
+// BUILDX_GIT_INFO and BUILDX_GIT_LABELS: a compose build invokes buildx,
+// which otherwise reads git from the build context — the repository's own
+// working tree. Toft needs none of it, and the context is the repository's
+// to shape, so buildx runs no git there (as localBuild does for a Dockerfile
+// build).
 const remoteCleanEnvPrefix = `env -i PATH="$PATH" HOME="$HOME" ` +
+	`BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false ` +
 	`${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ` +
 	`${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ` +
 	`${TOFT_EXEC:+"TOFT_EXEC=$TOFT_EXEC"} `
