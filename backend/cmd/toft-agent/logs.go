@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -117,7 +118,7 @@ func newShipper(dc *client.Client) *shipper {
 	return &shipper{
 		dc:       dc,
 		services: func() []agentproto.DesiredService { return heldDesired().Services },
-		http:     &http.Client{Timeout: 30 * time.Second},
+		http:     lokiClient(net.DefaultResolver.LookupNetIP),
 		poll:     shipPoll, wait: batchWait, retry: backoff,
 		followers: map[string]*follower{}, drained: map[string]bool{}, unread: map[string]bool{},
 	}
