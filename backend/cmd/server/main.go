@@ -541,7 +541,7 @@ func (w workspaceContents) DeleteAll(ctx context.Context, orgID string) error {
 			return fmt.Errorf("delete server %s: %w", srv.Name, err)
 		}
 	}
-	projects, err := w.projects.ListProjects(ctx, orgID)
+	projects, err := w.projects.ListProjects(ctx, orgID, nil)
 	if err != nil {
 		return err
 	}

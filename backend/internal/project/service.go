@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // DefaultEnvEnsurer creates a default environment for a newly created project.
@@ -76,10 +77,15 @@ func (s *Service) WithEnvCreator(e DefaultEnvEnsurer) {
 	s.envEnsurer = e
 }
 
-func (s *Service) ListProjects(ctx context.Context, orgID string) ([]Project, error) {
+// ListProjects returns the workspace's projects, only those in projectIDs
+// unless it is nil.
+func (s *Service) ListProjects(ctx context.Context, orgID string, projectIDs []string) ([]Project, error) {
 	projects, err := s.repo.List(ctx, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("project.Service.ListProjects: %w", err)
+	}
+	if projectIDs != nil {
+		projects = slices.DeleteFunc(projects, func(p Project) bool { return !slices.Contains(projectIDs, p.ID) })
 	}
 	return projects, nil
 }

@@ -704,9 +704,21 @@ func (s *ServiceManager) ListOrgScoped(ctx context.Context, orgID string) ([]Ser
 	return s.repo.ListOrgScoped(ctx, orgID)
 }
 
-// ListWorkspace returns every service of the workspace, for the shell.
-func (s *ServiceManager) ListWorkspace(ctx context.Context, orgID string) ([]WorkspaceService, error) {
-	return s.repo.ListWorkspaceServices(ctx, orgID)
+// ListWorkspace returns every service of the workspace, for the shell: only
+// those of projectIDs unless it is nil, and of those only serviceIDs unless
+// it is nil.
+func (s *ServiceManager) ListWorkspace(ctx context.Context, orgID string, projectIDs, serviceIDs []string) ([]WorkspaceService, error) {
+	services, err := s.repo.ListWorkspaceServices(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if projectIDs != nil {
+		services = slices.DeleteFunc(services, func(w WorkspaceService) bool { return !slices.Contains(projectIDs, w.ProjectID) })
+	}
+	if serviceIDs != nil {
+		services = slices.DeleteFunc(services, func(w WorkspaceService) bool { return !slices.Contains(serviceIDs, w.ID) })
+	}
+	return services, nil
 }
 
 // ServerLogs is where the workspace's containers on one server send their

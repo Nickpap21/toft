@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
 
 	"github.com/Nickpap21/toft/backend/pkg/middleware"
 	"github.com/Nickpap21/toft/backend/pkg/respond"
@@ -61,19 +60,20 @@ func (h *Handler) list(c *gin.Context) {
 		respond.Error(c, http.StatusForbidden, "no org context")
 		return
 	}
-	projects, err := h.service.ListProjects(c.Request.Context(), orgID)
+	var projectIDs []string // nil: every project
+	// An agent connected to some projects sees those alone (D-100).
+	if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
+		projectIDs = append([]string{}, a.ProjectIDs...) // never nil: no projects is none
+	}
+	// A project key, its own project alone (issue #11).
+	if keyProject, _, ok := middleware.APIKeyScopeFrom(c); ok {
+		projectIDs = []string{keyProject}
+	}
+	projects, err := h.service.ListProjects(c.Request.Context(), orgID, projectIDs)
 	if err != nil {
 		h.log.Error("list projects", zap.Error(err))
 		respond.Error(c, http.StatusInternalServerError, "failed to list projects")
 		return
-	}
-	// An agent connected to some projects sees those alone (D-100).
-	if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
-		projects = slices.DeleteFunc(projects, func(p Project) bool { return !slices.Contains(a.ProjectIDs, p.ID) })
-	}
-	// A project key, its own project alone (issue #11).
-	if keyProject, _, ok := middleware.APIKeyScopeFrom(c); ok {
-		projects = slices.DeleteFunc(projects, func(p Project) bool { return p.ID != keyProject })
 	}
 	respond.JSON(c, http.StatusOK, projects)
 }
