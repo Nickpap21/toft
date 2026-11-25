@@ -96,6 +96,10 @@ func (f *fakeHost) Exec(ctx context.Context, cmd string) (string, error) {
 	if strings.Contains(cmd, " config --format json ") {
 		return cmp.Or(f.stack, stackPulls), nil
 	}
+	// And, of one that does, which compose would build it.
+	if strings.Contains(cmd, " compose version --short") {
+		return "5.7.2\n", nil
+	}
 	if f.exec == nil {
 		return "", nil
 	}

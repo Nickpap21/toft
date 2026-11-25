@@ -563,7 +563,8 @@ func accessRouter(t *testing.T) (*gin.Engine, *directory) {
 	h.deployPolicy = deploypolicy.NewHandler(deploypolicy.NewService(nil, deploypolicy.ModeEnforce, log).
 		WithOperatorChecker(dir).WithOwnershipChecker(dir), log)
 	h.agent = agent.NewHandler(agent.NewService(agentRows{}, dir, dir, nil, log), func() string { return "" }, nil, log)
-	h.disk = disk.NewHandler(disk.NewService(diskRows{}, diskNoHosts{}, nil, diskNoAudit{}, diskProbePeople{dir}, nil, log), log)
+	cleans := &sync.WaitGroup{}
+	h.disk = disk.NewHandler(disk.NewService(diskRows{cleans}, diskNoHosts{}, nil, diskCleans{cleans}, diskProbePeople{dir}, nil, log), log)
 	r := newRouter(&config.Config{JWTSecret: accessSecret}, log, h, routerDeps{apiKeys: dir, orgs: dir, users: dir,
 		services: services, environments: envs})
 	return r, dir
@@ -1227,10 +1228,14 @@ func (agentRows) ListProjectPolicy(context.Context, string) (map[string]map[stri
 	return map[string]map[string]string{}, nil
 }
 
-// diskRows owns every server for testOrg, with the default policy.
-type diskRows struct{}
+// diskRows owns every server for testOrg, with the default policy. A row
+// is given once the cleans the probes started have ended: a clean ends in
+// a goroutine of its own, and a probe that met one still running would be
+// answered 409 before its checks.
+type diskRows struct{ cleans *sync.WaitGroup }
 
-func (diskRows) Server(_ context.Context, id string) (disk.HostRow, error) {
+func (r diskRows) Server(_ context.Context, id string) (disk.HostRow, error) {
+	r.cleans.Wait()
 	if id == "" {
 		return disk.HostRow{}, nil
 	}
@@ -1253,9 +1258,18 @@ func (diskNoHosts) Host(context.Context, string) (disk.Host, error) {
 	return nil, errors.New("no Docker in the access probes")
 }
 
-type diskNoAudit struct{}
+// diskCleans counts the cleans running, by the two audit rows a clean
+// writes: one when it starts, one when it has ended.
+type diskCleans struct{ running *sync.WaitGroup }
 
-func (diskNoAudit) Audit(context.Context, string, string, string, string, map[string]any) {}
+func (c diskCleans) Audit(_ context.Context, _, _, _, action string, _ map[string]any) {
+	switch {
+	case strings.HasSuffix(action, ".disk_clean_started"):
+		c.running.Add(1)
+	case strings.HasSuffix(action, ".disk_cleaned"):
+		c.running.Done()
+	}
+}
 
 type diskProbePeople struct{ d *directory }
 

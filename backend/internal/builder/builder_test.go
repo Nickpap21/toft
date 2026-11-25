@@ -29,6 +29,8 @@ type fakeHost struct {
 	// scripts it was given.
 	firewall func() (string, error)
 	asked    []string
+	// compose answers `docker compose version --short` (nil: 5.7.2).
+	compose func() (string, error)
 }
 
 func (f *fakeHost) OnHost(_ context.Context, script string) (string, error) {
@@ -48,6 +50,12 @@ type hostCall struct {
 
 func (f *fakeHost) Output(_ context.Context, env []string, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, hostCall{env: env, argv: append([]string{name}, args...)})
+	if slices.Equal(args, []string{"compose", "version", "--short"}) {
+		if f.compose == nil {
+			return "5.7.2\n", nil
+		}
+		return f.compose()
+	}
 	if f.output == nil {
 		return "", nil
 	}
@@ -133,7 +141,7 @@ func TestRunBuildsNothingWithoutTheFirewall(t *testing.T) {
 	}
 	h = stack(`{"services":{"web":{"build":{"context":"/r"}}}}`)
 	require.ErrorIs(t, FirstUp(ctx, h, walled(Trusted), testConfig, []string{"--project-name", "p"}, nil, func(string) {}), ErrNoFirewall)
-	require.Len(t, h.calls, 1, "the host's reading of the stack, and no up")
+	require.Len(t, h.calls, 2, "the host's reading of the stack and its compose's version, and no up")
 	h = stack(`{"services":{"web":{"image":"example/web"}}}`)
 	require.NoError(t, FirstUp(ctx, h, walled(Trusted), testConfig, []string{"--project-name", "p"}, nil, func(string) {}))
 	assert.Equal(t, []string{"docker", "compose", "--project-name", "p", "up", "--no-build"}, h.calls[1].argv)
@@ -281,11 +289,12 @@ func TestFirstUpAsksTheHostWhetherTheStackBuilds(t *testing.T) {
 		} {
 			h := &fakeHost{output: answer(stack, nil)}
 			require.NoError(t, FirstUp(context.Background(), h, walled(Trusted), testConfig, project, []string{"--no-start", "--pull", "always"}, func(string) {}))
-			require.Len(t, h.calls, 3)
+			require.Len(t, h.calls, 4)
 			assert.Equal(t, config, h.calls[0])
-			assert.Equal(t, "sh", h.calls[1].argv[0], "ensure.sh, before the up")
-			assert.Equal(t, append(append([]string{"docker", "compose"}, project...), "up", "--no-start", "--pull", "always", "--build"), h.calls[2].argv)
-			assert.Contains(t, h.calls[2].env, "BUILDX_BUILDER=toft-build")
+			assert.Equal(t, hostCall{env: config.env, argv: []string{"docker", "compose", "version", "--short"}}, h.calls[1])
+			assert.Equal(t, "sh", h.calls[2].argv[0], "ensure.sh, before the up")
+			assert.Equal(t, append(append([]string{"docker", "compose"}, project...), "up", "--no-start", "--pull", "always", "--build"), h.calls[3].argv)
+			assert.Contains(t, h.calls[3].env, "BUILDX_BUILDER=toft-build")
 		}
 	})
 	t.Run("none", func(t *testing.T) {
@@ -319,6 +328,61 @@ func TestFirstUpAsksTheHostWhetherTheStackBuilds(t *testing.T) {
 		h := &fakeHost{output: answer("", errors.New("services.web.build.context must be a string (exit status 15)"))}
 		assert.ErrorContains(t, FirstUp(context.Background(), h, walled(Trusted), testConfig, project, nil, func(string) {}), "services.web.build.context must be a string")
 	})
+}
+
+// A stack is built only by a docker compose that keeps the service's
+// variables out of the environment of the build it starts: 2.38.0 to
+// 2.39.2 don't, and neither may a version the host doesn't give or that
+// isn't three numbers. Nothing is built there, and the deploy's error says
+// what to upgrade. A stack that builds nothing goes up on any of them.
+func TestFirstUpBuildsOnlyWithAComposeThatKeepsVariablesFromTheBuild(t *testing.T) {
+	project := []string{"--project-name", "p"}
+	stack := func(config string) func(string) (string, error) {
+		return func(string) (string, error) { return config, nil }
+	}
+	builds := stack(`{"services":{"web":{"build":{"context":"/r"}}}}`)
+	version := func(v string, err error) func() (string, error) {
+		return func() (string, error) { return v, err }
+	}
+
+	for _, v := range []string{"2.37.3", "2.39.3", "2.39.4", "2.40.0", "v2.40.3\n", "5.7.2", "5.8.0-desktop.1", "1.29.2", "3.38.1"} {
+		h := &fakeHost{output: builds, compose: version(v, nil)}
+		require.NoError(t, FirstUp(context.Background(), h, walled(Trusted), testConfig, project, nil, func(string) {}), v)
+		require.Len(t, h.calls, 4, v)
+		assert.Equal(t, []string{"compose", "--project-name", "p", "up", "--build"}, h.calls[3].argv[1:], v)
+	}
+
+	refused := map[string]func() (string, error){
+		"2.38.0":            version("2.38.0\n", nil),
+		"2.38.2":            version("2.38.2\n", nil),
+		"2.38.9":            version("2.38.9", nil),
+		"2.39.0":            version("2.39.0", nil),
+		"2.39.2":            version("v2.39.2", nil),
+		"2.39.2-desktop.1":  version("2.39.2-desktop.1\n", nil),
+		"a distribution's":  version("2.38.2+ds1-0ubuntu1~24.04.1\n", nil),
+		"nothing":           version("", nil),
+		"a word":            version("dev\n", nil),
+		"two numbers":       version("2.39\n", nil),
+		"not at the start":  version("Docker Compose version v5.7.2\n", nil),
+		"the command fails": version("5.7.2\n", errors.New("unknown command: docker compose (exit status 1)")),
+	}
+	for name, v := range refused {
+		h := &fakeHost{output: builds, compose: v}
+		err := FirstUp(context.Background(), h, walled(Trusted), testConfig, project, nil, func(string) {})
+		require.ErrorContains(t, err, "Upgrade docker-compose-plugin, then deploy again", name)
+		assert.ErrorContains(t, err, "2.38.0 to 2.39.2", name)
+		assert.Len(t, h.calls, 2, "%s: the stack's reading and the version, no builder and no up", name)
+		assert.Empty(t, h.asked, "%s: the firewall isn't asked for a build that won't run", name)
+
+		h = &fakeHost{output: stack(`{"services":{"web":{"image":"example/web"}}}`), compose: v}
+		require.NoError(t, FirstUp(context.Background(), h, walled(Trusted), testConfig, project, nil, func(string) {}), name)
+		require.Len(t, h.calls, 2, "%s: a stack that builds nothing asks no version", name)
+		assert.Equal(t, []string{"compose", "--project-name", "p", "up", "--no-build"}, h.calls[1].argv[1:], name)
+	}
+	h := &fakeHost{output: builds, compose: version("2.38.2\n", nil)}
+	assert.ErrorContains(t, FirstUp(context.Background(), h, walled(Trusted), testConfig, project, nil, func(string) {}), "Docker Compose (2.38.2)")
+	h = &fakeHost{output: builds, compose: version("dev\n", nil)}
+	assert.ErrorContains(t, FirstUp(context.Background(), h, walled(Trusted), testConfig, project, nil, func(string) {}), "Docker Compose (a version Toft can't read)")
 }
 
 // ensureDocker puts a docker on PATH that keeps one host's builder in dir:

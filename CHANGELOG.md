@@ -55,6 +55,16 @@ database. Upgrade from 1.2.3.
   install `docker-buildx-plugin` if it fails: a build on a server
   without it fails with that sentence. The first build of each service
   after the upgrade starts with an empty cache.
+- **A compose stack that builds an image needs a Docker Compose
+  outside 2.38.0 to 2.39.2.** Those versions start the build with the
+  service's variables in its environment, where the build tools read
+  their own settings (Security, below). On a server with one of them,
+  or with a Compose whose version Toft can't read, the deploy of a
+  stack that builds is refused with a message that names the version.
+  Check each server with `docker compose version --short` and upgrade
+  `docker-compose-plugin` where it's in that range, then deploy again.
+  The panel's own server builds with the Compose in Toft's image,
+  a 5.x. A stack that only pulls its images deploys as before.
 - **A build can't send mail**: connections to TCP port 25 from a build
   are dropped.
 - **Traefik's dashboard on `127.0.0.1:8081` asks for the dashboard's
@@ -173,7 +183,11 @@ database. Upgrade from 1.2.3.
   own on every kind of host, a build secret can't take a variable the
   docker CLI, buildx or the Go runtime read (`reserved_env`), and a
   secret or config can't take one of the four variables compose runs
-  with (above).
+  with (above). Docker Compose 2.38.0 to 2.39.2 start the build with
+  the variables of that file in its environment, so on a server with
+  one of them the file kept nothing from the build: a stack that builds
+  is refused there, and where the version can't be read, until the
+  server's `docker-compose-plugin` is upgraded (Before upgrading).
 - **A compose stack's container can't pass for a service's own**
   (Critical, 9.0, `CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:H/I:H/A:H`,
   GHSA-x5xg-mqq8-hp7f). Critical for the routes: on the panel's server a

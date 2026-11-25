@@ -248,8 +248,9 @@ func Run(ctx context.Context, h Host, s Spec, config string, c Command, log func
 // environment and DOCKER_CONFIG), never the panel's: a build the panel
 // missed would otherwise start an image an earlier deploy left there. A
 // stack that builds goes through Run with --build, so it never starts
-// that image either. One that doesn't runs with --no-build and without a
-// builder, so it deploys on a server that has no buildx.
+// that image either, and only with a compose that composeBuilds takes. One
+// that doesn't runs with --no-build and without a builder, so it deploys
+// on a server that has no buildx.
 func FirstUp(ctx context.Context, h Host, s Spec, config string, project, flags []string, log func(string)) error {
 	env := []string{"DOCKER_CONFIG=" + config}
 	out, err := h.Output(ctx, env, "docker", slices.Concat([]string{"compose"}, project, []string{"config", "--format", "json"})...)
@@ -266,8 +267,31 @@ func FirstUp(ctx context.Context, h Host, s Spec, config string, project, flags 
 	}
 	for _, svc := range stack.Services {
 		if svc.Build != nil {
+			if err := composeBuilds(ctx, h, env); err != nil {
+				return err
+			}
 			return Run(ctx, h, s, config, Up(project, slices.Concat(flags, []string{"--build"})...), log)
 		}
 	}
 	return h.Stream(ctx, env, "docker", upArgs(project, slices.Concat(flags, []string{"--no-build"}))...)
+}
+
+// composeBuilds is nil when the host's docker compose is one that builds a
+// stack here. A compose deploy's variables are compose's to read the stack
+// with, from a file, never the settings of the build compose starts: buildx
+// reads its own from its environment (a source policy, proxies, where its
+// traces go). Compose 2.38.0 to 2.39.2 start the build with the project's
+// variables, the file's among them, in its environment. Those are refused,
+// and so is a version that can't be read: what it does isn't known.
+func composeBuilds(ctx context.Context, h Host, env []string) error {
+	out, err := h.Output(ctx, env, "docker", "compose", "version", "--short")
+	read := strings.TrimSpace(out)
+	var major, minor, patch int
+	// A suffix (2.39.2-desktop.1) is the same code as its three numbers.
+	if _, scanErr := fmt.Sscanf(strings.TrimPrefix(read, "v"), "%d.%d.%d", &major, &minor, &patch); err != nil || scanErr != nil {
+		read = "a version Toft can't read"
+	} else if major != 2 || minor != 38 && (minor != 39 || patch > 2) {
+		return nil
+	}
+	return fmt.Errorf("this server's Docker Compose (%s) can't build a stack here: 2.38.0 to 2.39.2 give the build the service's variables as its own settings, and a version that can't be read is treated as one of them. Upgrade docker-compose-plugin, then deploy again", read)
 }

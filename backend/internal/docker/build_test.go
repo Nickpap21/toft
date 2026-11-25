@@ -107,7 +107,7 @@ container) exit 1;;
 exec) exit 0;;
 buildx) [ "$2" = build ] || exit 0;;
 esac
-case "$*" in *' config --format json') echo '` + stack + `'; exit 0;; esac
+case "$*" in *' config --format json') echo '` + stack + `'; exit 0;; 'compose version --short') echo 5.7.2; exit 0;; esac
 `
 }
 

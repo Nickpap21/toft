@@ -73,9 +73,9 @@ const (
 
 // answersConfig is the start of a fake docker's script: it answers docker
 // compose config, the reading that says whether the stack builds, with
-// stack.
+// stack, and docker compose version with one that builds a stack.
 func answersConfig(stack string) string {
-	return `case "$*" in *' config --format json') echo '` + stack + `'; exit 0;; esac` + "\n"
+	return `case "$*" in *' config --format json') echo '` + stack + `'; exit 0;; 'compose version --short') echo 5.7.2; exit 0;; esac` + "\n"
 }
 
 func composeRequest(release string) rollout.Request {
