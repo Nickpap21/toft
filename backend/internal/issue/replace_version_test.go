@@ -307,3 +307,50 @@ func TestConcurrentHiddenTypeReplacesOneWins(t *testing.T) {
 		require.Equal(t, []string{winner}, got, "round %d: the 409 wrote", round)
 	}
 }
+
+// TestCopyRelationsKeepsTheirProjects: given projects, a clone keeps the
+// relations whose other issue is in one of them; without, all of them.
+func TestCopyRelationsKeepsTheirProjects(t *testing.T) {
+	a := newIssueAPI(t)
+	ctx := context.Background()
+	shop := strings.TrimPrefix(a.project, "/api/v1/projects/")
+	var ops string
+	require.NoError(t, a.db.QueryRow(ctx, `INSERT INTO projects (user_id, org_id, name, issue_key)
+		SELECT user_id, org_id, 'Ops', 'OPS' FROM projects WHERE id = $1 RETURNING id::text`, shop).Scan(&ops))
+	repo := NewPostgresRepository(a.db)
+	issue := func(project string) string {
+		t.Helper()
+		code, out := a.call(http.MethodPost, "/api/v1/projects/"+project+"/issues", `{"title": "Fix it"}`)
+		require.Equal(t, http.StatusCreated, code, out)
+		st, err := repo.Get(ctx, project, int(out["data"].(map[string]any)["number"].(float64)))
+		require.NoError(t, err)
+		return st.ID
+	}
+	src, sibling, foreign := issue(shop), issue(shop), issue(ops)
+	_, err := repo.AddRelation(ctx, src, sibling, "relates", "")
+	require.NoError(t, err)
+	_, err = repo.AddRelation(ctx, foreign, src, "blocks", "")
+	require.NoError(t, err)
+	others := func(issueID string) []string {
+		t.Helper()
+		rows, err := repo.Relations(ctx, issueID)
+		require.NoError(t, err)
+		out := []string{}
+		for _, r := range rows {
+			out = append(out, r.Other.ID)
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	scoped := issue(shop)
+	require.NoError(t, repo.CopyRelations(ctx, src, scoped, "", []string{shop}))
+	assert.Equal(t, []string{sibling}, others(scoped))
+	assert.Equal(t, []string{src}, others(foreign))
+
+	all := issue(shop)
+	require.NoError(t, repo.CopyRelations(ctx, src, all, "", nil))
+	want := []string{sibling, foreign}
+	slices.Sort(want)
+	assert.Equal(t, want, others(all))
+}

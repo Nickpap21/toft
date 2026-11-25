@@ -337,9 +337,16 @@ func (f *fakeRepo) CopyLabels(_ context.Context, src, dst string) error {
 	f.issue(dst).Labels = append([]string{}, f.issue(src).Labels...)
 	return nil
 }
-func (f *fakeRepo) CopyRelations(ctx context.Context, src, dst, actor string) error {
+func (f *fakeRepo) CopyRelations(ctx context.Context, src, dst, actor string, projects []string) error {
 	for _, r := range append([]fakeRelation{}, f.relations...) {
 		if r.kind == "clones" {
+			continue
+		}
+		other := r.from
+		if r.from == src {
+			other = r.to
+		}
+		if projects != nil && !slices.Contains(projects, f.issue(other).ProjectID) {
 			continue
 		}
 		if r.from == src {
@@ -1252,8 +1259,111 @@ func TestDeeperIssues(t *testing.T) {
 	if code, _ := call(agent, "POST", "/api/v1/projects/p2/issues", map[string]any{"title": "Refunds", "parent": epic}); code != 404 {
 		t.Errorf("an agent opens under another project's issue: %d", code)
 	}
+	if code, out := call(agent, "POST", clone+"/clone", map[string]any{"project_id": "p1"}); code != 403 || data(out)["code"] != "insufficient_scope" {
+		t.Errorf("an agent connected to p2 clones into p1: %d %v", code, out)
+	}
+	// A person puts a sub-task in p1 under p2's issue: a key or an agent
+	// cloning that issue with its sub-tasks doesn't copy p1's into p2.
+	types, _ := repo.Types(context.Background(), "o1")
+	subtask := ""
+	for _, ty := range types {
+		if ty.Kind == "subtask" {
+			subtask = ty.ID
+		}
+	}
+	// The clone's parent is p1's epic, which a key can't keep: a person
+	// takes it out first.
+	if code, out := call(dev, "PATCH", clone, map[string]any{"parent": ""}); code != 200 {
+		t.Fatalf("take the clone out of p1's epic: %d %v", code, out)
+	}
+	_, out = call(dev, "GET", clone, nil)
+	if code, out := call(dev, "POST", base+"/issues", map[string]any{"title": "p1's own plan", "description": "p1 only",
+		"type_id": subtask, "parent": data(out)["key"]}); code != 201 {
+		t.Fatalf("a sub-task in p1 under p2's issue: %d %v", code, out)
+	}
+	for name, h := range map[string]http.Handler{"key": key, "agent": agent} {
+		code, out := call(h, "POST", clone+"/clone", map[string]any{"keep": []string{"subtasks"}})
+		if code != 201 {
+			t.Fatalf("%s clones within p2: %d %v", name, code, out)
+		}
+		if kids, _ := data(out)["children"].([]any); len(kids) != 0 {
+			t.Errorf("%s's clone copied another project's sub-task: %v", name, kids)
+		}
+	}
+	if code, out := call(dev, "POST", clone+"/clone", map[string]any{"keep": []string{"subtasks"}}); code != 201 || len(data(out)["children"].([]any)) != 1 {
+		t.Errorf("a person's clone keeps the sub-task: %d %v", code, data(out)["children"])
+	}
 	if _, out = call(dev, "GET", base+"/issues/4", nil); len(data(out)["relations"].([]any)) != before {
 		t.Errorf("p1's issue was related: %v", data(out)["relations"])
+	}
+
+	// A person puts p2's issue under p1's epic: a key scoped to p2 can't
+	// clone it, as the clone would be a new child of p1's issue.
+	count := func(project string) int {
+		t.Helper()
+		_, out := call(dev, "GET", "/api/v1/projects/"+project+"/issues", nil)
+		return len(out["data"].([]any))
+	}
+	code, out = call(dev, "POST", "/api/v1/projects/p2/issues", map[string]any{"title": "Under p1's epic", "parent": epic})
+	if code != 201 {
+		t.Fatalf("p2's issue under p1's epic: %d %v", code, out)
+	}
+	child := fmt.Sprintf("/api/v1/projects/p2/issues/%v", data(out)["number"])
+	issues := count("p2")
+	if code, out := call(key, "POST", child+"/clone", map[string]any{}); code != 404 || data(out)["code"] != "issue_not_found" {
+		t.Errorf("a scoped key clones an issue under another project's: %d %v", code, out)
+	}
+	if n := count("p2"); n != issues {
+		t.Errorf("the refused clone made %d issues", n-issues)
+	}
+	_, out = call(dev, "GET", base+"/issues/1", nil)
+	epicKey := data(out)["key"]
+	if code, out := call(dev, "POST", child+"/clone", map[string]any{}); code != 201 || data(out)["parent"] == nil || data(out)["parent"].(map[string]any)["key"] != epicKey {
+		t.Errorf("a person's clone keeps the parent: %d %v", code, data(out)["parent"])
+	}
+
+	// p2's issue relates to another of p2 and is blocked by p1's: a key
+	// scoped to p2 keeps the first relation only.
+	_, out = call(dev, "GET", clone, nil)
+	sibling := data(out)["key"].(string)
+	foreign := open(map[string]any{"title": "p1's blocker"})
+	foreignPath := fmt.Sprintf("%s/issues/%s", base, strings.TrimPrefix(foreign, "SHOP-"))
+	code, out = call(dev, "POST", "/api/v1/projects/p2/issues", map[string]any{"title": "Related twice"})
+	if code != 201 {
+		t.Fatalf("p2's related issue: %d %v", code, out)
+	}
+	related := fmt.Sprintf("/api/v1/projects/p2/issues/%v", data(out)["number"])
+	if code, _ := call(dev, "POST", related+"/relations", map[string]any{"kind": "relates", "issue": sibling}); code != 201 {
+		t.Fatalf("relates within p2: %d", code)
+	}
+	if code, _ := call(dev, "POST", related+"/relations", map[string]any{"kind": "blocked_by", "issue": foreign}); code != 201 {
+		t.Fatalf("blocked by p1's: %d", code)
+	}
+	others := func(out map[string]any) []string {
+		keys := []string{}
+		for _, r := range data(out)["relations"].([]any) {
+			if m := r.(map[string]any); m["kind"] != "clones" {
+				keys = append(keys, m["issue"].(map[string]any)["key"].(string))
+			}
+		}
+		slices.Sort(keys)
+		return keys
+	}
+	_, out = call(dev, "GET", foreignPath, nil)
+	foreignRelations := len(data(out)["relations"].([]any))
+	_, out = call(dev, "GET", foreignPath+"/timeline", nil)
+	foreignHistory := len(out["data"].([]any))
+	if code, out := call(key, "POST", related+"/clone", map[string]any{"keep": []string{"relations"}}); code != 201 || !slices.Equal(others(out), []string{sibling}) {
+		t.Errorf("a scoped key's clone keeps p2's relation alone: %d %v", code, data(out)["relations"])
+	}
+	if _, out = call(dev, "GET", foreignPath, nil); len(data(out)["relations"].([]any)) != foreignRelations {
+		t.Errorf("p1's issue was related to the clone: %v", data(out)["relations"])
+	}
+	if _, out = call(dev, "GET", foreignPath+"/timeline", nil); len(out["data"].([]any)) != foreignHistory {
+		t.Errorf("p1's issue's history: %v", out["data"])
+	}
+	if code, out := call(dev, "POST", related+"/clone", map[string]any{"keep": []string{"relations"}}); code != 201 || len(others(out)) != 2 {
+		t.Errorf("a person's clone keeps both relations: %d %v", code, data(out)["relations"])
 	}
 }
 

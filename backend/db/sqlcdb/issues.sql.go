@@ -69,19 +69,28 @@ SELECT (CASE WHEN r.from_issue_id = $1::uuid THEN $2::uuid ELSE r.from_issue_id 
        (CASE WHEN r.to_issue_id = $1::uuid THEN $2::uuid ELSE r.to_issue_id END),
        r.kind, $3::uuid
 FROM issue_relations r
+JOIN issues o ON o.id = (CASE WHEN r.from_issue_id = $1::uuid THEN r.to_issue_id ELSE r.from_issue_id END)
 WHERE (r.from_issue_id = $1::uuid OR r.to_issue_id = $1::uuid) AND r.kind <> 'clones'
+  AND ($4::uuid[] IS NULL OR o.project_id = ANY($4::uuid[]))
 ON CONFLICT DO NOTHING
 `
 
 type CopyIssueRelationsParams struct {
-	SrcID     pgtype.UUID `json:"src_id"`
-	DstID     pgtype.UUID `json:"dst_id"`
-	CreatedBy pgtype.UUID `json:"created_by"`
+	SrcID      pgtype.UUID   `json:"src_id"`
+	DstID      pgtype.UUID   `json:"dst_id"`
+	CreatedBy  pgtype.UUID   `json:"created_by"`
+	ProjectIds []pgtype.UUID `json:"project_ids"`
 }
 
-// A clone's relations: the original's, but not its clone links.
+// A clone's relations: the original's, but not its clone links, and,
+// given project_ids, only those whose other issue is in one of them.
 func (q *Queries) CopyIssueRelations(ctx context.Context, arg CopyIssueRelationsParams) error {
-	_, err := q.db.Exec(ctx, copyIssueRelations, arg.SrcID, arg.DstID, arg.CreatedBy)
+	_, err := q.db.Exec(ctx, copyIssueRelations,
+		arg.SrcID,
+		arg.DstID,
+		arg.CreatedBy,
+		arg.ProjectIds,
+	)
 	return err
 }
 

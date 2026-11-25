@@ -978,8 +978,12 @@ func (r *postgresRepository) CopyLabels(ctx context.Context, src, dst string) er
 	return nil
 }
 
-func (r *postgresRepository) CopyRelations(ctx context.Context, src, dst, actorID string) error {
-	if err := r.q.CopyIssueRelations(ctx, sqlcdb.CopyIssueRelationsParams{SrcID: id(src), DstID: id(dst), CreatedBy: id(actorID)}); err != nil {
+func (r *postgresRepository) CopyRelations(ctx context.Context, src, dst, actorID string, projectIDs []string) error {
+	var projects []pgtype.UUID // NULL: any project
+	if projectIDs != nil {
+		projects = ids(projectIDs)
+	}
+	if err := r.q.CopyIssueRelations(ctx, sqlcdb.CopyIssueRelationsParams{SrcID: id(src), DstID: id(dst), CreatedBy: id(actorID), ProjectIds: projects}); err != nil {
 		return fmt.Errorf("CopyIssueRelations: %w", err)
 	}
 	return nil

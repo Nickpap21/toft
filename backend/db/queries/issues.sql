@@ -602,13 +602,16 @@ SELECT sqlc.arg(dst_id)::uuid, l.name FROM issue_labels l WHERE l.issue_id = sql
 ON CONFLICT DO NOTHING;
 
 -- name: CopyIssueRelations :exec
--- A clone's relations: the original's, but not its clone links.
+-- A clone's relations: the original's, but not its clone links, and,
+-- given project_ids, only those whose other issue is in one of them.
 INSERT INTO issue_relations (from_issue_id, to_issue_id, kind, created_by)
 SELECT (CASE WHEN r.from_issue_id = sqlc.arg(src_id)::uuid THEN sqlc.arg(dst_id)::uuid ELSE r.from_issue_id END),
        (CASE WHEN r.to_issue_id = sqlc.arg(src_id)::uuid THEN sqlc.arg(dst_id)::uuid ELSE r.to_issue_id END),
        r.kind, sqlc.narg(created_by)::uuid
 FROM issue_relations r
+JOIN issues o ON o.id = (CASE WHEN r.from_issue_id = sqlc.arg(src_id)::uuid THEN r.to_issue_id ELSE r.from_issue_id END)
 WHERE (r.from_issue_id = sqlc.arg(src_id)::uuid OR r.to_issue_id = sqlc.arg(src_id)::uuid) AND r.kind <> 'clones'
+  AND (sqlc.narg(project_ids)::uuid[] IS NULL OR o.project_id = ANY(sqlc.narg(project_ids)::uuid[]))
 ON CONFLICT DO NOTHING;
 
 -- name: SetProjectFailedDeployIssues :exec
