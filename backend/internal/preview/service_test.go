@@ -564,6 +564,40 @@ func TestUntrustedRefusals(t *testing.T) {
 	}
 }
 
+// An untrusted preview that holds a copy of a service that became a Compose
+// stack refuses it at each later deploy too, not only at its start.
+func TestUntrustedLaterDeployRefusesCompose(t *testing.T) {
+	f := newFake()
+	s := newSvc(f)
+	ctx := context.Background()
+	f.open("p1", 45, true)
+	f.emit("p1")
+	s.ApplyEvents(ctx)
+	if _, err := s.Approve(ctx, "proj", "repo", 45, sha('a'), Actor{UserID: "sam"}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if len(f.deploys) != 2 {
+		t.Fatalf("deploys after approval = %d, want 2", len(f.deploys))
+	}
+
+	f.sources[1].SourceType = "docker-compose"
+	f.pulls["p1"].HeadSHA, f.pulls["p1"].KeyPushed = sha('c'), true
+	f.emit("p1")
+	s.ApplyEvents(ctx)
+	if _, err := s.Approve(ctx, "proj", "repo", 45, sha('c'), Actor{UserID: "sam"}); err != nil {
+		t.Fatalf("approve the push: %v", err)
+	}
+	if len(f.deploys) != 3 || f.deploys[2].SHA != sha('c') {
+		t.Fatalf("a Compose copy was deployed: %+v", f.deploys[2:])
+	}
+	if !slices.Contains(f.checks, "api failure ccc") {
+		t.Fatalf("checks = %v", f.checks)
+	}
+	if note := f.previews["p1"].Note; !strings.Contains(note, "api is a Compose stack") {
+		t.Fatalf("note = %q", note)
+	}
+}
+
 // An untrusted preview that waited for approval while a server had no gVisor
 // reads as blocked; once the server can run it, it asks for approval again
 // without a push.

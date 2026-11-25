@@ -767,7 +767,11 @@ func (s *Service) deployAll(ctx context.Context, pr Pull, set Settings, pv *Prev
 			continue
 		}
 		if pv.Untrusted {
-			if why := s.dockerfileRefusal(ctx, pr, bySource[cp.PreviewOf], target); why != "" {
+			why := untrustedRefusal(bySource[cp.PreviewOf])
+			if why == "" {
+				why = s.dockerfileRefusal(ctx, pr, bySource[cp.PreviewOf], target)
+			}
+			if why != "" {
 				s.code.ReportPreviewCheck(ctx, pr.RepoID, target, cp.Name, "failure", why)
 				pv.Note = why
 				continue
