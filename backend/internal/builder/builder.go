@@ -45,9 +45,9 @@ func lockEnv(s Spec) []string {
 	return []string{"TOFT_BUILDER_LOCK=" + LockDir + "/" + s.Name + ".lock", "TOFT_BUILDER_WAIT=300"}
 }
 
-// Image is the builder's BuildKit, moby/buildkit v0.35.0 as of 2026-11-18;
+// Image is the builder's BuildKit, moby/buildkit v0.35.1 as of 2026-11-25;
 // scripts/buildkit-image.sh fails in CI when a newer release is out.
-const Image = "moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb"
+const Image = "moby/buildkit:v0.35.1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c"
 
 // cache is the most a builder's cache may use: a tenth of the disk it is on.
 const cache = "10%"
