@@ -333,7 +333,7 @@ func (o *netOps) endpointContainers(ctx context.Context, ep netplan.Endpoint, ke
 			return nil, fmt.Errorf("ContainerList: %w", err)
 		}
 		for _, c := range list {
-			if c.Labels[LabelComposeProject] != proj || IsPlatformSlot(c.Labels, SummaryName(c)) {
+			if c.Labels[LabelComposeProject] != proj || LooksLikeSlot(c.Labels, SummaryName(c)) {
 				continue
 			}
 			ref := refOf(c)
@@ -636,7 +636,7 @@ func (o *netOps) isolateFrom(ctx context.Context, netName string, planned, exist
 			}
 		}
 		svcID := labels[LabelServiceID]
-		slot := svcID != "" && IsSlotName(name, svcID)
+		slot := IsPlatformSlot(labels, name)
 		switch {
 		case slot && !exists[svcID] && !planned[svcID]:
 			o.report.Orphans = append(o.report.Orphans, name+" (on "+netName+"; remove it with docker rm -f)")

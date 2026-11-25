@@ -24,6 +24,10 @@ import (
 // traefikFileFlag is in the arguments of a Traefik reading the files.
 const traefikFileFlag = "--providers.file.directory="
 
+// traefikConstraintFlag is in the arguments of a Traefik reading labels
+// that builds no route from a look-alike (rollout.LookAlikeConstraint).
+const traefikConstraintFlag = "--providers.docker.constraints="
+
 // traefikRedirectPriority is in the arguments of a Traefik whose HTTP to
 // HTTPS redirect gives way to a service's own HTTP router (D-150).
 const traefikRedirectPriority = "--entrypoints.web.http.redirections.entrypoint.priority=1"
@@ -78,8 +82,10 @@ func (s *Service) KeepTraefikCurrent(ctx context.Context, serverID string) error
 // still outranks every router, so a temporary sslip.io address answers
 // over HTTP without a Re-provision (D-150; the health poll asks every 5
 // minutes), and one started before Traefik kept its services' request
-// durations (D-156). Each restart applies the whole configuration, so a
-// server upgraded past both restarts once. Never while a provisioning run
+// durations (D-156), and one reading labels that was started before it
+// passed over a container with a service's label and a compose project.
+// Each restart applies the whole configuration, so a server upgraded past
+// all three restarts once. Never while a provisioning run
 // is under way, nor after a failed one.
 func (s *Service) cutOverRoutes(ctx context.Context, srv *Server) {
 	sync := s.routesSync(ctx, srv)
@@ -114,7 +120,8 @@ func (s *Service) cutOverRoutes(ctx context.Context, srv *Server) {
 	switchRoutes := readsFiles != files && (files || srv.Connection == ConnectionSSH)
 	redirectFirst := !strings.Contains(args, traefikRedirectPriority)
 	noMetrics := !strings.Contains(args, traefikMetricsEntrypoint)
-	stale := readsFiles == files && !lastFailed && (redirectFirst || noMetrics)
+	lookAlikes := !readsFiles && !strings.Contains(args, traefikConstraintFlag)
+	stale := readsFiles == files && !lastFailed && (redirectFirst || noMetrics || lookAlikes)
 	if err != nil || !switchRoutes && !stale || !strings.Contains(","+mounts, ","+traefikAcmeVolume+",") {
 		return
 	}
@@ -142,8 +149,10 @@ func (s *Service) cutOverRoutes(ctx context.Context, srv *Server) {
 		switch {
 		case !switchRoutes && redirectFirst:
 			logFn("Toft now lets a temporary sslip.io address answer over HTTP while its certificate waits (D-150): Traefik restarts to apply it, so this server's routes pause for a few seconds")
-		case !switchRoutes:
+		case !switchRoutes && noMetrics:
 			logFn("Toft now measures each service's request latency at this server's Traefik (D-156): Traefik restarts to apply it, so this server's routes pause for a few seconds")
+		case !switchRoutes:
+			logFn("Traefik now builds no route from a container that carries a service's label and a compose project, which Toft never makes: Traefik restarts to apply it, so this server's routes pause for a few seconds")
 		case files:
 			logFn("This server's agent now writes Traefik's routes (D-113): Traefik restarts to read them from its files, so this server's routes pause for a few seconds")
 		default:

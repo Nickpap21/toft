@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/Nickpap21/toft/backend/internal/testenv"
 
+	"github.com/Nickpap21/toft/backend/internal/agenthub"
 	"github.com/Nickpap21/toft/backend/internal/composespec"
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/deploypolicy"
@@ -25,6 +27,7 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/server"
 	"github.com/Nickpap21/toft/backend/internal/service"
+	"github.com/Nickpap21/toft/backend/pkg/agentproto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -396,6 +399,24 @@ func (m *mockOrchestrator) RunOnce(_ context.Context, spec rollout.Spec, _ []str
 type mockFactory struct {
 	orch    deployment.Orchestrator
 	factErr error
+
+	mu sync.Mutex
+	// deploys is what each pipeline asked its orchestrator's builds to run
+	// under (ForDeploy), in order.
+	deploys []deployment.Builds
+}
+
+func (f *mockFactory) ForDeploy(_ context.Context, srv *server.Server, b deployment.Builds) (deployment.Orchestrator, func(), error) {
+	f.mu.Lock()
+	f.deploys = append(f.deploys, b)
+	f.mu.Unlock()
+	return f.ForServer(srv)
+}
+
+func (f *mockFactory) asked() []deployment.Builds {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.deploys)
 }
 
 func (f *mockFactory) ForServer(_ *server.Server) (deployment.Orchestrator, func(), error) {
@@ -1287,6 +1308,37 @@ func TestPostDeployCommand_ForeignContainerFails(t *testing.T) {
 	orch.mu.Lock()
 	defer orch.mu.Unlock()
 	assert.Empty(t, orch.execTarget, "never exec into another service's container")
+}
+
+type execTrackingOrchestrator struct {
+	mockOrchestrator
+	execTarget string
+}
+
+func (o *execTrackingOrchestrator) ExecInContainer(_ context.Context, _, name, _ string, _ func(string)) error {
+	o.mu.Lock()
+	o.execTarget = name
+	o.mu.Unlock()
+	return nil
+}
+
+// A compose deploy's post-deploy command with no target runs in a container
+// the listing gave, never in one found by a slot's name.
+func TestPostDeployCommand_ComposeWithNoContainerRunsNowhere(t *testing.T) {
+	repo := &mockRepo{createdID: "dep-pd-none"}
+	orch := &execTrackingOrchestrator{}
+	svc := newTestService(repo, &mockFactory{orch: orch}, &mockStatusUpdater{})
+
+	_, err := svc.Trigger(context.Background(), deployment.TriggerInput{
+		ServiceID: "svc-1", ServiceName: "stack", SourceType: "docker-compose",
+		ComposeContent:     "services:\n  web:\n    image: nginx\n",
+		PostDeployCommands: []deployment.PostDeployCommand{{Command: "./migrate"}},
+	})
+	require.NoError(t, err)
+	waitForStatus(t, repo, deployment.StatusFailed, 2*time.Second)
+	orch.mu.Lock()
+	defer orch.mu.Unlock()
+	assert.Empty(t, orch.execTarget, "no container of the service: the command runs in none")
 }
 
 // ─── Compose routing (D-19: the platform routes compose domains) ─────────────
@@ -2296,6 +2348,109 @@ func TestTrigger_FrozenServerRefusesDeploys(t *testing.T) {
 	in.MoveFrom = &deployment.MoveSource{ServerID: "srv-1", Server: frozen}
 	_, err = svc.Trigger(context.Background(), in)
 	require.ErrorIs(t, err, server.ErrServerFrozen, "nor a move off it")
+}
+
+// rolloutAgent is a connected agent with these capabilities.
+type rolloutAgent struct {
+	server.AgentHub
+	caps []string
+}
+
+func (a rolloutAgent) State(string) (agenthub.State, bool) {
+	return agenthub.State{Connected: true, Version: "v0.23.1", Caps: a.caps}, true
+}
+
+// A compose deploy to a server whose agent runs rollouts, and not on Toft's
+// builder, is refused before anything is recorded, whether the stack builds
+// or not; a push is recorded as refused. Another kind of service deploys
+// there, and so does a stack once the agent builds on the builder.
+func TestTrigger_OutdatedAgentRefusesComposeDeploys(t *testing.T) {
+	srv := &server.Server{ID: "srv-1", Name: "fsn1", Connection: server.ConnectionAgent, AgentKey: "ssh-ed25519 AAAA"}
+	trigger := func(caps []string, in deployment.TriggerInput) (*mockRepo, *deployment.Deployment, error) {
+		servers := server.NewService(nil, "")
+		servers.WithAgents(nil, rolloutAgent{caps: caps}, nil, "")
+		repo := &mockRepo{createdID: "dep-o"}
+		svc := newTestService(repo, &mockFactory{orch: &mockOrchestrator{}}, &mockStatusUpdater{})
+		svc.WithDeployUseCase(nil, servers, nil, nil, nil, nil, nil)
+		in.ServiceID, in.Server, in.ServerID = "s", srv, "srv-1"
+		d, err := svc.Trigger(context.Background(), in)
+		return repo, d, err
+	}
+	old := []string{agentproto.CapRollout}
+	var outdated *server.AgentOutdatedError
+	for name, stack := range map[string]string{"builds": "services: {web: {build: .}}\n", "runs an image": "services: {web: {image: nginx}}\n"} {
+		repo, _, err := trigger(old, deployment.TriggerInput{SourceType: "docker-compose", ComposeContent: stack, Origin: deployment.OriginInteractive})
+		require.ErrorAs(t, err, &outdated, name)
+		assert.Equal(t, "srv-1", outdated.ServerID)
+		assert.Contains(t, err.Error(), "/servers/srv-1?tab=settings#connection")
+		assert.Empty(t, repo.statusHistory, name)
+	}
+	_, d, err := trigger(old, deployment.TriggerInput{SourceType: "docker-compose", ComposeContent: "services: {web: {image: nginx}}\n", Origin: deployment.OriginWebhook})
+	require.ErrorAs(t, err, &outdated)
+	require.NotNil(t, d, "the refused push is a failed deployment")
+
+	_, _, err = trigger(old, deployment.TriggerInput{SourceType: "docker-image", DockerImage: "nginx", Port: 80, Origin: deployment.OriginInteractive})
+	assert.False(t, errors.As(err, &outdated), "an image deploys: %v", err)
+	_, _, err = trigger([]string{agentproto.CapRollout, agentproto.CapBuilder}, deployment.TriggerInput{SourceType: "docker-compose", ComposeContent: "services: {web: {image: nginx}}\n", Origin: deployment.OriginInteractive})
+	assert.False(t, errors.As(err, &outdated), "an agent on the builder deploys it: %v", err)
+}
+
+// Whatever starts a deploy (a person, a push, Toft itself, a preview; a
+// rollback, a move, a preview's copy), a compose deploy to a server whose
+// agent is older than the panel is refused by the same gate: every one of
+// them is a Trigger, the only thing that runs a pipeline, and the gate is
+// in what Trigger checks first.
+func TestEveryDeployPathMeetsTheOutdatedAgentGate(t *testing.T) {
+	srv := &server.Server{ID: "srv-1", Name: "fsn1", Connection: server.ConnectionAgent, AgentKey: "ssh-ed25519 AAAA"}
+	servers := server.NewService(nil, "")
+	servers.WithAgents(nil, rolloutAgent{caps: []string{agentproto.CapRollout}}, nil, "")
+	compose := deployment.TriggerInput{ServiceID: "s", Server: srv, ServerID: "srv-1", SourceType: "docker-compose", ComposeContent: "services: {web: {build: .}}\n"}
+	paths := map[string]func(*deployment.TriggerInput){
+		"a rollback":       func(in *deployment.TriggerInput) { in.RollbackImageTag = "paas/s:dep-1" },
+		"a move":           func(in *deployment.TriggerInput) { in.MoveFrom = &deployment.MoveSource{} },
+		"a preview's copy": func(in *deployment.TriggerInput) { in.Preview = true },
+		"from a repository": func(in *deployment.TriggerInput) {
+			in.ComposeContent, in.ComposeRepoURL, in.ComposeFilePath = "", "https://github.com/example/repo", "docker-compose.yml"
+		},
+		"as it is": func(*deployment.TriggerInput) {},
+	}
+	for _, origin := range []deployment.Origin{deployment.OriginInteractive, deployment.OriginWebhook, deployment.OriginSystem, deployment.OriginPreview} {
+		for name, shape := range paths {
+			in := compose
+			in.Origin = origin
+			shape(&in)
+			orch := &mockOrchestrator{}
+			svc := newTestService(&mockRepo{createdID: "dep-o"}, &mockFactory{orch: orch}, &mockStatusUpdater{})
+			svc.WithDeployUseCase(nil, servers, nil, nil, nil, nil, nil)
+			_, err := svc.Trigger(context.Background(), in)
+			var outdated *server.AgentOutdatedError
+			require.ErrorAs(t, err, &outdated, "%s, origin %q", name, origin)
+			assert.Empty(t, orch.recorded(), "%s, origin %q: nothing ran", name, origin)
+		}
+	}
+
+	// The pipeline has one caller, Trigger, after its checks.
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	var callers []string
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(file)
+		require.NoError(t, err)
+		if n := strings.Count(string(src), ".runPipeline("); n > 0 {
+			callers = append(callers, fmt.Sprintf("%s x%d", file, n))
+		}
+		if file == "service.go" {
+			_, trigger, ok := strings.Cut(string(src), "\nfunc (s *Service) Trigger(")
+			require.True(t, ok)
+			trigger, _, _ = strings.Cut(trigger, "\n}\n")
+			check, run := strings.Index(trigger, "s.precheck(ctx, input)"), strings.Index(trigger, "s.runPipeline(")
+			assert.True(t, check >= 0 && check < run, "Trigger checks before it runs the pipeline")
+		}
+	}
+	assert.Equal(t, []string{"service.go x1"}, callers, "something else runs a pipeline")
 }
 
 // Nothing deploys, or moves, to a server still waiting for its first agent

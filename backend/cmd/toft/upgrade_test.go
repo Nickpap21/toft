@@ -358,6 +358,10 @@ func TestUpgrade_FreshInstall(t *testing.T) {
 			t.Errorf("toft-apps.slice lacks %s:\n%s", want, slice)
 		}
 	}
+	// The builders' slice holds both builders to 1 GiB together.
+	if builds, _ := os.ReadFile(filepath.Join(u.p.units, "etc/systemd/system/toft-builds.slice")); !strings.Contains(string(builds), "\nMemoryMax=1073741824\n") {
+		t.Errorf("toft-builds.slice lacks its limit:\n%s", builds)
+	}
 	if b, _ := os.ReadFile(u.p.toft); string(b) != "toft binary" {
 		t.Error("toft not installed from the release")
 	}
@@ -367,7 +371,7 @@ func TestUpgrade_FreshInstall(t *testing.T) {
 		if strings.HasPrefix(c, "docker run") && strings.Contains(c, atlasImage) && atlas < 0 {
 			atlas = i
 		}
-		if strings.HasSuffix(c, "up -d --remove-orphans") && up < 0 {
+		if strings.HasSuffix(c, "up -d --remove-orphans --no-build") && up < 0 {
 			up = i
 		}
 	}
@@ -622,7 +626,7 @@ func TestUpgrade_FailedMigrationAborts(t *testing.T) {
 	}
 	// The background pull of postgres and traefik touches no container.
 	composed := slices.DeleteFunc(slices.Clone(h.calls), func(c string) bool { return strings.Contains(c, " pull --quiet ") })
-	if countPrefix(composed, "docker compose") != 1 || !strings.Contains(composed[indexOf(composed, "docker compose")], "--no-recreate postgres") {
+	if countPrefix(composed, "docker compose") != 1 || !strings.Contains(composed[indexOf(composed, "docker compose")], "--no-recreate --no-build postgres") {
 		t.Fatalf("the stack was touched beyond postgres:\n%s", strings.Join(h.calls, "\n"))
 	}
 	if !strings.Contains(out.String(), "v0.1.0 keeps running") {
@@ -892,7 +896,7 @@ func TestUpgrade_Git(t *testing.T) {
 	if err := u.upgrade(context.Background(), "v0.3.0", false); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	up := h.calls[slices.IndexFunc(h.calls, func(c string) bool { return strings.HasSuffix(c, "up -d --remove-orphans") })]
+	up := h.calls[slices.IndexFunc(h.calls, func(c string) bool { return strings.HasSuffix(c, "up -d --remove-orphans --no-build") })]
 	if !strings.Contains(up, "docker-compose.git.yml") {
 		t.Fatalf("the stack started without git: %s", up)
 	}

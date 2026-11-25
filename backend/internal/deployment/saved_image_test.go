@@ -237,3 +237,7 @@ func (f *swapFactory) ForServer(*server.Server) (deployment.Orchestrator, func()
 	defer f.mu.Unlock()
 	return f.orch, func() {}, nil
 }
+
+func (f *swapFactory) ForDeploy(_ context.Context, srv *server.Server, _ deployment.Builds) (deployment.Orchestrator, func(), error) {
+	return f.ForServer(srv)
+}

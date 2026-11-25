@@ -60,17 +60,18 @@ func TestKnownReads(t *testing.T) {
 		seen[a.ID] = true
 		assert.Contains(t, severityRank, a.Severity, a.ID)
 	}
-	assert.Len(t, seen, 27)
+	assert.Len(t, seen, 28)
 }
 
 func TestAffecting(t *testing.T) {
 	b := New("", zap.NewNop())
 	// Production's app server on 2026-10-20.
 	got := b.Affecting("29.4.3")
-	assert.Equal(t, []string{"GHSA-6jhp-7446-hf7f", "GHSA-7cfq-22r6-qp73", "GHSA-rg2x-37c3-w2rh", "GHSA-x86f-5xw2-fm2r", "GHSA-6m9p-4h64-m6vh", "GHSA-vp62-88p7-qqf5"}, ids(got))
+	assert.Equal(t, []string{"GHSA-6jhp-7446-hf7f", "GHSA-7cfq-22r6-qp73", "GHSA-rg2x-37c3-w2rh", "GHSA-x86f-5xw2-fm2r", "GHSA-vfmq-r373-x89f", "GHSA-6m9p-4h64-m6vh", "GHSA-vp62-88p7-qqf5"}, ids(got))
 	assert.Equal(t, "https://github.com/moby/moby/security/advisories/GHSA-6jhp-7446-hf7f", got[0].URL)
-	assert.Equal(t, []string{"GHSA-6jhp-7446-hf7f"}, ids(b.Affecting("29.8.2")))
-	assert.Empty(t, b.Affecting("29.9.3"))
+	assert.Equal(t, []string{"GHSA-6jhp-7446-hf7f", "GHSA-vfmq-r373-x89f"}, ids(b.Affecting("29.8.2")))
+	assert.Equal(t, []string{"GHSA-vfmq-r373-x89f"}, ids(b.Affecting("29.9.3")))
+	assert.Empty(t, b.Affecting("29.10.1"))
 	assert.Empty(t, b.Affecting(""))
 	assert.NotNil(t, b.Affecting(""), "an empty list, not null, in JSON")
 	assert.Contains(t, ids(b.Affecting("27.1.0")), "GHSA-v23v-6jw2-98fq")
@@ -104,11 +105,11 @@ func TestFetchAddsNewOnes(t *testing.T) {
 	require.NoError(t, b.fetch(context.Background()))
 
 	got := b.Affecting("29.9.0")
-	require.Equal(t, []string{"GHSA-new1-new1-new1", "GHSA-6jhp-7446-hf7f"}, ids(got))
+	require.Equal(t, []string{"GHSA-new1-new1-new1", "GHSA-6jhp-7446-hf7f", "GHSA-vfmq-r373-x89f"}, ids(got))
 	assert.Equal(t, Advisory{ID: "GHSA-new1-new1-new1", Severity: "critical", Summary: "A new one", FixedIn: "29.9.1",
 		URL: "https://github.com/moby/moby/security/advisories/GHSA-new1-new1-new1", spans: got[0].spans}, got[0])
 	// The shipped one isn't doubled.
-	assert.Equal(t, []string{"GHSA-new1-new1-new1", "GHSA-6jhp-7446-hf7f", "GHSA-7cfq-22r6-qp73", "GHSA-6m9p-4h64-m6vh"}, ids(b.Affecting("29.8.1")))
+	assert.Equal(t, []string{"GHSA-new1-new1-new1", "GHSA-6jhp-7446-hf7f", "GHSA-7cfq-22r6-qp73", "GHSA-vfmq-r373-x89f", "GHSA-6m9p-4h64-m6vh"}, ids(b.Affecting("29.8.1")))
 }
 
 func TestFetchFailureKeepsWhatItHad(t *testing.T) {
@@ -125,5 +126,5 @@ func TestFetchFailureKeepsWhatItHad(t *testing.T) {
 	require.NoError(t, b.fetch(context.Background()))
 	ok = false
 	require.Error(t, b.fetch(context.Background()))
-	assert.Equal(t, []string{"GHSA-new1-new1-new1", "GHSA-6jhp-7446-hf7f"}, ids(b.Affecting("29.9.0")))
+	assert.Equal(t, []string{"GHSA-new1-new1-new1", "GHSA-6jhp-7446-hf7f", "GHSA-vfmq-r373-x89f"}, ids(b.Affecting("29.9.0")))
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/netplan"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
@@ -34,6 +35,10 @@ type RolloutAgents interface {
 	// AgentAppliesContainerChecks: the agent creates a slot with the
 	// service's own container check (rollout.Slot.Check).
 	AgentAppliesContainerChecks(serverID string) bool
+	// AgentOutdated: the refusal for a compose up on the server, whose
+	// agent runs rollouts but not on Toft's builder
+	// (agentproto.CapBuilder); nil otherwise.
+	AgentOutdated(srv *server.Server) error
 	// PanelEpoch is sent with each rollout: an agent holding another
 	// epoch's state refuses it (D-113).
 	PanelEpoch(ctx context.Context) (string, error)
@@ -94,18 +99,52 @@ func (f *Factory) ForServer(srv *server.Server) (deployment.Orchestrator, func()
 		LocalLogs: srv.Connection == server.ConnectionAgent}
 	remote := newRemoteOrchestrator(h, net, f.log)
 	if ra, ok := f.ssh.(RolloutAgents); ok && srv.Connection == server.ConnectionAgent {
-		if remote.agent = ra.AgentRunsRollouts(srv.ID); remote.agent {
-			remote.deadlines = ra.AgentKeepsDeadlines(srv.ID)
-			remote.checks = ra.AgentAppliesContainerChecks(srv.ID)
-			epoch, err := ra.PanelEpoch(ctx)
-			if err != nil {
-				return nil, nil, fmt.Errorf("read the panel's epoch: %w", err)
+		remote.agentNow = func() agentAbilities {
+			if !ra.AgentRunsRollouts(srv.ID) {
+				return agentAbilities{}
 			}
-			remote.epoch = epoch
+			return agentAbilities{
+				rollouts:  true,
+				deadlines: ra.AgentKeepsDeadlines(srv.ID),
+				checks:    ra.AgentAppliesContainerChecks(srv.ID),
+				outdated:  ra.AgentOutdated(srv),
+			}
 		}
+		epoch, err := ra.PanelEpoch(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read the panel's epoch: %w", err)
+		}
+		remote.epoch = epoch
 	}
 	if ma, ok := f.ssh.(MetricsAgents); ok && srv.Connection == server.ConnectionAgent {
 		remote.metrics = ma.AgentKeepsMetrics(srv.ID)
 	}
 	return remote, func() {}, nil
+}
+
+// ForDeploy is ForServer for a deploy's pipeline, whose builds run on
+// Toft's builder for b: the untrusted one for an untrusted preview. Each
+// asks its host's firewall first (builder.Run), but for the panel's own
+// host where b says not to. An orchestrator from ForServer builds nothing.
+func (f *Factory) ForDeploy(ctx context.Context, srv *server.Server, b deployment.Builds) (deployment.Orchestrator, func(), error) {
+	spec := builder.Trusted
+	if b.Untrusted {
+		spec = builder.Untrusted
+	}
+	spec.Firewall = true
+	if srv == nil || srv.ID == "" {
+		spec.Unchecked = b.Unchecked
+		local, err := f.local.forDeploy(ctx, spec)
+		if err != nil {
+			return nil, nil, err
+		}
+		return local, func() {}, nil
+	}
+	orch, cleanup, err := f.ForServer(srv)
+	if err != nil {
+		return nil, nil, err
+	}
+	// ForServer made it for this call: nothing else holds it.
+	orch.(*RemoteOrchestrator).builder = spec
+	return orch, cleanup, nil
 }

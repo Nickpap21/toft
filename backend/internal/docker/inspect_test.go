@@ -93,3 +93,28 @@ func TestRemoteInspectUsesTheSSHDockerTunnel(t *testing.T) {
 	_, err = newTestRemote(&fakeHost{}).InspectServiceContainers(context.Background(), slotSvcID, "web")
 	assert.Error(t, err, "no Docker tunnel: the server could not be checked")
 }
+
+// A look-alike carries a service's label and a non-empty compose project,
+// running or not. A slot with an empty project label, which Docker's
+// key-only label filter still matches, is not one; nor is a stack's
+// container with only the project.
+func TestLookAlikesListsContainersWithBothLabels(t *testing.T) {
+	f := fakedocker.New(t)
+	both := map[string]string{rollout.LabelServiceID: slotSvcID, rollout.LabelComposeProject: "shop"}
+	f.Add("shop-web-1", container.StateRunning, both)
+	f.Add("shop-api-1", container.StateExited, both)
+	f.Add(slotBlue, container.StateRunning, map[string]string{rollout.LabelServiceID: slotSvcID, rollout.LabelComposeProject: ""})
+	f.Add("shop-db-1", container.StateRunning, map[string]string{rollout.LabelComposeProject: "shop"})
+
+	o := &LocalOrchestrator{dockerClient: f.Client(), log: zap.NewNop()}
+	got, err := o.LookAlikes(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"shop-api-1", "shop-web-1"}, got, "sorted, the stopped one too")
+
+	got, err = newRemoteOrchestrator(&fakeHost{docker: f}, rollout.NetConfig{}, zap.NewNop()).LookAlikes(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"shop-api-1", "shop-web-1"}, got)
+
+	_, err = newTestRemote(&fakeHost{}).LookAlikes(context.Background())
+	assert.Error(t, err, "no Docker tunnel: the server could not be checked")
+}

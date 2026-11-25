@@ -22,10 +22,10 @@ import (
 //   - BUILDKIT_CACHE_MOUNT_NS prefixes the ids of the build's cache mounts,
 //     so a RUN --mount=type=cache reads and writes its own service's only.
 //
-// dockerfileFrontend is docker/dockerfile:1 as of 2026-11-16;
+// dockerfileFrontend is docker/dockerfile:1 as of 2026-11-25;
 // scripts/dockerfile-frontend.sh fails in CI when the tag has moved on.
 const (
-	dockerfileFrontend = "docker/dockerfile@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e"
+	dockerfileFrontend = "docker/dockerfile@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183"
 	buildSyntaxArg     = "BUILDKIT_SYNTAX"
 	buildCacheNSArg    = "BUILDKIT_CACHE_MOUNT_NS"
 )

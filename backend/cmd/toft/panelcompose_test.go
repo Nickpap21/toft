@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Nickpap21/toft/backend/internal/hoststats"
+	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,6 +55,16 @@ func flagValue(command []string, name string) string {
 	return ""
 }
 
+// The panel's Traefik builds no route from a container that carries a
+// service's label and a compose project, with the constraint every server
+// reading labels has. `toft upgrade` brings the file up, so a route such a
+// container had before the upgrade is gone at the first start after it.
+func TestPanelTraefikPassesOverLookAlikes(t *testing.T) {
+	if got := flagValue(panelTraefikService(t).Command, "--providers.docker.constraints"); got != rollout.LookAlikeConstraint {
+		t.Errorf("docker-compose.yml: the Docker provider's constraints are %q, want %q", got, rollout.LookAlikeConstraint)
+	}
+}
+
 // The panel's Traefik keeps the same latency buckets as every remote one
 // (D-156): the backend reads its page with the same parser.
 func TestPanelTraefikLatencyBuckets(t *testing.T) {
@@ -67,10 +78,11 @@ func TestPanelTraefikLatencyBuckets(t *testing.T) {
 }
 
 // The panel's metrics page names every service on the panel host: it is
-// never on the web entrypoints, its published port is the host's loopback
-// only, and the one router that serves it takes only the metrics
-// entrypoint, behind the control-plane allowlist. These fail if it ever
-// becomes reachable from outside.
+// never on the web entrypoints, its port isn't published on the host (the
+// backend reads it over the control plane's network), and the one router
+// that serves it takes only the metrics entrypoint, behind the
+// control-plane allowlist. These fail if it ever becomes reachable from
+// outside.
 func TestPanelTraefikMetricsAreControlPlaneOnly(t *testing.T) {
 	s := panelTraefikService(t)
 	if ep := flagValue(s.Command, "--metrics.prometheus.entryPoint"); ep != "metrics" {
@@ -85,19 +97,10 @@ func TestPanelTraefikMetricsAreControlPlaneOnly(t *testing.T) {
 		addr == flagValue(s.Command, "--entrypoints.web.address") || addr == flagValue(s.Command, "--entrypoints.websecure.address") {
 		t.Fatalf("metrics entrypoint %q shares the web's port", addr)
 	}
-	published := 0
 	for _, p := range s.Ports {
-		parts := strings.Split(p, ":")
-		if parts[len(parts)-1] != port {
-			continue
+		if parts := strings.Split(p, ":"); parts[len(parts)-1] == port {
+			t.Errorf("port %q: the metrics port is published on the host", p)
 		}
-		published++
-		if len(parts) != 3 || parts[0] != "127.0.0.1" {
-			t.Errorf("port %q: the metrics port is published beyond the host's loopback", p)
-		}
-	}
-	if published != 1 {
-		t.Errorf("the metrics port is published %d times, want once on 127.0.0.1", published)
 	}
 
 	labels := map[string]string{}

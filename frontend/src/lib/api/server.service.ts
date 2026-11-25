@@ -208,7 +208,24 @@ export function serverLabel(s: Pick<Server, "name" | "ip_address" | "shared" | "
     return s.shared ? `${s.name} (shared by ${s.shared_by})` : `${s.name} (${s.ip_address})`;
 }
 
+export type BuildDestination = components["schemas"]["BuildDestination"];
+export type BuildDestinationInput = components["schemas"]["BuildDestinationInput"];
+
+/** The build destinations of a server, or of the panel's own (null). */
+const buildDestinations = (serverId: string | null) =>
+    serverId ? `/api/v1/servers/${serverId}/build-destinations` : "/api/v1/instance/build-destinations";
+
 export const serverService = {
+    /** The private addresses a server's builds may reach. Instance operators
+     *  only; a change needs the password confirmed (useReauth). */
+    listBuildDestinations: (serverId: string | null) => fetchAPI<BuildDestination[]>(buildDestinations(serverId)),
+
+    addBuildDestination: (serverId: string | null, input: BuildDestinationInput) =>
+        fetchAPI<BuildDestination>(buildDestinations(serverId), { method: "POST", body: JSON.stringify(input), headers: reauthHeader() }),
+
+    removeBuildDestination: (serverId: string | null, id: string) =>
+        fetchAPI<void>(`${buildDestinations(serverId)}/${id}`, { method: "DELETE", headers: reauthHeader() }),
+
     listShares: (serverId: string) => fetchAPI<ServerShare[]>(`/api/v1/servers/${serverId}/shares`),
 
     /** Owners only, and only with a workspace the caller also owns. */
@@ -294,6 +311,10 @@ export const serverService = {
 
     rotateAgentKey: (serverId: string) =>
         fetchAPI<Server>(`/api/v1/servers/${serverId}/agent/rotate`, { method: "POST" }),
+
+    /** Offers the panel's version again to an agent that is behind it; owners and operators. */
+    offerAgentUpgrade: (serverId: string) =>
+        fetchAPI<Server>(`/api/v1/servers/${serverId}/agent/upgrade`, { method: "POST" }),
 
     revokeAgent: (serverId: string, uninstall: boolean) =>
         fetchAPI<Server>(`/api/v1/servers/${serverId}/agent${uninstall ? "?uninstall=true" : ""}`, { method: "DELETE" }),

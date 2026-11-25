@@ -164,3 +164,79 @@ func TestStageDotEnv_IncludedFileIsCheckedWithTheDeployedEnv(t *testing.T) {
 	require.NoError(t, composespec.StageDotEnv(root, "docker-compose.yml", map[string]string{"A": "1"}))
 	assert.Equal(t, []string{"host_bind_mount", "privileged"}, rulesOf(check()))
 }
+
+// On the panel's host compose reads the repository's own .env, with the
+// service's variables above it: a line of the file that reads one gets the
+// service's value, and a name of the docker CLI's is left out.
+func TestLocalEnv(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{".env": "A=repo\nB=repo\nD=${A}-${PASS:-nopass}\nDOCKER_HOST=tcp://x\n"})
+	env, dropped, err := composespec.LocalEnv(dir, map[string]string{"A": "svc", "PASS": "p"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "svc", "B": "repo", "D": "svc-p", "PASS": "p"}, env)
+	assert.Equal(t, []string{"DOCKER_HOST"}, dropped)
+
+	// The deploy policy reads the same file to the same values.
+	same := t.TempDir()
+	writeFiles(t, same, map[string]string{
+		".env":               "A=repo\nD=${A}-${PASS:-nopass}\n",
+		"docker-compose.yml": "services:\n  web:\n    image: \"nginx:${D}\"\n",
+	})
+	service := map[string]string{"A": "svc", "PASS": "p"}
+	env, _, err = composespec.LocalEnv(same, service)
+	require.NoError(t, err)
+	p, vs, err := composespec.Load(context.Background(), composespec.Source{
+		Root: same, File: "docker-compose.yml", ProjectName: "paas-test-12345678", ReadDotEnv: true, Env: service,
+	})
+	require.NoError(t, err)
+	require.Empty(t, vs)
+	assert.Equal(t, "nginx:svc-p", p.Services["web"].Image)
+	assert.Equal(t, "svc-p", env["D"])
+
+	env, dropped, err = composespec.LocalEnv(t.TempDir(), map[string]string{"A": "svc"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "svc"}, env, "no .env: the service's variables")
+	assert.Empty(t, dropped)
+}
+
+// compose hands a build secret that is a variable to the build's own
+// process, under the variable's name: one the build tools read as a setting
+// is refused there, and stays free everywhere else.
+func TestValidate_BuildSecretFromAVariableTheBuildToolsRead(t *testing.T) {
+	stack := func(name string) string {
+		return "services:\n  app:\n    build:\n      context: .\n      secrets: [p]\nsecrets:\n  p:\n    environment: " + name + "\n"
+	}
+	for _, name := range []string{
+		"EXPERIMENTAL_BUILDKIT_SOURCE_POLICY", "BUILDX_BUILDER", "DOCKER_HOST", "HTTPS_PROXY", "https_proxy", "NO_PROXY",
+		"SSL_CERT_FILE", "SSL_CERT_DIR", "GODEBUG", "OTEL_EXPORTER_OTLP_ENDPOINT", "GRPC_GO_LOG_SEVERITY_LEVEL",
+	} {
+		t.Run(name, func(t *testing.T) {
+			vs := validateInline(t, stack(name), map[string]string{name: "x"})
+			require.Equal(t, []string{"reserved_env"}, rulesOf(vs), "%+v", vs)
+			assert.Equal(t, "secrets.p.environment", vs[0].Field)
+		})
+	}
+	assert.Empty(t, validateInline(t, stack("NPM_TOKEN"), map[string]string{"NPM_TOKEN": "x"}), "an ordinary variable is a build secret")
+	assert.Empty(t, validateInline(t, "services:\n  app:\n    image: alpine\n    secrets: [p]\n    environment:\n      HTTPS_PROXY: ${HTTPS_PROXY}\n      OTEL_SERVICE_NAME: web\n"+
+		"secrets:\n  p:\n    environment: SSL_CERT_FILE\n", map[string]string{"HTTPS_PROXY": "http://proxy:3128", "SSL_CERT_FILE": "x"}),
+		"the same names are the app's to use: a container's variables and its own secrets")
+}
+
+// compose runs with four variables of the platform's own (RunEnv). A secret
+// or a config whose source is one of them would put the platform's value in
+// a container's file, whatever the service's variable of that name says.
+func TestValidate_SecretFromAPlatformVariable(t *testing.T) {
+	stack := func(kind, name string) string {
+		return "services:\n  app:\n    image: alpine\n    " + kind + ": [p]\n" + kind + ":\n  p:\n    environment: " + name + "\n"
+	}
+	for _, name := range composespec.RunEnv {
+		for _, kind := range []string{"secrets", "configs"} {
+			t.Run(kind+" "+name, func(t *testing.T) {
+				vs := validateInline(t, stack(kind, name), map[string]string{name: "x"})
+				require.Equal(t, []string{"reserved_env"}, rulesOf(vs), "%+v", vs)
+				assert.Equal(t, kind+".p.environment", vs[0].Field)
+			})
+		}
+	}
+	assert.Empty(t, validateInline(t, stack("secrets", "APP_TOKEN"), map[string]string{"APP_TOKEN": "x"}), "a variable of the service's own is a secret")
+}

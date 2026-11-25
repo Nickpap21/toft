@@ -110,3 +110,29 @@ describe("A deployment's page when a read fails", () => {
     expect(screen.queryAllByText("not reached")).toHaveLength(0);
   });
 });
+
+describe("A deploy refused for its server's older agent", () => {
+  const href = "/servers/5f0c2a9e-1b7d-4e63-9a41-0c8d2f6b7e13?tab=settings#connection";
+  const text = "fsn1-prod-01's agent (v0.17.0) is older than the panel and can't run this deploy safely. Upgrade the agent, then deploy again";
+
+  const said = new RegExp(`${text.replaceAll("'", "’").replace(/[().\\]/g, "\\$&")}\\.`);
+
+  it("refused before it started (a push): not the deploy policy's refusal, and a link to the Connection card", async () => {
+    list = [{ ...building, started_at: undefined, status: "failed", finished_at: "2026-11-09T09:00:01Z", error_msg: `${text}: ${href}` }];
+    renderPage();
+    expect(await screen.findByText("Refused before anything ran")).toBeInTheDocument();
+    expect(screen.getByText(said)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Upgrade fsn1-prod-01’s agent" })).toHaveAttribute("href", href);
+    expect(screen.queryByText(/deploy policy/)).toBeNull();
+    expect(screen.queryByRole("link", { name: "The policy" })).toBeNull();
+    expect(screen.queryByText(/tab=settings#connection/)).toBeNull();
+  });
+  it("refused by the runner after it started: a failure, with the same link", async () => {
+    list = [{ ...finished, status: "failed", error_msg: `${text}: ${href}` }];
+    renderPage();
+    expect(await screen.findByText(said)).toBeInTheDocument();
+    expect(screen.getByText("Nothing was sent to the server: what runs there is unchanged.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Upgrade fsn1-prod-01’s agent" })).toHaveAttribute("href", href);
+    expect(screen.queryByText(/tab=settings#connection/)).toBeNull();
+  });
+});

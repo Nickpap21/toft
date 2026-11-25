@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Nickpap21/toft/backend/db/sqlcdb"
+	"github.com/Nickpap21/toft/backend/internal/dbtx"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -306,7 +307,7 @@ func (r *PostgresRepository) DeleteUser(ctx context.Context, actorID, userID, pa
 func (r *PostgresRepository) WriteAudit(ctx context.Context, actorID, action, targetUserID string, detail []byte) error {
 	actor, _ := toPgUUID(actorID)
 	target, _ := toPgUUID(targetUserID)
-	if err := r.queries.WriteInstanceAudit(ctx, sqlcdb.WriteInstanceAuditParams{ActorID: actor, Action: action, TargetUserID: target, Detail: detail}); err != nil {
+	if err := sqlcdb.New(dbtx.On(ctx, r.db)).WriteInstanceAudit(ctx, sqlcdb.WriteInstanceAuditParams{ActorID: actor, Action: action, TargetUserID: target, Detail: detail}); err != nil {
 		return fmt.Errorf("WriteInstanceAudit: %w", err)
 	}
 	return nil

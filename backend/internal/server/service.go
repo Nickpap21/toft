@@ -88,7 +88,8 @@ type Service struct {
 	addressPool         string
 	// panelBackupDir: see WithPanelBackupDir.
 	panelBackupDir string
-	panelRestore   PanelRestore // injected via WithPanelRestore (D-163)
+	panelRestore   PanelRestore          // injected via WithPanelRestore (D-163)
+	dests          *buildDestinationDeps // injected via WithBuildDestinations (D-170); nil: no lists
 }
 
 func NewService(repo Repository, acmeEmail string) *Service {
@@ -380,7 +381,7 @@ func (s *Service) provision(ctx context.Context, id string, logFn func(string)) 
 	}
 
 	opts := provisionOpts{ACMEEmail: s.acmeEmail, SSHPort: srv.Port, AppNetworksIsolated: s.appNetworksIsolated, AddressPool: s.addressPool,
-		LocalLogs: srv.Connection == ConnectionAgent}
+		LocalLogs: srv.Connection == ConnectionAgent, BuildDestinations: s.BuildDestinationsApplier(ctx, id)}
 	if dns, err := s.repo.GetDNSProvider(ctx, id); err == nil {
 		opts.DNS = dns
 	} else if !errors.Is(err, ErrNoDNSProvider) {

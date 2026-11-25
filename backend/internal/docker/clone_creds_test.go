@@ -38,7 +38,7 @@ func TestLocalCloneKeepsTheTokenOffTheCommandLine(t *testing.T) {
 		tmp := t.TempDir() // the clone and credential file, this test's alone
 		t.Setenv("TMPDIR", tmp)
 
-		_, cleanup, err := cloneRepository(context.Background(), tc.repo, "main", "", func(string) {})
+		_, _, cleanup, err := cloneRepository(context.Background(), tc.repo, "main", "", func(string) {})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,6 +100,35 @@ func TestClonedCommitReadsTheCheckout(t *testing.T) {
 	assert.Equal(t, deployment.Commit{SHA: sha256}, got, "a SHA-256 repository, and a commit with no subject")
 }
 
+// The commit a build records is the clone's own, also when its base
+// directory holds the files of another repository.
+func TestCloneReadsItsOwnCommitWithABaseDirectory(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		testenv.Skip(t, "needs git")
+	}
+	src := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+		return strings.TrimSpace(string(out))
+	}
+	git("-C", src, "init", "--quiet", "-b", "main")
+	inner := filepath.Join(src, "app")
+	git("init", "--quiet", "--bare", "-b", "main", inner)
+	git("--git-dir", inner, "--work-tree", t.TempDir(), "commit", "--quiet", "--allow-empty", "-m", "inner")
+	git("-C", src, "add", "-A")
+	git("-C", src, "commit", "--quiet", "-m", "outer")
+	want := git("-C", src, "rev-parse", "HEAD")
+	require.NotEqual(t, want, git("--git-dir", inner, "rev-parse", "HEAD"))
+
+	dir, c, cleanup, err := cloneRepository(context.Background(), testenv.GitURL(t, src), "main", "app", func(string) {})
+	require.NoError(t, err)
+	defer cleanup()
+	require.FileExists(t, filepath.Join(dir, "HEAD"), "the base directory came with its files")
+	assert.Equal(t, deployment.Commit{SHA: want, Subject: "outer"}, c)
+}
+
 // A failed local clone's error says git's reason, not only the exit status.
 func TestCloneFailureNamesGitsReason(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -111,7 +140,7 @@ func TestCloneFailureNamesGitsReason(t *testing.T) {
 	out, err = exec.Command("git", "-C", src, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "init").CombinedOutput()
 	require.NoError(t, err, string(out))
 
-	_, _, err = cloneRepository(context.Background(), testenv.GitURL(t, src), "no-such-branch", "", func(string) {})
+	_, _, _, err = cloneRepository(context.Background(), testenv.GitURL(t, src), "no-such-branch", "", func(string) {})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Remote branch no-such-branch not found")
 }

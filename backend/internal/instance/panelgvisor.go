@@ -59,6 +59,27 @@ func (h helperShell) ExecStream(cmd string, logFn func(string)) error {
 	return err
 }
 
+// PanelHostShell runs commands on the panel's host under ctx, nil without
+// the host helper: the build destinations of the panel's server are
+// written through it, and other servers are told the panel's addresses
+// (server.PanelHost, D-170).
+func (s *Service) PanelHostShell(ctx context.Context) server.Shell {
+	if s.panel == nil {
+		return nil
+	}
+	return helperShell{ctx: ctx, probe: s.panel.probe}
+}
+
+// BuildDestinations gives what writes the panel's server's stored build
+// destinations once its firewall is loaded; server.Service satisfies it.
+type BuildDestinations interface {
+	BuildDestinationsApplier(ctx context.Context, serverID string) func(server.Shell, func(string)) error
+}
+
+// WithBuildDestinations makes the gVisor install, which loads the host
+// firewall, write the stored list after it.
+func (s *Service) WithBuildDestinations(d BuildDestinations) { s.dests = d }
+
 // StoredPanelCapabilities is what the panel's server's probe last read,
 // with the levels it can run; nil before the first probe. No operator check:
 // deploys and the workspace's isolation read it (server.PanelCapabilities).
@@ -260,7 +281,11 @@ func (s *Service) InstallPanelGvisor(ctx context.Context, actorID string, logFn 
 		logFn(line)
 	}
 	logFn("Installing gVisor " + server.GvisorRelease + " on the panel's server")
-	platform, err := server.InstallGvisorOn(helperShell{ctx: ctx, probe: s.panel.probe}, record)
+	var dests func(server.Shell, func(string)) error
+	if s.dests != nil {
+		dests = s.dests.BuildDestinationsApplier(ctx, "")
+	}
+	platform, err := server.InstallGvisorOn(helperShell{ctx: ctx, probe: s.panel.probe}, dests, record)
 	msg := ""
 	if err != nil {
 		msg = err.Error()

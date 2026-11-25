@@ -101,6 +101,10 @@ func (onlyDocker) ForServer(*serverPkg.Server) (deployment.Orchestrator, func(),
 	return builds{}, func() {}, nil
 }
 
+func (f onlyDocker) ForDeploy(_ context.Context, srv *serverPkg.Server, _ deployment.Builds) (deployment.Orchestrator, func(), error) {
+	return f.ForServer(srv)
+}
+
 type runtimeStatus struct{}
 
 func (runtimeStatus) UpdateRuntimeStatus(context.Context, string, string, string) error { return nil }

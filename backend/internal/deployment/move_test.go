@@ -66,6 +66,10 @@ func (f *moveFactory) ForServer(srv *server.Server) (deployment.Orchestrator, fu
 	return f.orchs[name], func() {}, nil
 }
 
+func (f *moveFactory) ForDeploy(_ context.Context, srv *server.Server, _ deployment.Builds) (deployment.Orchestrator, func(), error) {
+	return f.ForServer(srv)
+}
+
 type recordingMover struct {
 	mu    sync.Mutex
 	moved []string

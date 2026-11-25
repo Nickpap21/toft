@@ -18,6 +18,7 @@ import (
 
 	domainPkg "github.com/Nickpap21/toft/backend/internal/domain"
 	orgPkg "github.com/Nickpap21/toft/backend/internal/org"
+	serverPkg "github.com/Nickpap21/toft/backend/internal/server"
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/Nickpap21/toft/backend/pkg/actor"
 )
@@ -77,6 +78,17 @@ func TestTrigger_AnInvalidBodyNeverBecomesAnApproval(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/services/svc-1/deployments", strings.NewReader(`{"git_ref":"main","git_ref_type":"branch"}`)))
 	assert.Contains(t, w.Body.String(), "approval_pending")
 	assert.Equal(t, 1, opened)
+}
+
+// A compose deploy refused for an agent older than the panel answers 409
+// agent_outdated, naming the server; a create that deploys gets the same code.
+func TestProblem_AnOutdatedAgentIsAgentOutdated(t *testing.T) {
+	err := fmt.Errorf("deploy: %w", &serverPkg.AgentOutdatedError{ServerID: "srv-1", Name: "fsn1", Version: "v0.23.1"})
+	p := NewHandler(nil, nil, zap.NewNop()).problem(err)
+	assert.Equal(t, http.StatusConflict, p.status)
+	assert.Equal(t, gin.H{"code": "agent_outdated", "server_id": "srv-1"}, p.data)
+	assert.Equal(t, "agent_outdated", codeOf(p.data))
+	assert.Contains(t, p.msg, "fsn1's agent (v0.23.1) is older than the panel")
 }
 
 // composeStack is guestService as a compose stack built from a repository.

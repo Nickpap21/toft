@@ -386,7 +386,8 @@ var RunEnv = []string{"PATH", "HOME", "DOCKER_HOST", "XDG_RUNTIME_DIR"}
 // reads name from the platform's own environment rather than from the
 // service's env vars. The orchestrators give it only PATH, HOME, DOCKER_HOST
 // and XDG_RUNTIME_DIR from the platform (a clean environment locally, env -i
-// on remote servers) plus the service's env vars; the docker CLI adds
+// on remote servers) plus the service's env vars and two fixed BUILDX_GIT_
+// values of their own; the docker CLI adds
 // DOCKER_CLI_PLUGIN_* and OTEL_RESOURCE_ATTRIBUTES when it starts the compose
 // plugin. Every one of those is either a reserved CLI name (IsReservedCLIEnv)
 // or OTEL_RESOURCE_ATTRIBUTES, which the docker CLI rewrites even when the
@@ -401,9 +402,10 @@ func IsPlatformEnv(name string) bool {
 }
 
 // readDotEnv reads <projectDir>/.env the way docker compose does, when it is
-// a regular file inside root. Values in env win over it (they are the
-// process environment). Variables its values read are recorded in refs, and
-// reads of platform variables are violations.
+// a regular file inside root. Values in env win over it and its lines read
+// them, as a process environment's. Variables its values read are recorded in refs, and
+// reads of platform variables are violations, as are the names it sets that
+// are the docker CLI's; the values come back with those.
 func readDotEnv(root, projectDir string, env map[string]string, refs *varRecorder) (map[string]string, []Violation, error) {
 	p := filepath.Join(projectDir, ".env")
 	info, err := os.Lstat(p)
@@ -436,7 +438,7 @@ func readDotEnv(root, projectDir string, env map[string]string, refs *varRecorde
 		refs.names[name] = true
 	}
 	if vs := dotRefs.platformViolations(relField(root, p), relField(root, p)); len(vs) > 0 {
-		return nil, vs, nil
+		return vals, vs, nil
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: read .env: %v", ErrInvalid, err)
@@ -451,10 +453,7 @@ func readDotEnv(root, projectDir string, env map[string]string, refs *varRecorde
 			})
 		}
 	}
-	if len(vs) > 0 {
-		return nil, vs, nil
-	}
-	return vals, nil, nil
+	return vals, vs, nil
 }
 
 // sandboxLoader is the first compose-go resource loader. It refuses every
@@ -497,9 +496,8 @@ func (l *sandboxLoader) refuseIncludeOption(option string) error {
 
 // reservedCLIEnvPrefixes and reservedCLIEnvNames are environment variables
 // that the docker and compose CLIs, and the git and SSH tools they start,
-// read as their own settings. A local compose deploy runs the CLI with the
-// service's env vars in its environment, and compose reads COMPOSE_* from the
-// project's .env, so these would let a service choose CLI plugins and
+// read as their own settings. compose reads COMPOSE_* and the rest from the
+// .env file a deploy hands it, so these would let a service choose CLI plugins and
 // credential helpers (DOCKER_CONFIG, HOME, PATH), extra env files
 // (COMPOSE_ENV_FILES) or git commands (GIT_CONFIG_*, GIT_SSH_COMMAND).
 var reservedCLIEnvPrefixes = []string{"DOCKER_", "COMPOSE_", "BUILDKIT_", "BUILDX_", "LD_", "XDG_", "SSH_", "GIT_CONFIG", "GIT_SSH"}
@@ -514,6 +512,36 @@ var reservedCLIEnvNames = map[string]bool{
 	// in compose's environment there (docker's remoteCleanEnvPrefix). A
 	// compose file must not read it, nor a service set it.
 	"TOFT_EXEC": true,
+}
+
+// buildEnvPrefixes, buildEnvNames and proxyEnv are, beyond IsReservedCLIEnv,
+// names buildx and the Go runtime under it read from their own environment:
+// where a build's sources come from, its proxies, the certificates it
+// trusts, where its traces go. A container is free to use every one of them.
+//
+// ponytail: a list of names, so one a later buildx starts reading is not on
+// it until it is added here. Past that, hand compose every build secret that
+// is a variable as a file, on all three kinds of host.
+var (
+	buildEnvPrefixes = []string{"EXPERIMENTAL_", "OTEL_", "GRPC_", "JAEGER_", "SSL_CERT_"}
+	buildEnvNames    = map[string]bool{
+		"GODEBUG": true, "GOTRACEBACK": true, "GOMAXPROCS": true, "GOGC": true, "GOMEMLIMIT": true, "GOCOVERDIR": true, "GORACE": true,
+	}
+	proxyEnv = map[string]bool{"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "ALL_PROXY": true, "FTP_PROXY": true}
+)
+
+// isBuildEnv reports whether a build's own process reads the variable key
+// as a setting. A proxy's name counts in either case.
+func isBuildEnv(key string) bool {
+	if IsReservedCLIEnv(key) || buildEnvNames[key] || proxyEnv[strings.ToUpper(key)] {
+		return true
+	}
+	for _, p := range buildEnvPrefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsReservedCLIEnv reports whether an environment variable name is one the

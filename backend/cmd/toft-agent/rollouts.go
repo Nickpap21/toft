@@ -78,7 +78,7 @@ func (m *rollouts) caps() string {
 	if m == nil {
 		return ""
 	}
-	caps := agentproto.CapRollout + " " + agentproto.CapDesired + " " + agentproto.CapRoutes + " " + agentproto.CapMetrics + " " + agentproto.CapDeadline + " " + agentproto.CapContainerCheck
+	caps := agentproto.CapRollout + " " + agentproto.CapDesired + " " + agentproto.CapRoutes + " " + agentproto.CapMetrics + " " + agentproto.CapDeadline + " " + agentproto.CapContainerCheck + " " + agentproto.CapBuilder
 	if m.dns {
 		caps += " " + agentproto.CapDNS
 	}

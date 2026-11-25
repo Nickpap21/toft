@@ -1094,6 +1094,14 @@ const (
 	ServerAgentFrozenChangeKindUnknown ServerAgentFrozenChangeKind = "unknown"
 )
 
+// Defines values for ServerAgentUpgradeReason.
+const (
+	ServerAgentUpgradeReasonLessThannil ServerAgentUpgradeReason = "<nil>"
+	ServerAgentUpgradeReasonNoBuild     ServerAgentUpgradeReason = "no_build"
+	ServerAgentUpgradeReasonRefused     ServerAgentUpgradeReason = "refused"
+	ServerAgentUpgradeReasonReturned    ServerAgentUpgradeReason = "returned"
+)
+
 // Defines values for ServerCapabilitiesLevelsId.
 const (
 	ServerCapabilitiesLevelsIdDedicated       ServerCapabilitiesLevelsId = "dedicated"
@@ -1113,8 +1121,8 @@ const (
 
 // Defines values for ServerResponseConnection.
 const (
-	Agent ServerResponseConnection = "agent"
-	Ssh   ServerResponseConnection = "ssh"
+	ServerResponseConnectionAgent ServerResponseConnection = "agent"
+	ServerResponseConnectionSsh   ServerResponseConnection = "ssh"
 )
 
 // Defines values for ServerRoleInputRole.
@@ -2018,6 +2026,25 @@ type BranchInfo struct {
 	Name         string     `json:"name"`
 }
 
+// BuildDestination defines model for BuildDestination.
+type BuildDestination struct {
+	// Address An IPv4 address (10.0.5.7) or a CIDR (10.0.5.0/24) inside the private ranges.
+	Address   string    `json:"address"`
+	CreatedAt time.Time `json:"created_at"`
+	Id        string    `json:"id"`
+	Note      string    `json:"note"`
+
+	// Port The one TCP port builds may reach there; null for every TCP port.
+	Port *int `json:"port"`
+}
+
+// BuildDestinationInput defines model for BuildDestinationInput.
+type BuildDestinationInput struct {
+	Address string  `json:"address"`
+	Note    *string `json:"note,omitempty"`
+	Port    *int    `json:"port"`
+}
+
 // BulkUpsertInput defines model for BulkUpsertInput.
 type BulkUpsertInput struct {
 	Vars []EnvvarUpsertInput `json:"vars"`
@@ -2462,7 +2489,7 @@ type CreatedService struct {
 	// DeployError Why the first deploy the create asked for did not start, as the deploy's own problem says it. The service is created; deploy it once that is settled.
 	DeployError *string `json:"deploy_error,omitempty"`
 
-	// DeployErrorCode The code of that problem, when it has one (server_frozen, sandbox_unavailable, deploy_policy_violation, capacity_exceeded, an agent policy's), as POST /services/{serviceID}/deployments answers it.
+	// DeployErrorCode The code of that problem, when it has one (server_frozen, agent_outdated, sandbox_unavailable, deploy_policy_violation, capacity_exceeded, an agent policy's), as POST /services/{serviceID}/deployments answers it.
 	DeployErrorCode *string `json:"deploy_error_code,omitempty"`
 
 	// DeployOnPush A push to git_branch deploys it (a push to repository_id, or GitHub's webhook for git_repo_url).
@@ -4584,7 +4611,7 @@ type NeedsYouItem struct {
 	ServerId     *string          `json:"server_id,omitempty"`
 	ServiceId    *string          `json:"service_id,omitempty"`
 
-	// Severity How much it needs someone (D-140), the list's order. problem: something broken (a failed deploy, a failed panel upgrade; alerts server_unreachable, agent_offline, backup_failed, service_down, container_exited, panel_container, mirror_failing, agent_frozen, service_restarting). waiting: an agent's request, which expires. warning: the other alerts, exposed_tool, setup_login, https_redeploy, no_backup, no_watchdog, kit_out_of_date. request: preview_approval, assigned, due, stale_page.
+	// Severity How much it needs someone (D-140), the list's order. problem: something broken (a failed deploy, a failed panel upgrade; alerts server_unreachable, agent_offline, backup_failed, service_down, container_exited, panel_container, mirror_failing, agent_frozen, agent_outdated, service_restarting, lookalike_container). waiting: an agent's request, which expires. warning: the other alerts, exposed_tool, setup_login, https_redeploy, no_backup, no_watchdog, kit_out_of_date. request: preview_approval, assigned, due, stale_page.
 	Severity NeedsYouItemSeverity `json:"severity"`
 	Sha      *string              `json:"sha,omitempty"`
 
@@ -4602,7 +4629,7 @@ type NeedsYouItemCategory string
 // NeedsYouItemKind no_watchdog: this panel has no watchdog URL, for instance operators; a mark puts it off for 7 days. kit_out_of_date (D-163): Setup.kit_out_of_date, for instance operators; gone when the current kit is acknowledged, and a mark puts it off for 7 days. upgrade_failed: the panel's last upgrade rolled back or stopped, for instance operators; title is Upgrade to v0.40.0 failed and rolled back (stopped: Upgrade to v0.40.0 failed), detail which release runs, error the upgrade's; gone when a later upgrade succeeds. setup_login: a catalog app whoever opens first becomes the admin of (the template's setup_login) with basic auth still on; service_id names it, title is Set up uptime’s admin account, then turn off its temporary login, for owners and developers; gone when its basic auth is off. https_redeploy (D-159): a running service whose temporary (sslip.io) address got its certificate after its live deployment started, which serves it over plain HTTP, when Toft did not redeploy it itself (a protected environment, settings saved since, a stack it cannot bring up unchanged); service_id names it, title is Redeploy web to switch it to HTTPS (behind basic auth, whose address redirects to HTTPS already and whose TOFT_URL still says http://: Redeploy web to give it its HTTPS address), for owners and developers. no_backup (D-43): a server with no backup destination (nor another entry for the same machine with one) that holds the workspace's databases or volumes (an inline compose file's counted inside it; a compose file in a repository counts as a compose stack); server_id names it, and is absent for the panel host, which for an instance operator also counts Toft's own database; detail says what is at risk, as 2 databases, 3 volumes, no backups; for owners and developers (operators: the panel host's). exposed_tool: an admin tool (phpMyAdmin, Adminer, pgAdmin, Mailpit, MailHog, RedisInsight; the service's kind is tool) anyone can open at its address, with neither basic auth nor an IP allowlist; service_id names it, for owners and developers. due (D-90): an open issue assigned to the caller, due by tomorrow in the workspace's time zone. preview_approval (D-97): a preview waiting for an owner or developer to approve sha, its pull request's head. agent_approval (D-100): an agent's call waiting for an owner or developer (approval_id), until expires_at; title is what it asks, as Deploy storefront / api in production.
 type NeedsYouItemKind string
 
-// NeedsYouItemSeverity How much it needs someone (D-140), the list's order. problem: something broken (a failed deploy, a failed panel upgrade; alerts server_unreachable, agent_offline, backup_failed, service_down, container_exited, panel_container, mirror_failing, agent_frozen, service_restarting). waiting: an agent's request, which expires. warning: the other alerts, exposed_tool, setup_login, https_redeploy, no_backup, no_watchdog, kit_out_of_date. request: preview_approval, assigned, due, stale_page.
+// NeedsYouItemSeverity How much it needs someone (D-140), the list's order. problem: something broken (a failed deploy, a failed panel upgrade; alerts server_unreachable, agent_offline, backup_failed, service_down, container_exited, panel_container, mirror_failing, agent_frozen, agent_outdated, service_restarting, lookalike_container). waiting: an agent's request, which expires. warning: the other alerts, exposed_tool, setup_login, https_redeploy, no_backup, no_watchdog, kit_out_of_date. request: preview_approval, assigned, due, stale_page.
 type NeedsYouItemSeverity string
 
 // OAuthClientInformation defines model for OAuthClientInformation.
@@ -5884,7 +5911,10 @@ type ServerAgent struct {
 	Since          *time.Time        `json:"since"`
 	Status         ServerAgentStatus `json:"status"`
 	TokenExpiresAt *time.Time        `json:"token_expires_at"`
-	Version        *string           `json:"version"`
+
+	// Upgrade Set while the agent runs a version older than the panel's and isn't upgrading now.
+	Upgrade *ServerAgentUpgrade `json:"upgrade"`
+	Version *string             `json:"version"`
 }
 
 // ServerAgentStatus defines model for ServerAgent.Status.
@@ -5939,6 +5969,30 @@ type ServerAgentFrozenChange struct {
 
 // ServerAgentFrozenChangeKind newer runs another deployment than the panel's active one (adopting makes it the active one); same runs the panel's; unknown is a container of a service the panel doesn't have; missing doesn't run although the panel says it should.
 type ServerAgentFrozenChangeKind string
+
+// ServerAgentUpgrade defines model for ServerAgentUpgrade.
+type ServerAgentUpgrade struct {
+	// At When the offer failed.
+	At *time.Time `json:"at"`
+
+	// ComposeRefused Compose deploys to this server answer 409 agent_outdated until its agent runs the panel's version. False for an agent that is away (what it can do isn't known then) and for one the panel runs compose deploys for.
+	ComposeRefused bool `json:"compose_refused"`
+
+	// Detail The agent's own words for a refusal, as one line of text of 300 characters at most. Text from the server, never markup.
+	Detail *string `json:"detail"`
+
+	// Offering The panel is offering this version to the agent now (POST /servers/{serverID}/agent/upgrade, or the offer made when the agent connects); its answer replaces this, as status upgrading or a reason.
+	Offering bool `json:"offering"`
+
+	// PanelVersion The version the agent is behind.
+	PanelVersion string `json:"panel_version"`
+
+	// Reason Why the agent still runs the old version, when the panel knows: refused (it answered no; detail has its words), returned (it accepted the version and connected again at the old one) or no_build (the panel's release files have no agent for its architecture). Null when this version hasn't been offered yet: the agent is away, or the offer is on its way. After refused and returned the panel doesn't offer the version again by itself until it restarts or is upgraded: POST /servers/{serverID}/agent/upgrade does.
+	Reason *ServerAgentUpgradeReason `json:"reason"`
+}
+
+// ServerAgentUpgradeReason Why the agent still runs the old version, when the panel knows: refused (it answered no; detail has its words), returned (it accepted the version and connected again at the old one) or no_build (the panel's release files have no agent for its architecture). Null when this version hasn't been offered yet: the agent is away, or the offer is on its way. After refused and returned the panel doesn't offer the version again by itself until it restarts or is upgraded: POST /servers/{serverID}/agent/upgrade does.
+type ServerAgentUpgradeReason string
 
 // ServerCapabilities defines model for ServerCapabilities.
 type ServerCapabilities struct {
@@ -7622,6 +7676,18 @@ type GetInstanceAuditLogParams struct {
 // GetInstanceAuditLogParamsKind defines parameters for GetInstanceAuditLog.
 type GetInstanceAuditLogParamsKind string
 
+// PostInstanceBuildDestinationsParams defines parameters for PostInstanceBuildDestinations.
+type PostInstanceBuildDestinationsParams struct {
+	// XToftReauth The proof from POST /api/v1/auth/reauth.
+	XToftReauth string `json:"X-Toft-Reauth"`
+}
+
+// DeleteInstanceBuildDestinationParams defines parameters for DeleteInstanceBuildDestination.
+type DeleteInstanceBuildDestinationParams struct {
+	// XToftReauth The proof from POST /api/v1/auth/reauth.
+	XToftReauth string `json:"X-Toft-Reauth"`
+}
+
 // GetInstancePanelContainersContainerLogsParams defines parameters for GetInstancePanelContainersContainerLogs.
 type GetInstancePanelContainersContainerLogsParams struct {
 	// Tail Lines of history first, 200 by default, 2000 at most.
@@ -8118,6 +8184,18 @@ type PostServerAgentInstallParams struct {
 // PostServerAgentInstallParamsKeepSshKey defines parameters for PostServerAgentInstall.
 type PostServerAgentInstallParamsKeepSshKey string
 
+// PostServersServeridBuildDestinationsParams defines parameters for PostServersServeridBuildDestinations.
+type PostServersServeridBuildDestinationsParams struct {
+	// XToftReauth The proof from POST /api/v1/auth/reauth.
+	XToftReauth string `json:"X-Toft-Reauth"`
+}
+
+// DeleteServersServeridBuildDestinationParams defines parameters for DeleteServersServeridBuildDestination.
+type DeleteServersServeridBuildDestinationParams struct {
+	// XToftReauth The proof from POST /api/v1/auth/reauth.
+	XToftReauth string `json:"X-Toft-Reauth"`
+}
+
 // GetServerDiskParams defines parameters for GetServerDisk.
 type GetServerDiskParams struct {
 	// Fresh Read again now instead of within the last 5 minutes.
@@ -8361,6 +8439,9 @@ type MarkInboxUndoneJSONRequestBody = InboxMarkInput
 // PutInstanceBackupJSONRequestBody defines body for PutInstanceBackup for application/json ContentType.
 type PutInstanceBackupJSONRequestBody = BackupInput
 
+// PostInstanceBuildDestinationsJSONRequestBody defines body for PostInstanceBuildDestinations for application/json ContentType.
+type PostInstanceBuildDestinationsJSONRequestBody = BuildDestinationInput
+
 // PostInstanceOperatorsJSONRequestBody defines body for PostInstanceOperators for application/json ContentType.
 type PostInstanceOperatorsJSONRequestBody = GrantOperatorInput
 
@@ -8579,6 +8660,9 @@ type PatchServersServeridJSONRequestBody = RenameServerInput
 
 // PutServersServeridBackupJSONRequestBody defines body for PutServersServeridBackup for application/json ContentType.
 type PutServersServeridBackupJSONRequestBody = BackupInput
+
+// PostServersServeridBuildDestinationsJSONRequestBody defines body for PostServersServeridBuildDestinations for application/json ContentType.
+type PostServersServeridBuildDestinationsJSONRequestBody = BuildDestinationInput
 
 // PutServersServeridCapacityJSONRequestBody defines body for PutServersServeridCapacity for application/json ContentType.
 type PutServersServeridCapacityJSONRequestBody = UpdateCapacityInput

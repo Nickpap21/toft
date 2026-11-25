@@ -356,6 +356,7 @@ func (h *Handler) problem(err error) *answer {
 	var r *refusal
 	var capErr *serverPkg.CapacityExceededError
 	var pv *composespec.ViolationsError
+	var outdated *serverPkg.AgentOutdatedError
 	switch {
 	case errors.As(err, &r):
 		if r.kind == refusedInvalid {
@@ -378,6 +379,8 @@ func (h *Handler) problem(err error) *answer {
 		return &answer{http.StatusConflict, err.Error(), gin.H{"code": "sandbox_unavailable"}}
 	case errors.Is(err, serverPkg.ErrServerFrozen):
 		return &answer{http.StatusConflict, err.Error(), gin.H{"code": "server_frozen"}}
+	case errors.As(err, &outdated):
+		return &answer{http.StatusConflict, outdated.Error(), gin.H{"code": "agent_outdated", "server_id": outdated.ServerID}}
 	case errors.Is(err, serverPkg.ErrServerNotReady):
 		return &answer{http.StatusConflict, err.Error(), gin.H{"code": "server_not_ready"}}
 	case errors.Is(err, ErrServerUpdating):

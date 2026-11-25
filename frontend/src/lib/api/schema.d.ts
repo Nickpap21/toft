@@ -2120,6 +2120,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instance/build-destinations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The private addresses builds on the panel's own server may reach; operators only
+         * @description Instance operators (D-170). Builds run on a network that reaches no private address; this list is the only way through, for an operator's own registry or mirror. It applies to every build on the panel's own server except an untrusted preview's, which reaches none of it. At most 100 entries, so the list isn't paged. Empty on a new server.
+         */
+        get: operations["getInstanceBuildDestinations"];
+        put?: never;
+        /**
+         * Let builds on the panel's own server reach a private address; operators only, with the password proof
+         * @description Instance operators, sessions only, with X-Toft-Reauth (403 reauth_required without it; session_required for an API key). The entry, its audit rows and the firewall's rules on the server are one change: the server's whole list is checked there, loaded, and only then saved. 502 build_destinations_not_applied when the server can't be reached or refuses the rules; nothing is saved then, and where the change had reached the server's firewall the saved list is written back to it (a server that can't be reached keeps the change until its list is next written: the next save there, or within the hour, when the panel writes every server's saved list again). 400 build_destination_invalid (with `field`) for an address outside 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and 100.64.0.0/10 (so never loopback, link-local or a public address), a CIDR with address bits beyond its prefix, a port outside 1 to 65535, port 25 (closed to every build and app) or a note over 200 characters. 409 build_destination_exists; build_destination_panel_address when the entry holds one of the panel's own addresses; build_destination_server_address for one of this server's own; build_destination_docker_network when it overlaps a network or the address pool of this server's Docker (other apps' containers live there); build_destinations_full at 100 entries. Written to the instance audit log as build_destination.added.
+         */
+        post: operations["postInstanceBuildDestinations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instance/build-destinations/{destinationID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                destinationID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Close a private address to builds on the panel's own server; operators only, with the password proof
+         * @description Instance operators, sessions only, with X-Toft-Reauth (403 reauth_required without it; session_required for an API key). As the POST: the server's list without the entry is loaded there before the removal is saved, so 502 build_destinations_not_applied means the entry is still listed; where the server had already dropped it, the saved list is written back as after a POST. Connections a build already opened are not cut. Written to the instance audit log as build_destination.removed.
+         */
+        delete: operations["deleteInstanceBuildDestination"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instance/operators/{userID}": {
         parameters: {
             query?: never;
@@ -4294,7 +4340,7 @@ export interface paths {
         put?: never;
         /**
          * Deploy
-         * @description Fire and forget: the pipeline runs in the background and the client follows it over the deployment's log stream. A service created with deploy is already deploying: asked while that first deploy still runs, with no override in its body and nothing it ships changed since, this answers 202 with that deployment and starts none. Under the workspace's agent policy when an agent's token calls it (D-100): Ask answers 202 approval_pending (from the MCP tool, which gives a reason) or 403 approval_required; Never 403 agent_policy_never; 422 reason_required; 429 too_many_approvals. 409 capacity_exceeded when the server cannot fit it, a problem whose detail names the server and what is short (Not enough room on qa-node: needs 512 MiB of memory, 0 MiB left of 3.7 GiB.) with the shortfall in data; owners (or developers, by the workspace's rule) retry with ?force=true to deploy anyway, which the audit log records. The panel's own server is counted too, in memory, against reservation.apps_memory_bytes of GET /instance/panel-host: only an instance operator deploys past it, and a running service deployed again within the memory it already holds is never refused. 422 deploy_policy_violation lists the violations. 409 sandbox_unavailable when the service runs Sandboxed (D-95) or Sandboxed with a strict network (D-115) and its server can't run it: no gVisor there, its smoke test failing, the panel's own server, a server never probed, or, for the strict network, no agent answering names. 409 server_frozen when its server (or, for a move, the server it leaves) kept its own state over a restored panel (D-113). 409 server_not_ready when the target server (for a move, the one it moves to) is still waiting for its first agent (D-153). A service's deploys run one after the other: asked while another of its deploys is pending or building, this one is accepted (202) and stays pending, its log saying it waits, until that one has ended. 409 service_moving while the service is moving to another server: nothing is queued behind a move. 400 invalid_config when a field of the body is invalid: commit_sha, image_tag, a git_ref that is not a valid branch or tag name, or a git_ref without git_ref_type.
+         * @description Fire and forget: the pipeline runs in the background and the client follows it over the deployment's log stream. A service created with deploy is already deploying: asked while that first deploy still runs, with no override in its body and nothing it ships changed since, this answers 202 with that deployment and starts none. Under the workspace's agent policy when an agent's token calls it (D-100): Ask answers 202 approval_pending (from the MCP tool, which gives a reason) or 403 approval_required; Never 403 agent_policy_never; 422 reason_required; 429 too_many_approvals. 409 capacity_exceeded when the server cannot fit it, a problem whose detail names the server and what is short (Not enough room on qa-node: needs 512 MiB of memory, 0 MiB left of 3.7 GiB.) with the shortfall in data; owners (or developers, by the workspace's rule) retry with ?force=true to deploy anyway, which the audit log records. The panel's own server is counted too, in memory, against reservation.apps_memory_bytes of GET /instance/panel-host: only an instance operator deploys past it, and a running service deployed again within the memory it already holds is never refused. 422 deploy_policy_violation lists the violations. 409 sandbox_unavailable when the service runs Sandboxed (D-95) or Sandboxed with a strict network (D-115) and its server can't run it: no gVisor there, its smoke test failing, the panel's own server, a server never probed, or, for the strict network, no agent answering names. 409 server_frozen when its server (or, for a move, the server it leaves) kept its own state over a restored panel (D-113). 409 server_not_ready when the target server (for a move, the one it moves to) is still waiting for its first agent (D-153). 409 agent_outdated for a compose service whose server's agent is older than the panel (agent.upgrade.compose_refused of GET /servers/{serverID}): nothing is sent to the server, data.server_id names it, and the detail ends with the path of the server's Connection card, where POST /servers/{serverID}/agent/upgrade offers the agent the panel's version again. A service's deploys run one after the other: asked while another of its deploys is pending or building, this one is accepted (202) and stays pending, its log saying it waits, until that one has ended. 409 service_moving while the service is moving to another server: nothing is queued behind a move. 400 invalid_config when a field of the body is invalid: commit_sha, image_tag, a git_ref that is not a valid branch or tag name, or a git_ref without git_ref_type.
          */
         post: operations["postServicesServiceidDeployments"];
         delete?: never;
@@ -5508,6 +5554,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/servers/{serverID}/build-destinations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serverID: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The private addresses builds on this server may reach; operators only
+         * @description Instance operators (D-170). Builds run on a network that reaches no private address; this list is the only way through, for an operator's own registry or mirror. It applies to every build on this server except an untrusted preview's, which reaches none of it. At most 100 entries, so the list isn't paged. Empty on a new server.
+         */
+        get: operations["getServersServeridBuildDestinations"];
+        put?: never;
+        /**
+         * Let builds on this server reach a private address; operators only, with the password proof
+         * @description Instance operators, sessions only, with X-Toft-Reauth (403 reauth_required without it; session_required for an API key). The entry, its audit rows and the firewall's rules on the server are one change: the server's whole list is checked there, loaded, and only then saved. 502 build_destinations_not_applied when the server can't be reached or refuses the rules; nothing is saved then, and where the change had reached the server's firewall the saved list is written back to it (a server that can't be reached keeps the change until its list is next written: the next save there, or within the hour, when the panel writes every server's saved list again). 400 build_destination_invalid (with `field`) for an address outside 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and 100.64.0.0/10 (so never loopback, link-local or a public address), a CIDR with address bits beyond its prefix, a port outside 1 to 65535, port 25 (closed to every build and app) or a note over 200 characters. 409 build_destination_exists; build_destination_panel_address when the entry holds one of the panel's own addresses; build_destination_server_address for one of this server's own; build_destination_docker_network when it overlaps a network or the address pool of this server's Docker (other apps' containers live there); build_destinations_full at 100 entries. Written to the instance audit log as build_destination.added and to the server's workspace audit log as server.build_destination_added.
+         */
+        post: operations["postServersServeridBuildDestinations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/servers/{serverID}/build-destinations/{destinationID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serverID: string;
+                destinationID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Close a private address to builds on this server; operators only, with the password proof
+         * @description Instance operators, sessions only, with X-Toft-Reauth (403 reauth_required without it; session_required for an API key). As the POST: the server's list without the entry is loaded there before the removal is saved, so 502 build_destinations_not_applied means the entry is still listed; where the server had already dropped it, the saved list is written back as after a POST. Connections a build already opened are not cut. Written to the instance audit log as build_destination.removed and to the server's workspace audit log as server.build_destination_removed.
+         */
+        delete: operations["deleteServersServeridBuildDestination"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/servers/{serverID}/host-key": {
         parameters: {
             query?: never;
@@ -5631,6 +5726,28 @@ export interface paths {
          * @description Owners, with a signed-in session (an API key gets 403 session_required).
          */
         post: operations["postServerAgentRotate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/servers/{serverID}/agent/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serverID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Offer the panel's version to an agent that is behind it, again; owners and operators
+         * @description The panel offers its version to an older agent when it connects, and holds an offer the agent refused, or accepted and then connected at the old version again (agent.upgrade.reason), until the panel restarts or is upgraded. This drops that and offers the version to a connected agent in the background, for up to 2 minutes; one that is away is offered it when it connects. The answer, 202, is the server as it is when the offer starts: agent.upgrade.offering is true while it runs. The agent's answer lands on GET /servers/{serverID}: status upgrading when it took the version, agent.upgrade.reason when it didn't. Workspace owners and instance operators, with a signed-in session (an API key gets 403 session_required). 409 agent_not_behind when the agent already runs the panel's version, 409 no_agent when the server has none, 409 agent_upgrade_running while an offer to this agent runs (this one's, or the one the panel makes when the agent connects) or the agent is restarting into a version: nothing changes then. Audited as server.agent_upgrade_offered.
+         */
+        post: operations["postServerAgentUpgrade"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7469,7 +7586,7 @@ export interface components {
              */
             snoozed_until?: string | null;
             /**
-             * @description How much it needs someone (D-140), the list's order. problem: something broken (a failed deploy, a failed panel upgrade; alerts server_unreachable, agent_offline, backup_failed, service_down, container_exited, panel_container, mirror_failing, agent_frozen, service_restarting). waiting: an agent's request, which expires. warning: the other alerts, exposed_tool, setup_login, https_redeploy, no_backup, no_watchdog, kit_out_of_date. request: preview_approval, assigned, due, stale_page.
+             * @description How much it needs someone (D-140), the list's order. problem: something broken (a failed deploy, a failed panel upgrade; alerts server_unreachable, agent_offline, backup_failed, service_down, container_exited, panel_container, mirror_failing, agent_frozen, agent_outdated, service_restarting, lookalike_container). waiting: an agent's request, which expires. warning: the other alerts, exposed_tool, setup_login, https_redeploy, no_backup, no_watchdog, kit_out_of_date. request: preview_approval, assigned, due, stale_page.
              * @enum {string}
              */
             severity: "problem" | "waiting" | "warning" | "request";
@@ -9226,7 +9343,7 @@ export interface components {
             deployment?: components["schemas"]["Deployment"];
             /** @description Why the first deploy the create asked for did not start, as the deploy's own problem says it. The service is created; deploy it once that is settled. */
             deploy_error?: string;
-            /** @description The code of that problem, when it has one (server_frozen, sandbox_unavailable, deploy_policy_violation, capacity_exceeded, an agent policy's), as POST /services/{serviceID}/deployments answers it. */
+            /** @description The code of that problem, when it has one (server_frozen, agent_outdated, sandbox_unavailable, deploy_policy_violation, capacity_exceeded, an agent policy's), as POST /services/{serviceID}/deployments answers it. */
             deploy_error_code?: string;
             /** @description The template secrets the create didn't send, generated and stored write-once (a catalog service). */
             generated_secrets?: {
@@ -9987,6 +10104,28 @@ export interface components {
             frozen: components["schemas"]["ServerAgentFrozen"] | null;
             /** @description A join token for this server would replace a machine Toft trusted (a pinned or revoked agent), so issuing one needs the password. */
             rejoin: boolean;
+            /** @description Set while the agent runs a version older than the panel's and isn't upgrading now. */
+            upgrade: components["schemas"]["ServerAgentUpgrade"] | null;
+        };
+        ServerAgentUpgrade: {
+            /** @description The version the agent is behind. */
+            panel_version: string;
+            /** @description The panel is offering this version to the agent now (POST /servers/{serverID}/agent/upgrade, or the offer made when the agent connects); its answer replaces this, as status upgrading or a reason. */
+            offering: boolean;
+            /**
+             * @description Why the agent still runs the old version, when the panel knows: refused (it answered no; detail has its words), returned (it accepted the version and connected again at the old one) or no_build (the panel's release files have no agent for its architecture). Null when this version hasn't been offered yet: the agent is away, or the offer is on its way. After refused and returned the panel doesn't offer the version again by itself until it restarts or is upgraded: POST /servers/{serverID}/agent/upgrade does.
+             * @enum {string|null}
+             */
+            reason: "refused" | "returned" | "no_build" | null;
+            /** @description The agent's own words for a refusal, as one line of text of 300 characters at most. Text from the server, never markup. */
+            detail: string | null;
+            /**
+             * Format: date-time
+             * @description When the offer failed.
+             */
+            at: string | null;
+            /** @description Compose deploys to this server answer 409 agent_outdated until its agent runs the panel's version. False for an agent that is away (what it can do isn't known then) and for one the panel runs compose deploys for. */
+            compose_refused: boolean;
         };
         ServerAgentFrozen: {
             /** Format: date-time */
@@ -10544,6 +10683,21 @@ export interface components {
             pinned_fingerprint: string | null;
             pinned_key_type: string | null;
             matches_pinned: boolean;
+        };
+        BuildDestination: {
+            id: string;
+            /** @description An IPv4 address (10.0.5.7) or a CIDR (10.0.5.0/24) inside the private ranges. */
+            address: string;
+            /** @description The one TCP port builds may reach there; null for every TCP port. */
+            port: number | null;
+            note: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        BuildDestinationInput: {
+            address: string;
+            port?: number | null;
+            note?: string;
         };
         ResetHostKeyInput: {
             fingerprint: string;
@@ -14997,6 +15151,93 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    getInstanceBuildDestinations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BuildDestination"][];
+                    };
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    postInstanceBuildDestinations: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The proof from POST /api/v1/auth/reauth. */
+                "X-Toft-Reauth": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildDestinationInput"];
+            };
+        };
+        responses: {
+            /** @description Saved and loaded on the server. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BuildDestination"];
+                    };
+                };
+            };
+            400: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    deleteInstanceBuildDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The proof from POST /api/v1/auth/reauth. */
+                "X-Toft-Reauth": string;
+            };
+            path: {
+                destinationID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed and unloaded on the server. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
@@ -21282,6 +21523,98 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    getServersServeridBuildDestinations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serverID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BuildDestination"][];
+                    };
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    postServersServeridBuildDestinations: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The proof from POST /api/v1/auth/reauth. */
+                "X-Toft-Reauth": string;
+            };
+            path: {
+                serverID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildDestinationInput"];
+            };
+        };
+        responses: {
+            /** @description Saved and loaded on the server. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BuildDestination"];
+                    };
+                };
+            };
+            400: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    deleteServersServeridBuildDestination: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The proof from POST /api/v1/auth/reauth. */
+                "X-Toft-Reauth": string;
+            };
+            path: {
+                serverID: string;
+                destinationID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed and unloaded on the server. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
     putServersServeridHostKey: {
         parameters: {
             query?: never;
@@ -21445,6 +21778,34 @@ export interface operations {
         responses: {
             /** @description OK. */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ServerResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    postServerAgentUpgrade: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                serverID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The offer started, or waits for the agent to connect. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

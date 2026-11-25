@@ -126,6 +126,7 @@ describe("the list", () => {
     expect(deployLine(dep("a", "running", { triggered_by: "Merge · alex", started_at: at, finished_at: end }), now)).toBe("merge by alex · 1m 51s");
     expect(deployLine(dep("a", "failed", { triggered_by: "Push · sam", started_at: at, finished_at: end }), now)).toBe("push by sam · failed after 1m 51s");
     expect(deployLine(dep("a", "failed", { triggered_by: "Push · alex" }), now)).toBe("push by alex · refused by the deploy policy");
+    expect(deployLine(dep("a", "failed", { triggered_by: "Push · alex", error_msg: "web-1's agent (v0.17.0) is older than the panel and can't run this deploy safely. Upgrade the agent, then deploy again: /servers/5f0c2a9e-1b7d-4e63-9a41-0c8d2f6b7e13?tab=settings#connection" }), now)).toBe("push by alex · refused: the server’s agent is behind the panel");
     expect(deployLine(dep("a", "building", { triggered_by: "Redeploy · admin", started_at: at }), now)).toBe("redeploy by admin · 2m 0s so far");
     expect(deployLine(dep("a", "pending", { triggered_by: "Manual · Alex" }), now)).toBe("deploy by Alex · queued");
     // Toft's own redeploy names Toft, not its reason (the 2026-11-04 sweep).

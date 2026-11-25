@@ -896,6 +896,12 @@ func main() {
 	// Host shells (service exec on @server, server exec, PTY) are operator-only.
 	serviceSvc.WithOperatorChecker(instanceSvc)
 	serverSvc.WithOperatorChecker(instanceSvc)
+	// What builds may reach in the private ranges (D-170): the change, its
+	// audit rows and the server's firewall in one save.
+	if dests, ok := serverRepo.(server.BuildDestinationStore); ok {
+		serverSvc.WithBuildDestinations(dests, dbtx.NewRunner(pool), instanceSvc, instanceSvc, orgSvc)
+		instanceSvc.WithBuildDestinations(serverSvc)
+	}
 
 	eventBroker := broker.New()
 
@@ -918,6 +924,11 @@ func main() {
 	deploymentSvc.WithAlerts(alertSvc)
 	deploymentSvc.WithDNSChecker(serverSvc)
 	deploymentSvc.WithSandboxChecker(serverSvc) // Sandboxed services need gVisor there (D-95)
+	// Every build asks its host's firewall first (D-170); a development stack's own host may say not to.
+	deploymentSvc.WithDevBuilds(cfg.DevBuildsNoFirewall)
+	if cfg.DevBuildsNoFirewall {
+		appLog.Warn("TOFT_DEV_BUILDS_WITHOUT_FIREWALL is on: builds on this host run without Toft's firewall. A development stack's setting")
+	}
 	deploymentSvc.WithConfigFileWriter(&configFileWriterAdapter{svc: configFileSvc})
 	deploymentSvc.WithPolicyChecker(deployPolicySvc)
 	// Memory limits (D-41): a new service gets its kind's default, saves and
@@ -1221,6 +1232,7 @@ func main() {
 	// What a restart lost of the deploys that ship issues (D-81).
 	go issueSvc.Run(gcCtx)
 	go serverSvc.RunCapabilityProbes(gcCtx)
+	go serverSvc.RunBuildDestinations(gcCtx)
 	go serverSvc.RunUpdateReads(gcCtx)
 	go dockerAdvisories.Run(gcCtx)
 	go docSvc.RunPurge(gcCtx)

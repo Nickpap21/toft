@@ -5,6 +5,8 @@
 package sqlcdb
 
 import (
+	"net/netip"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -159,6 +161,16 @@ type BackupDestination struct {
 	LastError    string             `json:"last_error"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BuildDestination struct {
+	ID        pgtype.UUID        `json:"id"`
+	ServerID  pgtype.UUID        `json:"server_id"`
+	Cidr      netip.Prefix       `json:"cidr"`
+	Port      *int32             `json:"port"`
+	Note      string             `json:"note"`
+	CreatedBy pgtype.UUID        `json:"created_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type CommitCheck struct {

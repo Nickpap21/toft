@@ -72,6 +72,9 @@ describe("host shells and commands", () => {
     expect(auditDetail(entry({ action: "server.shell_closed", detail: { seconds: 720 } })).text).toBe("Open 12 min");
     expect(auditDetail(entry({ action: "server.shell_closed", detail: { seconds: 40, restart: true } })).text).toBe("Ended by a restart, open 40 s");
     expect(auditDetail(entry({ action: "server.command_run", detail: { command: "systemctl restart docker" } }))).toEqual({ text: "", code: "systemctl restart docker" });
+    expect(auditAction("server.build_destination_added")).toMatchObject({ label: "Added a build destination", group: "Servers" });
+    expect(auditDetail(entry({ action: "server.build_destination_added", detail: { address: "10.0.5.20", port: 5000, note: "Registry" } }))).toEqual({ text: "Registry", code: "10.0.5.20:5000" });
+    expect(auditDetail(entry({ action: "server.build_destination_removed", detail: { address: "10.0.5.0/24", note: "" } }))).toEqual({ text: "", code: "10.0.5.0/24" });
   });
 });
 

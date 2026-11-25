@@ -48,6 +48,11 @@ FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c03
 # docker-cli-buildx: builds there run on BuildKit (D-167); without it
 # `docker build` is the classic builder, which has no cache mounts.
 RUN apk add --no-cache ca-certificates tzdata git docker-cli docker-cli-compose docker-cli-buildx
+# System git config: git uses a bare repository only when it is named with
+# --git-dir or GIT_DIR, never by finding one where it runs (a build context,
+# a clone's folder). toft-git names its repositories with --git-dir and runs
+# with GIT_CONFIG_NOSYSTEM, so this doesn't reach it.
+RUN git config --system safe.bareRepository explicit
 # Nixpacks, for Nixpacks builds on the control-plane server: it plans and
 # writes the Dockerfile there, and Toft runs the build. The release's static
 # binary for this image's architecture, refused unless it has the hash

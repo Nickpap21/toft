@@ -39,12 +39,19 @@ const (
 	// panel was restored from a backup, and someone must choose which state
 	// to keep. About the server.
 	KindAgentFrozen Kind = "agent_frozen"
+	// A server's agent behind the panel, refusing compose deploys, whose
+	// upgrade didn't take (server.AgentsOutdated). About the server.
+	KindAgentOutdated Kind = "agent_outdated"
 	// A host's updates (D-133), about a server or ControlPlane: security
 	// updates unattended-upgrades isn't installing, a reboot waiting, and
 	// a Docker engine a published advisory affects.
 	KindSecurityUpdates Kind = "security_updates"
 	KindRebootRequired  Kind = "reboot_required"
 	KindDockerAdvisory  Kind = "docker_advisory"
+	// Containers on a server that carry a service's label and a compose
+	// project (rollout.IsLookAlike), which Toft never makes. About the
+	// server.
+	KindLookAlikeContainer Kind = "lookalike_container"
 )
 
 // serviceKinds are judged from a service's containers.
@@ -89,12 +96,15 @@ var rules = map[Kind]rule{
 	KindMirrorFailing: {fireAfter: 1, resolveAfter: 1},
 	// An agent counts as away once it has been gone 5 minutes
 	// (server.AgentsAway), so the first such sample fires (D-107).
-	KindAgentOffline: {fireAfter: 1, resolveAfter: 1},
-	KindAgentFrozen:  {fireAfter: 1, resolveAfter: 1},
+	KindAgentOffline:  {fireAfter: 1, resolveAfter: 1},
+	KindAgentFrozen:   {fireAfter: 1, resolveAfter: 1},
+	KindAgentOutdated: {fireAfter: 1, resolveAfter: 1},
 	// Judged from the last updates read, every 6 hours (server.HostUpdates.Health).
 	KindSecurityUpdates: {fireAfter: 1, resolveAfter: 1},
 	KindRebootRequired:  {fireAfter: 1, resolveAfter: 1},
 	KindDockerAdvisory:  {fireAfter: 1, resolveAfter: 1},
+	// Checked with the disks, every five minutes.
+	KindLookAlikeContainer: {fireAfter: 1, resolveAfter: 1},
 	// Sampled every minute, as services are.
 	KindPanelContainer: {fireAfter: 2, resolveAfter: 3},
 	// Every five minutes; three in a row, so a certificate Let's Encrypt is

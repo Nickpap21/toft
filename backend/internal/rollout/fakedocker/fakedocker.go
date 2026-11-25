@@ -160,6 +160,10 @@ type Docker struct {
 	// exec exit 126, as in a container without the probe mount.
 	execs   map[string]int
 	NoProbe bool
+
+	// The host's size (GET /info).
+	NCPU     int
+	MemTotal int64
 }
 
 // Sample is what the stats endpoint reports for a container.
@@ -615,6 +619,8 @@ func (f *Docker) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"message": "not started"})
 	case path == "/_ping":
 		_, _ = io.WriteString(w, "OK")
+	case r.Method == http.MethodGet && path == "/info":
+		writeJSON(w, http.StatusOK, map[string]any{"NCPU": f.NCPU, "MemTotal": f.MemTotal})
 	case r.Method == http.MethodGet && path == "/containers/json":
 		f.list(w, r)
 	case r.Method == http.MethodGet && path == "/events" && f.EventsErr:

@@ -107,7 +107,8 @@ func severityOf(it Item) string {
 	case "alert":
 		switch it.AlertKind {
 		case "server_unreachable", "agent_offline", "backup_failed", "service_down", "container_exited",
-			"panel_container", "mirror_failing", "agent_frozen", "service_restarting":
+			"panel_container", "mirror_failing", "agent_frozen", "agent_outdated", "service_restarting",
+			"lookalike_container":
 			return "problem"
 		}
 	}

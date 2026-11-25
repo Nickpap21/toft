@@ -1,12 +1,13 @@
 package advisory
 
 // known is every advisory in moby/moby's GitHub repository as of
-// 2026-11-11, with the engine releases each affects written by hand from
+// 2026-11-25, with the engine releases each affects written by hand from
 // its vulnerable and patched versions (the older ones mix Go module, docker
 // and free-text entries). Range is parseRange's syntax; empty for one that
 // is about no release. CI fails when the repository has one this list
 // lacks (scripts/docker-advisories.sh): add it here, newest first.
 var known = []struct{ ID, Severity, Summary, FixedIn, Range string }{
+	{"GHSA-vfmq-r373-x89f", "medium", "Race in docker cp lets a container write through read-only bind mounts", "29.10.1", "< 29.10.1"},
 	{"GHSA-6jhp-7446-hf7f", "high", "iptables rules for overlay-network encryption are not reinstalled after a firewalld reload", "29.9.3", "< 29.9.3"},
 	{"GHSA-7cfq-22r6-qp73", "high", "Docker Engine insecure-registry fallback via malicious DNS responses", "29.8.2", "< 29.8.2"},
 	{"GHSA-6m9p-4h64-m6vh", "medium", "Blind VXLAN injection into encrypted overlay networks from cluster peer", "29.8.2", "<= 25.0.18, 26.0.0 - 29.8.1"},

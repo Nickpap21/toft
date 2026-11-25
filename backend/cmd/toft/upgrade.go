@@ -828,7 +828,7 @@ func portFree(port string) bool {
 // the release's planned drops. It reports whether a planned drop ran, which
 // makes a rollback restore the dump.
 func (u *upgrader) migrate(ctx context.Context, env map[string]string, bundle string) (contract bool, err error) {
-	if err := u.compose(ctx, bundle, "up", "-d", "--no-recreate", "postgres"); err != nil {
+	if err := u.compose(ctx, bundle, "up", "-d", "--no-recreate", "--no-build", "postgres"); err != nil {
 		return false, fmt.Errorf("start postgres: %w", err)
 	}
 	ready := false
@@ -949,7 +949,7 @@ func (u *upgrader) swap(ctx context.Context, bundle, to string) error {
 	if err := relink(bundle, u.p.current); err != nil {
 		return err
 	}
-	if err := u.compose(ctx, u.p.current, "up", "-d", "--remove-orphans"); err != nil {
+	if err := u.compose(ctx, u.p.current, "up", "-d", "--remove-orphans", "--no-build"); err != nil {
 		return fmt.Errorf("start %s: %w", to, err)
 	}
 	if u.git {
@@ -1036,7 +1036,7 @@ func (u *upgrader) rollback(ctx context.Context, env map[string]string, prevTarg
 	if err := relink(prevTarget, u.p.current); err != nil {
 		return err
 	}
-	if err := u.compose(ctx, u.p.current, "up", "-d", "--remove-orphans"); err != nil {
+	if err := u.compose(ctx, u.p.current, "up", "-d", "--remove-orphans", "--no-build"); err != nil {
 		return err
 	}
 	st := u.readState()
@@ -1103,6 +1103,20 @@ MemoryMax=%d
 		return err
 	}
 	if err := writeAtomic(unit, []byte(slice), 0o644); err != nil {
+		return err
+	}
+	builds := fmt.Sprintf(`# Written by toft upgrade (D-170): on a panel's server whose apps' share is
+# too small to hold a builder, Toft's builders run here, with this much
+# memory between them. Edits are overwritten at the next upgrade.
+[Unit]
+Description=Toft builds on the panel's server
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+MemoryMax=%d
+`, reservation.BuildsMemory)
+	if err := writeAtomic(filepath.Join(filepath.Dir(unit), reservation.BuildsSlice), []byte(builds), 0o644); err != nil {
 		return err
 	}
 	for _, f := range [][3]string{
