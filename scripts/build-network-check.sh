@@ -104,7 +104,7 @@ config() {
 		bridge=toft-ubuild
 		[ "$B" = toft-build ] || bridge=toft-upbuild
 		DOCKER_CONFIG=$c TOFT_BUILDER=$B TOFT_BUILDER_BRIDGE=$bridge \
-			TOFT_BUILDER_IMAGE=${TOFT_BUILDER_IMAGE:-moby/buildkit:v0.35.0} \
+			TOFT_BUILDER_IMAGE=${TOFT_BUILDER_IMAGE:-moby/buildkit:v0.35.1} \
 			TOFT_BUILDER_CACHE=${TOFT_BUILDER_CACHE:-10%} \
 			TOFT_BUILDER_LOCK=/run/toft/$B.lock TOFT_BUILDER_WAIT=300 \
 			sh -c "$(cat "$(dirname "$ENSURE")/lock.sh" "$ENSURE")" >&2
