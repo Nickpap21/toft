@@ -177,15 +177,15 @@ func (f *fake) deleteEnv(env string) {
 
 // Services.
 func (f *fake) CopyForPreview(_ context.Context, in CopyInput) (string, error) {
-	var name string
+	var name, sourceType string
 	for _, s := range f.sources {
 		if s.ID == in.OriginalID {
-			name = s.Name
+			name, sourceType = s.Name, s.SourceType
 		}
 	}
 	id := f.id("copy-" + name)
 	f.copies[in.EnvironmentID] = append(f.copies[in.EnvironmentID], CopyService{ID: id, Name: name, PreviewOf: in.OriginalID,
-		ServerID: "srv", Hostnames: in.Hostnames, RuntimeStatus: "idle"})
+		SourceType: sourceType, ServerID: "srv", Hostnames: in.Hostnames, RuntimeStatus: "idle"})
 	f.events = append(f.events, fmt.Sprintf("copy %s extra=%d untrusted=%v", name, in.ExtraMemoryMB, in.Untrusted))
 	return id, nil
 }
@@ -561,6 +561,55 @@ func TestUntrustedRefusals(t *testing.T) {
 	}
 	if len(f.deploys) != 1 || !slices.Contains(f.checks, "api failure aaa") {
 		t.Fatalf("api's cache mount not refused: deploys %d, checks %v", len(f.deploys), f.checks)
+	}
+}
+
+// An untrusted preview that holds a copy of a service that became a Compose
+// stack refuses it at each later deploy too, not only at its start.
+func TestUntrustedLaterDeployRefusesCompose(t *testing.T) {
+	for name, becomeStack := range map[string]func(f *fake){
+		"the original became a stack": func(f *fake) { f.sources[1].SourceType = "docker-compose" },
+		"the copy is a stack from before the refusal, its original no longer": func(f *fake) {
+			for env, cs := range f.copies {
+				for i := range cs {
+					if cs[i].Name == "api" {
+						f.copies[env][i].SourceType = "docker-compose"
+					}
+				}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake()
+			s := newSvc(f)
+			ctx := context.Background()
+			f.open("p1", 45, true)
+			f.emit("p1")
+			s.ApplyEvents(ctx)
+			if _, err := s.Approve(ctx, "proj", "repo", 45, sha('a'), Actor{UserID: "sam"}); err != nil {
+				t.Fatalf("approve: %v", err)
+			}
+			if len(f.deploys) != 2 {
+				t.Fatalf("deploys after approval = %d, want 2", len(f.deploys))
+			}
+
+			becomeStack(f)
+			f.pulls["p1"].HeadSHA, f.pulls["p1"].KeyPushed = sha('c'), true
+			f.emit("p1")
+			s.ApplyEvents(ctx)
+			if _, err := s.Approve(ctx, "proj", "repo", 45, sha('c'), Actor{UserID: "sam"}); err != nil {
+				t.Fatalf("approve the push: %v", err)
+			}
+			if len(f.deploys) != 3 || f.deploys[2].SHA != sha('c') {
+				t.Fatalf("a Compose copy was deployed: %+v", f.deploys[2:])
+			}
+			if !slices.Contains(f.checks, "api failure ccc") {
+				t.Fatalf("checks = %v", f.checks)
+			}
+			if note := f.previews["p1"].Note; !strings.Contains(note, "api is a Compose stack") {
+				t.Fatalf("note = %q", note)
+			}
+		})
 	}
 }
 

@@ -617,6 +617,13 @@ func untrustedRefusal(src SourceService) string {
 		return src.Name + " mounts a path on its server, which a preview opened with an API key can't reach"
 	case src.BuildPack == "nixpacks":
 		return src.Name + " builds with Nixpacks, whose Dockerfile is written during the build and can't be checked first: a preview opened with an API key needs a Dockerfile"
+	case src.SourceType == "docker-compose":
+		// A stack's containers sit on its own networks (<project>_default
+		// and any it declares), whose bridges Docker names: the host
+		// firewall's untrusted rules match toft-u bridges only, so they
+		// would reach private addresses and SMTP. Its Dockerfiles aren't
+		// checked for RUN flags either (dockerfileRefusal is git's).
+		return src.Name + " is a Compose stack, whose own networks the untrusted preview's firewall rules don't cover: a preview opened with an API key needs a Dockerfile service"
 	}
 	return ""
 }
@@ -760,7 +767,16 @@ func (s *Service) deployAll(ctx context.Context, pr Pull, set Settings, pv *Prev
 			continue
 		}
 		if pv.Untrusted {
-			if why := s.dockerfileRefusal(ctx, pr, bySource[cp.PreviewOf], target); why != "" {
+			why := untrustedRefusal(bySource[cp.PreviewOf])
+			if why == "" && cp.SourceType == "docker-compose" {
+				// The copy is what deploys: one made as a stack stays one,
+				// whatever its original is now.
+				why = untrustedRefusal(SourceService{Name: cp.Name, SourceType: cp.SourceType})
+			}
+			if why == "" {
+				why = s.dockerfileRefusal(ctx, pr, bySource[cp.PreviewOf], target)
+			}
+			if why != "" {
 				s.code.ReportPreviewCheck(ctx, pr.RepoID, target, cp.Name, "failure", why)
 				pv.Note = why
 				continue
