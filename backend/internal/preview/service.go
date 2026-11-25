@@ -768,6 +768,11 @@ func (s *Service) deployAll(ctx context.Context, pr Pull, set Settings, pv *Prev
 		}
 		if pv.Untrusted {
 			why := untrustedRefusal(bySource[cp.PreviewOf])
+			if why == "" && cp.SourceType == "docker-compose" {
+				// The copy is what deploys: one made as a stack stays one,
+				// whatever its original is now.
+				why = untrustedRefusal(SourceService{Name: cp.Name, SourceType: cp.SourceType})
+			}
 			if why == "" {
 				why = s.dockerfileRefusal(ctx, pr, bySource[cp.PreviewOf], target)
 			}
