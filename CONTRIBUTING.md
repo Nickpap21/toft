@@ -29,10 +29,15 @@ make migrate            # apply the schema
 ```
 
 - The panel is at <http://localhost:3000>, the API at <http://localhost:8080>
-  and Traefik's dashboard at <http://127.0.0.1:8081>.
+  and Traefik's dashboard at <http://127.0.0.1:8081>. The dashboard asks for
+  the password in `TRAEFIK_DASHBOARD_USERS` (`htpasswd -nB admin`, in single
+  quotes in `.env`) and stays closed while none is set.
 - On a new database the backend restarts until `make migrate` has applied the
   schema, so its log shows a few FATAL lines first. That's expected.
 - Locally, the first account you register becomes the instance operator.
+- A development stack has no host firewall of Toft's, so it refuses every
+  build until `.env` has `TOFT_DEV_BUILDS_WITHOUT_FIREWALL=on` (see
+  `.env.example`).
 
 `make help` lists every target.
 

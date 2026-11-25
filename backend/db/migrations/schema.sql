@@ -1574,7 +1574,7 @@ CREATE TABLE IF NOT EXISTS alerts (
                     'volume_full', 'backup_failed', 'deploy_failed', 'oom_killed',
                     'panel_container', 'panel_certificate', 'panel_upgrade_failed', 'mirror_failing',
                     'agent_offline', 'agent_frozen', 'security_updates', 'reboot_required',
-                    'docker_advisory')),
+                    'docker_advisory', 'agent_outdated', 'lookalike_container')),
     subject     TEXT        NOT NULL,
     detail      TEXT        NOT NULL,
     fired_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1994,3 +1994,24 @@ CREATE TABLE IF NOT EXISTS secret_reveals (
     CONSTRAINT secret_reveals_service_user UNIQUE (service_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_secret_reveals_user ON secret_reveals (user_id);
+
+-- The private addresses builds on a server may reach (D-170; 0087). A build
+-- runs on a network the host firewall keeps out of the private ranges; an
+-- instance operator lists here what it may reach all the same (a registry
+-- or mirror of their own): an address or a CIDR, with one TCP port or all
+-- of them. The panel writes a server's whole list into its firewall
+-- (server.applyBuildDestinations). server_id NULL is the panel's server, as
+-- in services. The range check is the first of three refusals: nothing
+-- outside the private ranges (loopback, link-local, public) can be stored.
+CREATE TABLE IF NOT EXISTS build_destinations (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    server_id  UUID        REFERENCES servers(id) ON DELETE CASCADE,
+    cidr       CIDR        NOT NULL CHECK (family(cidr) = 4 AND (cidr <<= '10.0.0.0/8' OR cidr <<= '172.16.0.0/12'
+                               OR cidr <<= '192.168.0.0/16' OR cidr <<= '100.64.0.0/10')),
+    -- NULL is every TCP port.
+    port       INTEGER     CHECK (port BETWEEN 1 AND 65535),
+    note       TEXT        NOT NULL DEFAULT '' CHECK (char_length(note) <= 200 AND note !~ '[[:cntrl:]]'),
+    created_by UUID        REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT build_destinations_entry UNIQUE NULLS NOT DISTINCT (server_id, cidr, port)
+);

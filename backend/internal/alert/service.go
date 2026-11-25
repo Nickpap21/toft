@@ -342,9 +342,12 @@ var titles = map[Kind]string{
 	KindMirrorFailing:     "Mirror failing",
 	KindAgentOffline:      "Server agent offline",
 	KindAgentFrozen:       "Server kept its own state",
+	KindAgentOutdated:     "Agent behind the panel",
 	KindSecurityUpdates:   "Security updates waiting",
 	KindRebootRequired:    "Reboot required",
 	KindDockerAdvisory:    "Docker affected by an advisory",
+	// rollout.IsLookAlike's containers, on a server.
+	KindLookAlikeContainer: "Compose container with a service's label",
 }
 
 type payload struct {
@@ -420,7 +423,8 @@ func (s *Service) whose(ctx context.Context, e Event) (name string, orgIDs []str
 		}
 		name, orgIDs = "shared volume "+vol, []string{orgID}
 	case e.Kind == KindServerUnreachable || e.Kind == KindDiskFull || e.Kind == KindBackupFailed || e.Kind == KindAgentOffline || e.Kind == KindAgentFrozen,
-		e.Kind == KindSecurityUpdates || e.Kind == KindRebootRequired || e.Kind == KindDockerAdvisory:
+		e.Kind == KindAgentOutdated || e.Kind == KindSecurityUpdates || e.Kind == KindRebootRequired || e.Kind == KindDockerAdvisory,
+		e.Kind == KindLookAlikeContainer:
 		srv, orgID, err := s.repo.ServerContext(ctx, e.Subject)
 		if err != nil {
 			return "", nil, err

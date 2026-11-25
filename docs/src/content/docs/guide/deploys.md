@@ -71,8 +71,17 @@ Settings → Source offers two builders:
   Nixpacks build on any server, and so does a `nixpacks.toml` whose static
   assets or `nixpkgsArchive` name a path outside Nixpacks' own folder.
 
-Builds run on BuildKit, and each service's builds are kept apart from every
-other service's on the server:
+Builds run on a BuildKit container Toft keeps on each server, on a network
+of its own: a build reaches the internet, and no private address until an
+instance operator lists it
+([What a build can reach](/toft/guide/servers/#what-a-build-can-reach)).
+Until 1.2.3 builds ran on Docker's built-in BuildKit, whose downloads left
+from the server's own network. A service's isolation level (Sandboxed, or
+Sandboxed with a strict network) is about its running containers; it never
+covered its build.
+
+Each service's builds are kept apart from every other service's on the
+server:
 
 - A `RUN --mount=type=cache` cache belongs to the service. Its next build
   finds it; no other service's build can read it or write to it.
@@ -83,6 +92,9 @@ other service's on the server:
 - A build pulls its base images with the service's own registry login, or
   with none: a `docker login` someone ran on the server is never used. The
   login goes only to its registry, and no `RUN` step can read it.
+- A base image comes from a registry. A `FROM` that names an image existing
+  only in the server's Docker (built or loaded there, never pushed) fails
+  with `pull access denied`.
 
 The first two also hold for the images a Compose stack builds.
 
@@ -134,6 +146,11 @@ A private registry's login in Settings → Credentials is used by that
 service's deploy only, for the images it pulls and the base images it
 builds from. A `docker login` someone ran on the server is used by no
 deploy: a service that pulls a private image needs its own credentials.
+
+A stack that builds its images is built on every deploy. Where one of its
+services builds on another's image, name that image as a build context
+(`additional_contexts: {base: "service:a"}` and `FROM base`): a plain `FROM`
+of the other service's image isn't found, because it is in no registry.
 
 Compose replaces containers in place, so a Compose deploy has no blue/green
 switch.

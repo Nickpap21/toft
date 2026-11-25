@@ -28,7 +28,7 @@ func agentOrchestrator(t *testing.T, h *fakeHost) *RemoteOrchestrator {
 	followRetry = time.Millisecond
 	t.Cleanup(func() { followRetry = saved })
 	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
-	o.agent = true
+	o.agentNow = func() agentAbilities { return agentAbilities{rollouts: true} }
 	return o
 }
 
@@ -222,7 +222,7 @@ func TestHandOffContainerCheck(t *testing.T) {
 			return nil
 		}}
 		o := agentOrchestrator(t, h)
-		o.checks = applies
+		o.agentNow = func() agentAbilities { return agentAbilities{rollouts: true, checks: applies} }
 		handedOff := false
 		res := o.Rollout(t.Context(), spec, deployment.Routing{}, rollout.Hooks{Log: func(string) {}, HandOff: func() error { handedOff = true; return nil }})
 		if applies {
@@ -259,7 +259,7 @@ func TestHandOffCarriesTheDeployTimeLimit(t *testing.T) {
 			return nil
 		}}
 		o := agentOrchestrator(t, h)
-		o.deadlines = keeps
+		o.agentNow = func() agentAbilities { return agentAbilities{rollouts: true, deadlines: keeps} }
 		ctx, cancel := context.WithCancel(t.Context())
 		lifted := false
 		var logs []string

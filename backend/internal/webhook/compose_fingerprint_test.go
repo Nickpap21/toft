@@ -66,6 +66,10 @@ func (onlyCompose) ForServer(*serverPkg.Server) (deployment.Orchestrator, func()
 	return composeUp{}, func() {}, nil
 }
 
+func (f onlyCompose) ForDeploy(_ context.Context, srv *serverPkg.Server, _ deployment.Builds) (deployment.Orchestrator, func(), error) {
+	return f.ForServer(srv)
+}
+
 type generatedSecrets struct{}
 
 func (generatedSecrets) ListAllForDeployment(context.Context, string) ([]string, error) {

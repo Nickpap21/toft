@@ -431,6 +431,20 @@ func (s *Service) RecordAuditLog(ctx context.Context, orgID, actorID, action, re
 	return nil
 }
 
+// RecordAuditLogDetail is RecordAuditLog with a detail, in the context's
+// transaction (dbtx): the entry is saved with the change it records or not
+// at all (a build destination, D-170).
+func (s *Service) RecordAuditLogDetail(ctx context.Context, orgID, actorID, action, resource string, detail map[string]any) error {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("audit log detail: %w", err)
+	}
+	if err := s.repo.WriteAuditLog(ctx, orgID, actorID, action, resource, raw); err != nil {
+		return fmt.Errorf("audit log: %w", err)
+	}
+	return nil
+}
+
 // RunAuditRetention deletes audit entries older than keep, once at start
 // and then daily, until ctx ends. Zero or negative keep disables it.
 func (s *Service) RunAuditRetention(ctx context.Context, keep time.Duration) {

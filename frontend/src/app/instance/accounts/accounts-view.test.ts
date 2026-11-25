@@ -121,6 +121,19 @@ describe("auditWords for the panel's shell", () => {
   });
 });
 
+describe("auditWords for build destinations (D-170)", () => {
+  it("names the server, the address and the operator's note", () => {
+    expect(auditWords({ action: "build_destination.added", detail: { server: "web-1", server_id: "s1", address: "10.0.5.20", port: 5000, note: "Registry" } })).toEqual({
+      label: "Added a build destination on web-1",
+      note: "10.0.5.20:5000 · Registry",
+    });
+    expect(auditWords({ action: "build_destination.removed", detail: { address: "10.0.5.0/24", note: "" } })).toEqual({
+      label: "Removed a build destination from the panel’s server",
+      note: "10.0.5.0/24",
+    });
+  });
+});
+
 describe("auditWords for gVisor on the panel's server (D-97)", () => {
   it("names the release, and the step that failed", () => {
     expect(auditWords({ action: "panel.gvisor_installed", detail: { release: "20261012", platform: "systrap" } })).toEqual({

@@ -146,3 +146,29 @@ func TestLoad_PreviousEncryptionKey(t *testing.T) {
 	t.Setenv("ENCRYPTION_KEY_PREVIOUS", "short")
 	assert.PanicsWithValue(t, "ENCRYPTION_KEY_PREVIOUS must be at least 32 characters (generate one with: openssl rand -hex 32)", func() { config.Load() })
 }
+
+// Builds without Toft's firewall are a development stack's, asked for in
+// so many words: off by default and for any other value, and refused at
+// the start on an installed panel, which install.sh marks both ways.
+func TestLoad_DevBuildsWithoutFirewall(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("ENCRYPTION_KEY", "fedcba9876543210fedcba9876543210")
+	t.Setenv("ENV", "development")
+	t.Setenv("TOFT_APPS_SLICE", "")
+	for value, want := range map[string]bool{"": false, "off": false, "true": false, "1": false, "on": true, " On ": true} {
+		t.Setenv("TOFT_DEV_BUILDS_WITHOUT_FIREWALL", value)
+		assert.Equal(t, want, config.Load().DevBuildsNoFirewall, "%q", value)
+	}
+
+	const refused = "TOFT_DEV_BUILDS_WITHOUT_FIREWALL is on, and this is an installed panel (ENV=production or TOFT_APPS_SLICE): " +
+		"it is a development stack's setting. Remove it; toft upgrade installs the firewall builds need"
+	t.Setenv("TOFT_DEV_BUILDS_WITHOUT_FIREWALL", "on")
+	t.Setenv("ENV", "production")
+	assert.PanicsWithValue(t, refused, func() { config.Load() })
+	t.Setenv("ENV", "development")
+	t.Setenv("TOFT_APPS_SLICE", "toft-apps.slice")
+	assert.PanicsWithValue(t, refused, func() { config.Load() })
+	t.Setenv("TOFT_DEV_BUILDS_WITHOUT_FIREWALL", "off")
+	assert.False(t, config.Load().DevBuildsNoFirewall, "an install without it starts")
+}

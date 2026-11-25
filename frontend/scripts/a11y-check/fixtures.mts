@@ -111,7 +111,7 @@ const server: S["ServerResponse"] = {
 };
 const agentServer: S["ServerResponse"] = {
   ...server, id: SERVER_2, name: "eu-west-2", ip_address: "203.0.113.11", connection: "agent", ssh_key_stored: false,
-  agent: { status: "connected", since: ago(300), last_seen_at: ago(0.01), version: "0.9.4", arch: "arm64", key_fingerprint: "SHA256:AAAA0000bbbb1111cccc2222dddd3333eeee4444ffff", key_pinned_at: ago(300), from_ip: "203.0.113.11", rtt_ms: 18, token_expires_at: null, panel_key_fingerprint: "SHA256:1111aaaa2222bbbb3333cccc4444dddd5555eeee6666", desired: null, routes: 4, frozen: null, rejoin: false },
+  agent: { status: "connected", since: ago(300), last_seen_at: ago(0.01), version: "0.9.4", arch: "arm64", key_fingerprint: "SHA256:AAAA0000bbbb1111cccc2222dddd3333eeee4444ffff", key_pinned_at: ago(300), from_ip: "203.0.113.11", rtt_ms: 18, token_expires_at: null, panel_key_fingerprint: "SHA256:1111aaaa2222bbbb3333cccc4444dddd5555eeee6666", desired: null, routes: 4, frozen: null, rejoin: false, upgrade: null },
 };
 
 const checksPassed: S["CheckSummary"] = { state: "success", total: 3, passed: 3, failed: 0, pending: 0 };
@@ -281,6 +281,10 @@ const panelServer: S["PanelServer"] = {
 };
 const diskPolicyValues: S["DiskPolicyValues"] = { build_cache_limit_bytes: 21474836480, auto_clean: ["untagged"], alert_percent: 85, alert_resolve_percent: 80 };
 const diskPolicy: S["DiskPolicy"] = { build_cache_limit_bytes: null, auto_clean: null, alert_percent: null, effective: diskPolicyValues, defaults: diskPolicyValues };
+const buildDestinations: S["BuildDestination"][] = [
+  { id: "00000000-0000-4000-8000-0000000000b1", address: "10.0.5.20", port: 5000, note: "The registry mirror", created_at: ago(72) },
+  { id: "00000000-0000-4000-8000-0000000000b2", address: "10.0.6.0/24", port: null, note: "", created_at: ago(24) },
+];
 const diskReport: S["DiskReport"] = {
   read_at: ago(0.2), size_bytes: 429496729600, used_bytes: 171798691840, free_bytes: 257698037760,
   classes: [{ kind: "in_use", removable: false, automatic: false, count: 12, bytes: 16106127360, examples: ["storefront-web:1f3a9c1"] }, { kind: "untagged", removable: true, automatic: true, count: 8, bytes: 4294967296, examples: ["<none>"] }, { kind: "old_builds", removable: true, automatic: false, count: 5, bytes: 2147483648, examples: ["storefront-web:0a1b2c3"] }],
@@ -401,6 +405,7 @@ get(`${IP}/disk`, { data: diskReport });
 get(`${IP}/disk/clean`, { data: null });
 get(`${IP}/disk/policy`, { data: diskPolicy });
 get(`${IP}/gvisor`, { data: null });
+get("/api/v1/instance/build-destinations", { data: buildDestinations });
 get("/api/v1/instance/panel-host", { data: { version: "1.14.2", reservation: { min_cpu: 2, min_memory_bytes: 2147483648, system_cpu: 1, system_memory_bytes: 2147483648, panel_cpu: 1, panel_memory_bytes: 2147483648, apps_cpu: 6, apps_memory_bytes: 28991029248, apps_allocated_memory_bytes: 1073741824, enforced: true }, control_plane_subnet: "172.30.0.0/24", app_address_pool: "10.20.0.0/16", app_address_pools: [{ base: "10.20.0.0/16", size: 24 }], os: "Debian GNU/Linux 12", role: "apps", address: "203.0.113.10", cpu_cores: 8, memory_bytes: 34359738368, disk_bytes: 429496729600, app_networks: "10.20.0.0/16" } });
 
 get(P, { data: project });
@@ -482,6 +487,7 @@ get(`${V}/disk`, { data: diskReport });
 get(`${V}/disk/clean`, { data: null });
 get(`${V}/disk/policy`, { data: diskPolicy });
 get(`${V}/gvisor`, { data: null });
+get(`${V}/build-destinations`, { data: buildDestinations });
 get(`${V}/capacity-summary`, { data: capacity });
 get(`${V}/provisioning`, { data: { started_at: ago(2000), started_by: "Alex Moreno", finished_at: ago(1999.9), ok: true, error: "", log: "Installing Docker\nDone", warnings: [] } });
 get(`${V}/requirements`, { data: { met: true, os: "Debian 12", checks: [{ id: "docker", label: "Docker", found: "27.3.1", met: true }] } });

@@ -57,6 +57,12 @@ type Config struct {
 	// AppsSlice (TOFT_APPS_SLICE) is the systemd slice apps on the panel's
 	// server run under; install.sh sets toft-apps.slice (D-26, D-62).
 	AppsSlice string
+	// DevBuildsNoFirewall (TOFT_DEV_BUILDS_WITHOUT_FIREWALL=on): on
+	// this host, builds run although Toft's firewall isn't there to keep
+	// them off private addresses. For a development stack, which has no
+	// firewall of Toft's; Load refuses it on an install (ENV=production, or
+	// TOFT_APPS_SLICE set).
+	DevBuildsNoFirewall bool
 	// PanelIP (TOFT_PANEL_IP) is this server's public IP, which install.sh
 	// records: a panel with no domain makes its apps' temporary addresses
 	// from it (D-150).
@@ -171,6 +177,7 @@ func Load() *Config {
 		Git:                   !strings.EqualFold(strings.TrimSpace(os.Getenv("TOFT_GIT")), "off"),
 		GitSSHPort:            positiveInt(os.Getenv("TOFT_GIT_SSH_PORT"), 2222),
 		AppsSlice:             strings.TrimSpace(os.Getenv("TOFT_APPS_SLICE")),
+		DevBuildsNoFirewall:   devBuildsWithoutFirewall(),
 		PanelIP:               strings.TrimSpace(os.Getenv("TOFT_PANEL_IP")),
 		SetupTokenExpires:     parseExpiry(os.Getenv("TOFT_SETUP_TOKEN_EXPIRES")),
 		DeployPolicy:          strings.TrimSpace(os.Getenv("TOFT_DEPLOY_POLICY")),
@@ -284,6 +291,19 @@ func IsPlaceholder(v string) bool {
 // out when replaced, or ENCRYPTION_KEY (D-126): the placeholder may be
 // ENCRYPTION_KEY_PREVIOUS, so that the start seals every secret again under
 // a new key (toft rotate-encryption-key does both on a panel host).
+// devBuildsWithoutFirewall reads TOFT_DEV_BUILDS_WITHOUT_FIREWALL, and
+// panics where it is on and the host is an install.
+func devBuildsWithoutFirewall() bool {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TOFT_DEV_BUILDS_WITHOUT_FIREWALL")), "on") {
+		return false
+	}
+	if getEnv("ENV", "development") == "production" || strings.TrimSpace(os.Getenv("TOFT_APPS_SLICE")) != "" {
+		panic("TOFT_DEV_BUILDS_WITHOUT_FIREWALL is on, and this is an installed panel (ENV=production or TOFT_APPS_SLICE): " +
+			"it is a development stack's setting. Remove it; toft upgrade installs the firewall builds need")
+	}
+	return true
+}
+
 func notPlaceholder(key, v string) string {
 	if !IsPlaceholder(v) {
 		return v

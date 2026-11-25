@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/Nickpap21/toft/backend/internal/agenthub"
 	"github.com/Nickpap21/toft/backend/pkg/agentproto"
+	"github.com/Nickpap21/toft/backend/pkg/buildinfo"
 	"github.com/Nickpap21/toft/backend/pkg/sshclient"
 	"go.uber.org/zap"
 )
@@ -47,6 +49,53 @@ type AgentResponse struct {
 	// Rejoin: a join token for this server replaces a machine Toft trusted,
 	// so issuing one asks for the password.
 	Rejoin bool `json:"rejoin"`
+	// Upgrade is set while the agent runs a version older than the panel's
+	// and isn't upgrading now.
+	Upgrade *AgentUpgrade `json:"upgrade"`
+}
+
+// AgentUpgrade is an agent behind the panel: the version it is behind, and
+// why it still runs the old one when the panel knows (the offer is held
+// back then, but for no_build, until POST …/agent/upgrade).
+type AgentUpgrade struct {
+	PanelVersion string `json:"panel_version"`
+	// Offering: an offer of this version to the agent runs now; its answer
+	// replaces it.
+	Offering bool `json:"offering"`
+	// Reason is refused, returned or no_build; null when the panel hasn't
+	// offered this version yet (the agent is away, or the offer is on its way).
+	Reason *string `json:"reason"`
+	// Detail is the agent's own words for a refusal: text, 300 characters
+	// at most.
+	Detail *string    `json:"detail"`
+	At     *time.Time `json:"at"`
+	// ComposeRefused: compose deploys to this server are refused
+	// (agent_outdated) until the agent runs the panel's version.
+	ComposeRefused bool `json:"compose_refused"`
+}
+
+// upgradeView is the agent's upgrade as the API shows it, nil unless the
+// agent is behind the panel.
+func (s *Service) upgradeView(serverID string, rec AgentRecord, st agenthub.State) *AgentUpgrade {
+	version := rec.Version
+	if st.Connected && st.Version != "" {
+		version = st.Version
+	}
+	if st.Upgrading || !buildinfo.Newer(buildinfo.Version, version) {
+		return nil
+	}
+	u := &AgentUpgrade{
+		PanelVersion:   buildinfo.Version,
+		ComposeRefused: composeRefused(st),
+	}
+	_, u.Offering = s.agents.offering.Load(serverID)
+	if v, ok := s.agents.offered.Load(serverID); ok {
+		if o := v.(upgradeOffer); o.reason != "" && o.attempt == version+" "+buildinfo.Version {
+			at := o.at
+			u.Reason, u.Detail, u.At = &o.reason, strPtr(o.detail), &at
+		}
+	}
+	return u
 }
 
 // AgentDesired is the desired state the agent holds (D-111): behind while
@@ -119,6 +168,7 @@ func (s *Service) agentView(serverID string, rec AgentRecord) *AgentResponse {
 		return r
 	}
 	st, known := s.agents.hub.State(serverID)
+	r.Upgrade = s.upgradeView(serverID, rec, st)
 	switch {
 	case st.Upgrading:
 		r.Status = AgentUpgrading
@@ -222,6 +272,31 @@ func (s *Service) AgentsFrozen(ctx context.Context) (map[string]bool, error) {
 		return map[string]bool{}, nil
 	}
 	return s.agents.store.AgentsFrozen(ctx)
+}
+
+// AgentsOutdated is the agent_outdated alert's samples: true for an agent
+// that refuses compose deploys while the panel's version didn't take there
+// (AgentUpgrade.Reason), false for one connected with the builder. An
+// agent that is away, or whose answer to an offer isn't known yet, has no
+// sample: a retry leaves its alert as it was.
+func (s *Service) AgentsOutdated(ctx context.Context) (map[string]bool, error) {
+	if s.agents == nil {
+		return map[string]bool{}, nil
+	}
+	ids, err := s.agents.store.ListAgentServerIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		st, _ := s.agents.hub.State(id)
+		if u := s.upgradeView(id, AgentRecord{}, st); u != nil && u.ComposeRefused && u.Reason != nil {
+			out[id] = true
+		} else if st.Connected && slices.Contains(st.Caps, agentproto.CapBuilder) {
+			out[id] = false
+		}
+	}
+	return out, nil
 }
 
 // AgentsConnected lists every agent server and whether its agent is

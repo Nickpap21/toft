@@ -39,7 +39,7 @@ func TestRotate_Fresh(t *testing.T) {
 	if current == oldKey || len(current) != 64 || previous != "" {
 		t.Fatalf("keys = %q, previous %q", current, previous)
 	}
-	if n := countSub(h.calls, "up -d --no-deps --force-recreate backend"); n != 2 {
+	if n := countSub(h.calls, "up -d --no-deps --force-recreate --no-build backend"); n != 2 {
 		t.Errorf("backend restarted %d times, want 2 (both keys, then the new one alone)", n)
 	}
 	if h.did("docker exec paas-backend ./server reseal --check") != 1 || h.did("systemd-run --unit toft-backup-rotation --collect /usr/local/lib/toft/backup.sh now") != 1 {
@@ -75,7 +75,7 @@ func TestRotate_CheckFailsKeepsThePreviousKey(t *testing.T) {
 	if current, previous := keysOf(t, u); current == oldKey || previous != oldKey {
 		t.Fatalf("keys = %q, previous %q", current, previous)
 	}
-	if n := countSub(h.calls, "--force-recreate backend"); n != 1 {
+	if n := countSub(h.calls, "--force-recreate --no-build backend"); n != 1 {
 		t.Errorf("backend restarted %d times, want 1", n)
 	}
 }
@@ -177,7 +177,7 @@ func TestAnswerOnIP(t *testing.T) {
 		if (err == nil) != (want.err == "") || err != nil && !strings.Contains(err.Error(), want.err) {
 			t.Errorf("%q: err = %v, want %q", answer, err, want.err)
 		}
-		if n := countSub(h.calls, "--force-recreate backend"); n != want.restarts {
+		if n := countSub(h.calls, "--force-recreate --no-build backend"); n != want.restarts {
 			t.Errorf("%q: backend restarted %d times, want %d", answer, n, want.restarts)
 		}
 		if !strings.Contains(fmt.Sprint(u.out), want.out) {

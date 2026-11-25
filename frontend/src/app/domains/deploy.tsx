@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CapacityDialog, capacityWarningFrom, type CapacityWarning } from "@/components/ui/capacity-dialog";
+import { deployErrorToast } from "@/components/servers/agent";
 import { deploymentService } from "@/lib/api/deployment.service";
 import type { WorkspaceEnvironment } from "@/lib/api/environment.service";
 import type { WorkspaceService } from "@/lib/api/service.service";
@@ -16,6 +18,7 @@ import { DeployConfirm } from "@/app/projects/_lib/deploy-confirm";
  *  read before deciding, so nothing deploys while it's unknown. Render
  *  `dialogs` beside what calls `start`. */
 export function useDomainsDeploy() {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [ask, setAsk] = useState<{ service: WorkspaceService; env: WorkspaceEnvironment } | null>(null);
   const [capacity, setCapacity] = useState<CapacityWarning | null>(null);
@@ -30,7 +33,7 @@ export function useDomainsDeploy() {
     onError: (err: unknown, v) => {
       const warning = capacityWarningFrom(err);
       if (warning) setCapacity(warning);
-      else toast.error(err instanceof Error && err.message ? `${v.service.name}: ${err.message}` : `Failed to deploy ${v.service.name}`);
+      else toast.error(...deployErrorToast(err, err instanceof Error && err.message ? `${v.service.name}: ${err.message}` : `Failed to deploy ${v.service.name}`, (href) => router.push(href)));
     },
   });
 

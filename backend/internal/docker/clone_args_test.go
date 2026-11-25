@@ -19,7 +19,7 @@ func cloners(t *testing.T) map[string]func(ctx context.Context, url, branch stri
 	return map[string]func(ctx context.Context, url, branch string) (string, error){
 		"local": func(ctx context.Context, url, branch string) (string, error) {
 			var out strings.Builder
-			_, cleanup, err := cloneRepository(ctx, url, branch, "", func(l string) { out.WriteString(l + "\n") })
+			_, _, cleanup, err := cloneRepository(ctx, url, branch, "", func(l string) { out.WriteString(l + "\n") })
 			if err == nil {
 				cleanup()
 			}

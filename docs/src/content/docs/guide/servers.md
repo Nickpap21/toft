@@ -224,6 +224,8 @@ The panel's own host has a role, chosen in the setup wizard:
 
 - **Run apps here too**: the panel keeps a fixed CPU and memory
   reservation and apps share the rest. Needs at least 2 vCPU and 4 GB.
+  At 4 GB a build there gets 1 GiB of memory, which is tight for Node
+  apps: a build that needs more is stopped.
 - **Only Toft**: only the panel, its database and Traefik run there.
   Apps run on servers you add.
 
@@ -357,7 +359,8 @@ after your password. Images are removed by tag, or by ID when untagged, and
 never forced: Docker keeps an image a container starts from during the clean.
 Nothing restarts. **Clear all build cache**, unticked to start with, also
 deletes the whole build cache, so the next build of each service starts from
-nothing. A clean waits for a deploy running on the server (409
+nothing. The build cache is the cache of each of Toft's builders and Docker's
+own, counted together. A clean waits for a deploy running on the server (409
 `deploy_running`), and deploys to the server wait for the clean (409
 `disk_clean_running`). The card follows the clean and says what it freed.
 
@@ -403,6 +406,56 @@ owns, within a CPU and memory share, under **Sharing** on the server's page.
   Its deploys are checked against its share.
 - A share can't be removed while that workspace has services on the server.
 
+## What a build can reach
+
+Every build on a server runs in a BuildKit container Toft makes there
+(`toft-build`), on a network of its own. From that network a build's `RUN`
+steps, and what BuildKit downloads for it (base images, an `ADD` of a URL, a
+remote build context), reach the public internet and nothing else:
+
+- no private address (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+  `100.64.0.0/10`);
+- on the server itself, at most Traefik (TCP 80 and 443) and DNS, and
+  never the server's loopback;
+- no cloud metadata (`169.254.0.0/16`), and no TCP port 25.
+
+A build can use half of the server's memory (on the panel's own server, half
+of what it has for apps, or 1 GiB where that is less). A build that needs
+more is stopped, and when the whole server runs short of memory a build is
+stopped before the panel or an app.
+
+Nothing is built on a server where the [host firewall](#the-host-firewall)
+isn't loaded: the build fails and says so. Provision the server again.
+
+### Build destinations
+
+A build that needs a registry, a package mirror or another server on a
+private network times out until an instance operator lists the address:
+**Build destinations**, under Settings on the server's page, or under
+Instance → Server for the panel's own server. An entry is an IPv4 address or
+a CIDR, with one TCP port or every port, and a note. Adding or removing one
+asks for your password.
+
+An entry opens that address to **every build on that server**, of every
+workspace that deploys there, whoever starts it. It opens nothing to running
+apps, and nothing to the builds of
+[untrusted previews](/toft/guide/previews/), which run on a second builder
+(`toft-build-untrusted`) the list never reaches.
+
+Some addresses can never be listed:
+
+- loopback, link-local (cloud metadata) and public addresses;
+- the panel's own addresses, and the server's own;
+- a network or an address pool of the server's Docker (its containers);
+- TCP port 25.
+
+A change is saved only once the server has taken the new list, so a server
+that is offline refuses it. Each change is in the instance's audit log and
+the workspace's. The list is a chain of the host firewall
+(`/etc/toft/firewall.d/build-destinations.nft`): Toft writes the saved list
+to every server again two minutes after the panel starts and every hour, so
+an edit made on the server is undone within the hour.
+
 ## The host firewall
 
 Provisioning loads a Toft-owned nftables table, `ip toft`, at boot through
@@ -415,7 +468,8 @@ Provisioning loads a Toft-owned nftables table, `ip toft`, at boot through
 Replies to connections the host opened, the internet, and other containers on
 the same network are not affected. An untrusted preview's network is also kept
 from private addresses outside it and from SMTP
-([Previews](/toft/guide/previews/)).
+([Previews](/toft/guide/previews/)), and so is the network builds run on
+([What a build can reach](#what-a-build-can-reach)).
 
 If the table fails to load at boot, Docker still starts anyway. A provisioning
 run that can't load it logs a warning and carries on. To check it on a server:

@@ -111,6 +111,10 @@ function alertItem(a: AlertLike, tab: NeedsTab): Built {
       return { ...base, tab: "servers", icon: "server", tone: "failed", kind: "Agent offline", title: server, meta: a.detail, action: "Open server", href: serverHref, noun: ["an offline server", "offline servers"] };
     case "agent_frozen":
       return { ...base, tab: "servers", icon: "server", tone: "pending", kind: "Kept its own state", title: server, meta: a.detail, action: "Choose a state", href: serverHref, noun: ["a server with its own state", "servers with their own state"] };
+    case "agent_outdated":
+      return { ...base, tab: "servers", icon: "server", tone: "pending", kind: "Agent behind the panel", title: server, meta: a.detail, action: "Open the Connection card", href: `${serverHref}?tab=settings#connection`, noun: ["an agent behind the panel", "agents behind the panel"] };
+    case "lookalike_container":
+      return { ...base, tab: "servers", icon: "server", tone: "pending", kind: "Compose container with a service’s label", title: server, meta: a.detail, action: "Open server", href: serverHref, noun: ["a compose container with a service’s label", "compose containers with a service’s label"] };
     case "disk_full": {
       const pct = a.detail.match(/(\d+)% full/)?.[1];
       return { ...base, tab: "servers", icon: "disk", tone: "pending", kind: pct ? `Disk ${pct}% used` : "Disk almost full", title: server, meta: a.detail, action: "Free space…",

@@ -22,7 +22,8 @@ import (
 )
 
 // RunningSlots returns the running containers of serviceID's blue and green
-// slots under their current names, keyed "blue" and "green".
+// slots under their current names, keyed "blue" and "green". A container
+// compose made is never one, whatever its name (IsSlot).
 func RunningSlots(ctx context.Context, dc *client.Client, serviceID, serviceName, envName string) map[string]container.Summary {
 	slots := []struct{ slot, name string }{
 		{"blue", BlueContainerName(serviceID, serviceName, envName)},
@@ -38,7 +39,7 @@ func RunningSlots(ctx context.Context, dc *client.Client, serviceID, serviceName
 			continue
 		}
 		for _, c := range list {
-			if SummaryName(c) == s.name { // the name filter also matches longer names
+			if SummaryName(c) == s.name && c.Labels[LabelComposeProject] == "" { // the name filter also matches longer names
 				out[s.slot] = c
 			}
 		}

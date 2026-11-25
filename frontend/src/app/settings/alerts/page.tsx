@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Activity, AlertTriangle, Archive, Check, CircleOff, Container, Copy, Database, HardDrive, MemoryStick, RotateCcw, Send, PackageCheck, Power, Server, ShieldAlert, Snowflake, SquareX, Undo2, Unplug, X, type LucideIcon, RefreshCwOff } from "lucide-react";
+import { Activity, AlertTriangle, Archive, Check, CircleArrowUp, CircleOff, Container, Copy, Database, HardDrive, MemoryStick, RotateCcw, Send, PackageCheck, Power, Server, ShieldAlert, Snowflake, SquareX, Undo2, Unplug, X, type LucideIcon, RefreshCwOff } from "lucide-react";
 import { useAuth, useOrgRole } from "@/context/AuthContext";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -73,9 +73,11 @@ const KIND_ICON: Record<AlertKind, LucideIcon> = {
   mirror_failing: RefreshCwOff,
   agent_offline: Unplug,
   agent_frozen: Snowflake,
+  agent_outdated: CircleArrowUp,
   security_updates: PackageCheck,
   reboot_required: Power,
   docker_advisory: ShieldAlert,
+  lookalike_container: Container,
 };
 
 const PILL: Record<Tone, string> = {

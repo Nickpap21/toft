@@ -104,8 +104,9 @@ func (h gvisorHost) platform() string {
 // installGvisor installs runsc on the server behind sc and registers it
 // with Docker; logFn gets the progress. agent is a server whose agent
 // answers names (D-115): there the strict network is opened and tested. It
-// returns what it read of the host.
-func installGvisor(sc shell, agent bool, logFn func(string)) (gvisorHost, error) {
+// returns what it read of the host. dests, when set, writes the server's
+// stored build destinations once the firewall is loaded (D-170).
+func installGvisor(sc shell, agent bool, dests func(Shell, func(string)) error, logFn func(string)) (gvisorHost, error) {
 	step := func(n int) { logFn(fmt.Sprintf("[%d/%d] %s", n, len(GvisorSteps), GvisorSteps[n-1])) }
 
 	step(1)
@@ -156,6 +157,12 @@ func installGvisor(sc shell, agent bool, logFn func(string)) (gvisorHost, error)
 	if err := ensureHostFirewall(sc, logFn); err != nil {
 		return h, fmt.Errorf("host firewall: %w", err)
 	}
+	if dests != nil {
+		if err := dests(sc, logFn); err != nil {
+			// Non-fatal, as at Provision.
+			logFn("Warning: the build destinations were not written (non-fatal), so this server keeps the list it had: " + err.Error())
+		}
+	}
 
 	step(5)
 	if err := testRunsc(sc, gvisorCheckScript, "a sandboxed test container"); err != nil {
@@ -180,9 +187,9 @@ func installGvisor(sc shell, agent bool, logFn func(string)) (gvisorHost, error)
 
 // InstallGvisorOn installs gVisor through sc, the steps InstallGvisor runs
 // over SSH, and returns the platform it uses: the panel's own server runs
-// them through its host helper (D-97).
-func InstallGvisorOn(sc Shell, logFn func(string)) (platform string, err error) {
-	h, err := installGvisor(sc, false, logFn)
+// them through its host helper (D-97). dests is BuildDestinationsApplier's.
+func InstallGvisorOn(sc Shell, dests func(Shell, func(string)) error, logFn func(string)) (platform string, err error) {
+	h, err := installGvisor(sc, false, dests, logFn)
 	return h.platform(), err
 }
 
@@ -493,7 +500,7 @@ func (s *Service) InstallGvisor(ctx context.Context, id, actorID string, logFn f
 		}
 	}
 	logFn("Installing gVisor " + GvisorRelease + " on " + srv.Name)
-	host, err := installGvisor(shellFor(ctx, s.SSH(srv)), s.agentDNS(srv), func(line string) {
+	host, err := installGvisor(shellFor(ctx, s.SSH(srv)), s.agentDNS(srv), s.BuildDestinationsApplier(ctx, id), func(line string) {
 		if record {
 			if err := s.gvisorRuns.AppendGvisorLog(ctx, id, line); err != nil {
 				s.log.Warn("record gvisor log", zap.Error(err), zap.String("server_id", id))
@@ -619,15 +626,31 @@ func (s *Service) UntrustedReady(ctx context.Context, serverID string) string {
 	default:
 		return name + " can't run Sandboxed: " + level.Reason
 	}
-	var c *Capabilities
+	if !s.UntrustedFirewall(ctx, serverID) {
+		return name + "'s host firewall doesn't keep previews off private addresses yet: Provision it again, or Install gVisor again."
+	}
+	return ""
+}
+
+// UntrustedFirewall reports whether the host firewall of serverID ("" the
+// panel's own) keeps its untrusted class, the toft-u bridges of previews
+// and of builds, off private addresses: its probe's preview_firewall fact.
+// False when the fact is false, was never read or can't be read. Untrusted
+// previews go by it; a build asks the host itself, every time
+// (builder.Run).
+func (s *Service) UntrustedFirewall(ctx context.Context, serverID string) bool {
+	var (
+		c   *Capabilities
+		err error
+	)
 	switch {
 	case serverID != "":
 		c, err = s.Capabilities(ctx, serverID)
 	case s.panelCaps != nil:
 		c, err = s.panelCaps.StoredPanelCapabilities(ctx)
 	}
-	if err != nil || c == nil || !c.PreviewFirewall {
-		return name + "'s host firewall doesn't keep previews off private addresses yet: Provision it again, or Install gVisor again."
+	if err != nil {
+		s.log.Warn("the firewall fact can't be read: untrusted previews are refused", zap.Error(err), zap.String("server_id", serverID))
 	}
-	return ""
+	return err == nil && c != nil && c.PreviewFirewall
 }

@@ -31,7 +31,7 @@ func TestLocalComposeChecksCreatedContainersAndFailedUps(t *testing.T) {
 	run := func(t *testing.T, failStart bool) (string, error) {
 		bin := t.TempDir()
 		args := filepath.Join(bin, "args")
-		script := "#!/bin/sh\necho \"$@\" >> " + args + "\n"
+		script := "#!/bin/sh\necho \"$@\" >> " + args + "\n" + builderAnswers(bin+"/calls", stackBuilds)
 		if failStart {
 			script += "case \"$*\" in *' up -d '*) sleep 0.5; exit 1;; esac\n"
 		}
@@ -53,7 +53,7 @@ func TestLocalComposeChecksCreatedContainersAndFailedUps(t *testing.T) {
 		} else {
 			f.Add(proj+"-web-1", container.StateCreated, labels)
 		}
-		o := &LocalOrchestrator{dataDir: t.TempDir(), dockerClient: f.Client(), log: zap.NewNop()}
+		o := &LocalOrchestrator{dataDir: t.TempDir(), dockerClient: f.Client(), log: zap.NewNop(), builder: testBuilder}
 		err := o.RunCompose(context.Background(), "dep-1", testServiceID, "web", "services: {web: {build: .}}\n",
 			nil, route, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, rollout.Hooks{Log: func(string) {}})
 		raw, _ := os.ReadFile(args)
@@ -64,7 +64,7 @@ func TestLocalComposeChecksCreatedContainersAndFailedUps(t *testing.T) {
 		args, err := run(t, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "traefik.http.routers.paas-"+testServiceID[:8]+"-x.rule")
-		assert.Contains(t, args, " up --no-start --pull always --build --remove-orphans\n")
+		assert.Contains(t, args, " up --no-start --pull always --remove-orphans --build\n")
 		assert.NotContains(t, args, " up -d ", "nothing starts once a created container fails the check")
 		assert.Contains(t, args, "--project-name "+proj+" down --remove-orphans")
 	})
@@ -86,7 +86,7 @@ func TestLocalComposeFailedCreateLeavesTheRunningStackAlone(t *testing.T) {
 	proj := rollout.ComposeProjectName(testServiceID, "web")
 	bin := t.TempDir()
 	args := filepath.Join(bin, "args")
-	script := "#!/bin/sh\necho \"$@\" >> " + args + "\ncase \"$*\" in *' up --no-start '*) echo pull access denied; exit 1;; esac\n"
+	script := "#!/bin/sh\necho \"$@\" >> " + args + "\n" + builderAnswers(bin+"/calls", stackBuilds) + "case \"$*\" in *' up --no-start '*) echo pull access denied; exit 1;; esac\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o700))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -95,7 +95,7 @@ func TestLocalComposeFailedCreateLeavesTheRunningStackAlone(t *testing.T) {
 		rollout.LabelComposeProject: proj, "com.docker.compose.service": "web",
 		"traefik.enable": "true", "traefik.http.routers.paas-" + testServiceID[:8] + "-old.rule": "Host(`old.example.com`)",
 	})
-	o := &LocalOrchestrator{dataDir: t.TempDir(), dockerClient: f.Client(), log: zap.NewNop()}
+	o := &LocalOrchestrator{dataDir: t.TempDir(), dockerClient: f.Client(), log: zap.NewNop(), builder: testBuilder}
 	err := o.RunCompose(context.Background(), "dep-1", testServiceID, "web", "services: {web: {build: .}}\n",
 		nil, route, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, rollout.Hooks{Log: func(string) {}})
 	raw, _ := os.ReadFile(args)

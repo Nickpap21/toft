@@ -23,7 +23,7 @@ import { ProvisionLog } from "@/components/servers/provision-run";
 import { joinNames } from "@/components/previews/view";
 import { Row, settingsFoot, settingsHead, titleRow } from "@/app/servers/[id]/aside";
 import { btnSm } from "@/app/projects/_lib/ui";
-import { TONE, agentChip, agentStatus, awayFor, clock, desiredRow, frozenItems, frozenRow } from "./agent";
+import { TONE, agentChip, agentStatus, awayFor, clock, desiredRow, frozenItems, frozenRow, upgradeRow } from "./agent";
 
 const h2 = "text-[15px] font-semibold leading-[22px] text-fg";
 const AGENT_WHY = "Moving a server, or replacing its agent, decides how the panel reaches it as root, so Toft asks for your password first.";
@@ -70,6 +70,23 @@ export function AgentConnection({
     },
     onError: (err: Error) => toast.error(err.message || "The key wasn’t rotated"),
   });
+  const behind = upgradeRow(a);
+  const offer = useMutation({
+    mutationFn: () => serverService.offerAgentUpgrade(server.id),
+    // 202: the offer runs in the background, and the page follows the
+    // server until the agent's answer is on this card.
+    onSuccess: (s) => {
+      qc.setQueryData(["server", server.id], s);
+      const to = a?.upgrade?.panel_version ?? "the panel’s version";
+      if (s.agent?.status !== "connected" && s.agent?.status !== "upgrading") toast(`The panel offers ${to} when the agent connects`);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "The upgrade wasn’t offered");
+      // 409 agent_upgrade_running: show the offer that runs.
+      if (err instanceof ApiError && err.status === 409) qc.invalidateQueries({ queryKey: ["server", server.id] });
+    },
+  });
+  const offering = offer.isPending || !!a?.upgrade?.offering;
 
   let note = "";
   if (status === "connected" && a?.since) note = `Since ${formatDateTime(a.since).slice(0, 16)} · last heard from ${a.last_seen_at ? awayFor(a.last_seen_at, now) : "now"} ago${a.rtt_ms != null ? ` · ${a.rtt_ms} ms away` : ""}`;
@@ -109,7 +126,27 @@ export function AgentConnection({
                 {a?.version ?? "—"}
                 {a?.arch ? ` · linux/${a.arch}` : ""}
               </span>
-              <span className="text-xs leading-[17px] text-muted">Updates itself when the panel does.</span>
+              {behind ? (
+                <>
+                  <span className={cn("text-[13px] leading-[18px]", TONE.pending.text)}>{behind.warn}</span>
+                  {behind.why && <span className="text-xs leading-[17px] text-fg/85">{behind.why}</span>}
+                  {behind.quote && (
+                    <code className="my-px block rounded-md border border-subtle bg-ground px-2.5 py-[7px] font-mono text-xs leading-[17px] text-fg/90 [overflow-wrap:anywhere]">{behind.quote}</code>
+                  )}
+                  {behind.note && <span className="text-xs leading-[17px] text-muted">{behind.note}</span>}
+                  {behind.again && canAdmin && (
+                    <span className="mt-[3px] flex flex-wrap items-center gap-2">
+                      <button type="button" className={cn(smallButton, "font-medium")} disabled={offering} onClick={() => offer.mutate()}>
+                        {offering ? "Offering…" : "Offer the upgrade again"}
+                      </button>
+                      <span className="text-xs text-muted">owners and operators</span>
+                    </span>
+                  )}
+                  {behind.again && !canAdmin && !offering && <span className="text-xs leading-[17px] text-muted">An owner or instance operator can offer it again here.</span>}
+                </>
+              ) : (
+                <span className="text-xs leading-[17px] text-muted">Updates itself when the panel does.</span>
+              )}
             </Row>
             <Row k="Desired state">
               <span className={cn("text-[13px]", desired.tone ? TONE[desired.tone].text : status === "connected" ? "text-fg" : "text-fg/85")}>{desired.text}</span>

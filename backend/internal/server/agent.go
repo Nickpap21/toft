@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Nickpap21/toft/backend/internal/agenthub"
 	"github.com/Nickpap21/toft/backend/pkg/agentproto"
@@ -79,6 +80,11 @@ var (
 		"change their isolation first")
 	// ErrNoSSHKey: moving to SSH needs a key and the server has none stored.
 	ErrNoSSHKey = errors.New("this server has no SSH key stored: paste one to move it to SSH")
+	// ErrAgentNotBehind: there is no upgrade to offer.
+	ErrAgentNotBehind = errors.New("this server's agent already runs the panel's version")
+	// ErrAgentUpgradeRunning: an offer to the agent runs, or it is
+	// restarting into a version.
+	ErrAgentUpgradeRunning = errors.New("the panel is offering this agent its version already, or the agent is restarting into it: the Connection card shows how it goes")
 	// ErrAgentOwnerOnly / ErrAgentOperatorOrOwner: who may do what (D-106).
 	ErrAgentOwnerOnly       = errors.New("only workspace owners can rotate an agent's key")
 	ErrAgentOperatorOrOwner = errors.New("only workspace owners and instance operators can do this")
@@ -106,6 +112,10 @@ type agentDeps struct {
 	// its trial went back) isn't sent the same one again until the panel's
 	// changes.
 	offered sync.Map
+	// offering: server IDs an offer runs for now (OfferAgentUpgrade,
+	// AgentConnected), one at a time, so a second can't overwrite the first
+	// one's answer.
+	offering sync.Map
 
 	// desired is set by WithDesired, adopter by WithAdopter.
 	desired DesiredServices
@@ -217,6 +227,35 @@ func (s *Service) AgentAppliesContainerChecks(serverID string) bool {
 	}
 	st, ok := s.agents.hub.State(serverID)
 	return ok && st.Connected && slices.Contains(st.Caps, agentproto.CapContainerCheck)
+}
+
+// AgentOutdatedError refuses a compose deploy to a server whose agent runs
+// rollouts but not on Toft's builder: an agent older than the panel. Its
+// text ends with the path of the server's Connection card.
+type AgentOutdatedError struct{ ServerID, Name, Version string }
+
+func (e *AgentOutdatedError) Error() string {
+	return fmt.Sprintf("%s's agent (%s) is older than the panel and can't run this deploy safely. Upgrade the agent, then deploy again: /servers/%s?tab=settings#connection", e.Name, e.Version, e.ServerID)
+}
+
+// composeRefused: a connected agent with these capabilities runs compose
+// ups itself, and not on Toft's builder (agentproto.CapBuilder).
+func composeRefused(st agenthub.State) bool {
+	return st.Connected && slices.Contains(st.Caps, agentproto.CapRollout) && !slices.Contains(st.Caps, agentproto.CapBuilder)
+}
+
+// AgentOutdated is the refusal for a compose deploy to the server
+// (*AgentOutdatedError), nil when its agent builds on Toft's builder or
+// runs no rollouts (the panel runs them then, over the agent's connection).
+func (s *Service) AgentOutdated(srv *Server) error {
+	if s.agents == nil || srv == nil || srv.Connection != ConnectionAgent {
+		return nil
+	}
+	st, _ := s.agents.hub.State(srv.ID)
+	if !composeRefused(st) {
+		return nil
+	}
+	return &AgentOutdatedError{ServerID: srv.ID, Name: srv.Name, Version: st.Version}
 }
 
 // AgentKeepsMetrics reports whether the server's agent is connected and
@@ -389,7 +428,12 @@ func (s *Service) AgentConnected(serverID string, h agenthub.Hello) {
 		}
 	}
 	if buildinfo.Newer(buildinfo.Version, h.Version) {
-		s.upgradeAgent(ctx, serverID, h)
+		// Not beside an offer that runs: its answer stands, and without
+		// one it offers to this connection itself (offerHeld).
+		if _, busy := s.agents.offering.LoadOrStore(serverID, struct{}{}); !busy {
+			st, _ := s.agents.hub.State(serverID)
+			s.offerHeld(serverID, h, st.Since)
+		}
 	} else if buildinfo.Newer(h.Version, buildinfo.Version) {
 		s.log.Warn("this server's agent is newer than the panel (a rolled-back panel?)", zap.String("server_id", serverID), zap.String("agent", h.Version), zap.String("panel", buildinfo.Version))
 	}
@@ -503,11 +547,121 @@ func (s *Service) AgentBinary(ctx context.Context, token, arch string) (serverID
 	return serverID, bin, err
 }
 
+// Why an agent still runs a version older than the panel's
+// (AgentUpgrade.Reason).
+const (
+	UpgradeRefused  = "refused"  // it answered no
+	UpgradeReturned = "returned" // it accepted the version and connected again at the old one
+	UpgradeNoBuild  = "no_build" // the panel has no agent for its architecture
+)
+
 // upgradeOffer is an upgrade an agent answered: "from to", and whether the
-// panel has said it holds it back.
+// panel has said it holds it back. reason is why the agent still runs the
+// old version, "" while the outcome of an accepted offer isn't known;
+// detail is the agent's own words for a refusal.
 type upgradeOffer struct {
 	attempt string
 	logged  bool
+	reason  string
+	detail  string
+	at      time.Time
+}
+
+// agentWords is what an agent answered, as one bounded line of text. Format
+// characters (Cf: bidirectional overrides, zero-width joiners) are dropped,
+// and control characters and line breaks (Cc, U+2028 and U+2029, which are
+// spaces) separate words, so the text can't reorder or hide what the card
+// shows.
+func agentWords(out string) string {
+	out = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, out)
+	words := strings.Join(strings.FieldsFunc(out, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
+	if r := []rune(words); len(r) > 300 {
+		return string(r[:300]) + "…"
+	}
+	return words
+}
+
+// OfferAgentUpgrade drops the offer the panel holds back for the server's
+// agent and, when the agent is connected, starts offering the panel's
+// version; an agent that is away is offered it when it connects. While an
+// offer runs, or the agent restarts into a version, it is
+// ErrAgentUpgradeRunning and changes nothing.
+func (s *Service) OfferAgentUpgrade(ctx context.Context, actorID, serverID string) error {
+	if s.agents == nil {
+		return ErrAgentsNotConfigured
+	}
+	srv, err := s.repo.GetByID(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if srv.AgentKey == "" {
+		return ErrNoAgent
+	}
+	rec, err := s.agents.store.GetAgent(ctx, serverID)
+	if err != nil {
+		return fmt.Errorf("read the server's agent: %w", err)
+	}
+	// The server's one offer, taken before the agent's state is read: an
+	// offer that ended just now has marked the agent upgrading by then.
+	if _, busy := s.agents.offering.LoadOrStore(serverID, struct{}{}); busy {
+		return ErrAgentUpgradeRunning
+	}
+	handed := false
+	defer func() {
+		if !handed {
+			s.agents.offering.Delete(serverID)
+		}
+	}()
+	st, _ := s.agents.hub.State(serverID)
+	version := rec.Version
+	if st.Connected && st.Version != "" {
+		version = st.Version
+	}
+	if !buildinfo.Newer(buildinfo.Version, version) {
+		return ErrAgentNotBehind
+	}
+	if st.Upgrading {
+		return ErrAgentUpgradeRunning
+	}
+	s.agents.offered.Delete(serverID)
+	s.auditAgent(ctx, srv.OrgID, actorID, "server.agent_upgrade_offered", serverID, map[string]any{"name": srv.Name, "from": version, "to": buildinfo.Version, "connected": st.Connected})
+	if !st.Connected {
+		return nil
+	}
+	// In the background: uploading the agent can outlast the request (the
+	// HTTP server's write timeout), and the offer runs to its answer, which
+	// the view shows.
+	handed = true
+	go s.offerHeld(serverID, agenthub.Hello{ServerID: serverID, Version: version, Arch: rec.Arch}, st.Since)
+	return nil
+}
+
+// offerHeld makes the offer of a caller that took the server's place in
+// offering, and frees the server when it ends, 2 minutes on at the latest.
+// An agent that connected again while it ran got nothing from
+// AgentConnected: when the offer ended without an answer (its link was the
+// one replaced), that connection gets its own here. since is when the
+// agent offered to connected.
+func (s *Service) offerHeld(serverID string, h agenthub.Hello, since time.Time) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		s.upgradeAgent(ctx, serverID, h)
+		cancel()
+		s.agents.offering.Delete(serverID)
+		st, _ := s.agents.hub.State(serverID)
+		if _, answered := s.agents.offered.Load(serverID); answered || !st.Connected || st.Since.Equal(since) || !buildinfo.Newer(buildinfo.Version, st.Version) {
+			return
+		}
+		if _, busy := s.agents.offering.LoadOrStore(serverID, struct{}{}); busy {
+			return
+		}
+		h.Version, since = st.Version, st.Since
+	}
 }
 
 // upgradeAgent sends the panel's agent version to an older agent (D-106).
@@ -515,9 +669,16 @@ type upgradeOffer struct {
 // into it and goes back by itself if it can't connect within 2 minutes.
 func (s *Service) upgradeAgent(ctx context.Context, serverID string, h agenthub.Hello) {
 	attempt := h.Version + " " + buildinfo.Version
-	if v, ok := s.agents.offered.Load(serverID); ok && v.(upgradeOffer).attempt == attempt {
+	if v, ok := s.agents.offered.Load(serverID); ok && v.(upgradeOffer).attempt == attempt && v.(upgradeOffer).reason != UpgradeNoBuild {
 		// Once per offer: a flapping link reconnects often.
-		if !v.(upgradeOffer).logged && s.agents.offered.CompareAndSwap(serverID, v, upgradeOffer{attempt, true}) {
+		held := v.(upgradeOffer)
+		held.logged = true
+		if held.reason == "" {
+			// It said yes, and connects at the version it left: it went
+			// back, or its link dropped before it restarted.
+			held.reason, held.at = UpgradeReturned, time.Now()
+		}
+		if !v.(upgradeOffer).logged && s.agents.offered.CompareAndSwap(serverID, v, held) {
 			s.log.Warn("not offering the agent this upgrade again: it refused it, or came back from it; another panel version or a panel restart offers it again", zap.String("server_id", serverID), zap.String("agent", h.Version), zap.String("panel", buildinfo.Version))
 		}
 		return
@@ -525,6 +686,8 @@ func (s *Service) upgradeAgent(ctx context.Context, serverID string, h agenthub.
 	bin, err := s.agentBinary(h.Arch)
 	if err != nil {
 		s.log.Warn("cannot upgrade the agent", zap.Error(err), zap.String("server_id", serverID))
+		// Not held back: the next connect looks for the binary again.
+		s.agents.offered.Store(serverID, upgradeOffer{attempt: attempt, reason: UpgradeNoBuild, at: time.Now()})
 		return
 	}
 	srv, err := s.repo.GetByID(ctx, serverID)
@@ -541,10 +704,13 @@ func (s *Service) upgradeAgent(ctx context.Context, serverID string, h agenthub.
 	})
 	in := bytes.NewReader(append(append(hdr, '\n'), bin...))
 	srv.Connection = ConnectionAgent // the upgrade goes through the agent even while the server is moving
-	if _, err := s.SSH(srv).Subsystem(ctx, agentproto.SubsystemUpgrade, in); err != nil {
+	if out, err := s.SSH(srv).Subsystem(ctx, agentproto.SubsystemUpgrade, in); err != nil {
 		s.log.Warn("the agent refused the upgrade", zap.Error(err), zap.String("server_id", serverID), zap.String("from", h.Version), zap.String("to", buildinfo.Version))
 		if exit := (*ssh.ExitError)(nil); errors.As(err, &exit) {
-			s.agents.offered.Store(serverID, upgradeOffer{attempt: attempt}) // it answered no; a dropped link tries again
+			// It answered no; a dropped link tries again.
+			s.agents.offered.Store(serverID, upgradeOffer{attempt: attempt, reason: UpgradeRefused, detail: agentWords(out), at: time.Now()})
+		} else {
+			s.agents.offered.Delete(serverID) // a no_build before it
 		}
 		return
 	}

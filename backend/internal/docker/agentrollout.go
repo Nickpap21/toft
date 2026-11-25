@@ -18,14 +18,37 @@ import (
 // (a variable so tests can shorten it).
 var followRetry = 5 * time.Second
 
+// agentAbilities is what a server's agent can do for the panel, as its
+// connection says when asked.
+type agentAbilities struct {
+	// rollouts: it runs the rollouts and compose ups the panel hands it
+	// (D-111) rather than the panel driving them over the tunnel.
+	rollouts bool
+	// deadlines: it ends a rollout at the deploy's time limit (D-125).
+	deadlines bool
+	// checks: it creates slots with the service's own container check
+	// (rollout.Slot.Check).
+	checks bool
+	// outdated refuses every compose up: the agent is older than the
+	// panel (server.Service.AgentOutdated).
+	outdated error
+}
+
+func (o *RemoteOrchestrator) abilities() agentAbilities {
+	if o.agentNow == nil {
+		return agentAbilities{}
+	}
+	return o.agentNow()
+}
+
 // handOff hands req to the server's agent, which runs it to its end even if
 // the panel restarts (D-111), and follows its log to the result.
-func (o *RemoteOrchestrator) handOff(ctx context.Context, req rollout.Request, hooks rollout.Hooks) rollout.Result {
+func (o *RemoteOrchestrator) handOff(ctx context.Context, agent agentAbilities, req rollout.Request, hooks rollout.Hooks) rollout.Result {
 	logFn := hooks.Log
 	if logFn == nil {
 		logFn = func(string) {}
 	}
-	if req.Spec.Slot.Check != (rollout.ContainerCheck{}) && !o.checks {
+	if req.Spec.Slot.Check != (rollout.ContainerCheck{}) && !agent.checks {
 		// An older agent would drop the check and keep the image's.
 		msg := "the server's agent can't apply the service's container check until it upgrades (it does when it next connects); " +
 			"deploy again then, or set the container check back to the image's"
@@ -45,7 +68,7 @@ func (o *RemoteOrchestrator) handOff(ctx context.Context, req rollout.Request, h
 	follow := context.WithoutCancel(ctx)
 	switch {
 	case hooks.TimeLeft == nil:
-	case o.deadlines:
+	case agent.deadlines:
 		// The agent ends the rollout at the limit and cleans up after it.
 		req.TimeLeft = hooks.TimeLeft()
 	default:

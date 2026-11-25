@@ -96,6 +96,9 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		servers.GET("/:serverID/requirements", h.requireOwnership(), h.getRequirements)
 		servers.POST("/:serverID/host-key/scan", h.requireOwnership(), h.scanHostKey)
 		servers.PUT("/:serverID/host-key", h.requireOwnership(), h.resetHostKey)
+		servers.GET("/:serverID/build-destinations", h.requireOwnership(), h.listBuildDestinations)
+		servers.POST("/:serverID/build-destinations", h.requireOwnership(), h.addBuildDestination)
+		servers.DELETE("/:serverID/build-destinations/:destinationID", h.requireOwnership(), h.removeBuildDestination)
 		servers.GET("/:serverID/dns-provider", h.requireOwnership(), h.getDNSProvider)
 		servers.PUT("/:serverID/dns-provider", h.requireOwnership(), h.putDNSProvider)
 		servers.DELETE("/:serverID/dns-provider", h.requireOwnership(), h.deleteDNSProvider)
@@ -109,6 +112,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		servers.POST("/:serverID/agent/join-token", h.requireOwnership(), h.createJoinToken)
 		servers.POST("/:serverID/agent/install", h.requireOwnership(), h.installAgent)
 		servers.POST("/:serverID/agent/rotate", h.requireOwnership(), h.rotateAgentKey)
+		servers.POST("/:serverID/agent/upgrade", h.requireOwnership(), h.offerAgentUpgrade)
 		servers.DELETE("/:serverID/agent", h.requireOwnership(), h.revokeAgent)
 		servers.POST("/:serverID/agent/adopt", h.requireOwnership(), h.chooseAgentState(true))
 		servers.POST("/:serverID/agent/use-panel-state", h.requireOwnership(), h.chooseAgentState(false))
@@ -120,6 +124,14 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		panel.GET("", h.getPanelBackup)
 		panel.PUT("", h.putPanelBackup)
 		panel.DELETE("", h.deletePanelBackup)
+	}
+	// The panel's server's build destinations: the same handlers, with no
+	// server ID.
+	dests := rg.Group("/instance/build-destinations")
+	{
+		dests.GET("", h.listBuildDestinations)
+		dests.POST("", h.addBuildDestination)
+		dests.DELETE("/:destinationID", h.removeBuildDestination)
 	}
 }
 

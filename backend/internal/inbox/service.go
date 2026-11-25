@@ -102,6 +102,27 @@ func NewService(repo Repository, pages Pages, inst Instance, pub Publisher, log 
 func (s *Service) NeedsYou(ctx context.Context, orgID, userID, role string, which Marks) ([]Item, error) {
 	items := []Item{}
 	var unbacked []UnbackedService
+	operator := false
+	if s.instance != nil {
+		op, err := s.instance.IsOperator(ctx, userID)
+		operator = err == nil && op
+	}
+	// An agent behind the panel is for those who can offer it the upgrade
+	// again: the workspace's owners and instance operators. So is a
+	// look-alike container, which is removed on the server.
+	member := role == "owner" || role == "developer"
+	if member || operator {
+		alerts, err := s.repo.OpenAlerts(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range alerts {
+			ownersOnly := a.AlertKind == "agent_outdated" || a.AlertKind == "lookalike_container"
+			if (ownersOnly && (role == "owner" || operator)) || (!ownersOnly && member) {
+				items = append(items, a)
+			}
+		}
+	}
 	if role == "owner" || role == "developer" {
 		var err error
 		if unbacked, err = s.repo.UnbackedServices(ctx, orgID); err != nil {
@@ -111,11 +132,7 @@ func (s *Service) NeedsYou(ctx context.Context, orgID, userID, role string, whic
 		if err != nil {
 			return nil, err
 		}
-		alerts, err := s.repo.OpenAlerts(ctx, orgID)
-		if err != nil {
-			return nil, err
-		}
-		items = append(append(items, failed...), alerts...)
+		items = append(items, failed...)
 		public, err := s.repo.UnprotectedPublic(ctx, orgID)
 		if err != nil {
 			return nil, err
@@ -190,7 +207,7 @@ func (s *Service) NeedsYou(ctx context.Context, orgID, userID, role string, whic
 	}
 	toftDB := false
 	if s.instance != nil {
-		if op, err := s.instance.IsOperator(ctx, userID); err == nil && op {
+		if operator {
 			backed, err := s.repo.PanelHostBackedUp(ctx)
 			if err != nil {
 				return nil, err

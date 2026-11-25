@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/netplan"
 )
 
@@ -654,6 +655,10 @@ type ComposeUp struct {
 	Auth          *RegistryAuth
 	RoutedService string
 	AllowedLabels map[string]bool
+	// Builder is the builder a stack that builds goes up on, as the
+	// panel's own builds on the server make it. nil (a panel before it
+	// sent one): the agent's own builder.Trusted.
+	Builder *builder.Spec
 }
 
 // ComposeOverride is one of the platform's override files.

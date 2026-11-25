@@ -13,8 +13,8 @@ on:
   pull_request:
   # release.yml runs these first: a release is gated like every merge.
   workflow_call:
-  # Daily, for the accessibility check's slowest pass (the frontend job)
-  # and the Dockerfile frontend's pin.
+  # Daily, for the accessibility check's slowest pass (the frontend job),
+  # the Dockerfile frontend's and BuildKit's pins, and the newest Compose.
   schedule:
     - cron: "41 4 * * *"
 
@@ -85,6 +85,11 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: start the test database (the image docker-compose.yml pins)
         run: make -C .. test-db
+      # The runner's own Compose is whatever its image has, and a stack is
+      # built only with one outside 2.38.0 to 2.39.2 (builder.FirstUp): the
+      # tests that build one would be refused on those.
+      - name: Docker Compose (a pinned release, not the runner's)
+        run: ../scripts/install-compose.sh 5.7.2 e14235d9c622c5bd57eb8adeed4a0f7308c7f3862e6812dd843f6fe27f1307cc
       - name: test
         run: go test -race ./...
       # The runner isn't root, so the step above skips this test. A skip here
@@ -290,6 +295,51 @@ jobs:
           persist-credentials: false
       - name: Dockerfile frontend (docker/dockerfile:1 newer than the pin in backend/internal/docker/buildkit.go fails)
         run: scripts/dockerfile-frontend.sh
+
+  # Daily only, as dockerfile-frontend is: a new BuildKit release fails
+  # this run, never a push that has nothing to do with it.
+  buildkit-image:
+    permissions:
+      contents: read
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: BuildKit image (moby/buildkit:latest newer than the pin in backend/internal/builder/builder.go fails)
+        run: scripts/buildkit-image.sh
+
+  # Daily only, as dockerfile-frontend is: a Compose release that starts a
+  # build with a service's variables in its environment fails this run,
+  # never a push that has nothing to do with it. The pushes' tests build
+  # with the pinned release (backend-test).
+  compose-newest:
+    permissions:
+      contents: read
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Docker Compose (the newest release)
+        run: ../scripts/install-compose.sh latest
+      # A skip fails, and so does one case of the test: only the pass of
+      # the whole test is accepted, the line that starts at the margin.
+      - name: a service's variables set no source policy for its build, on the newest Compose
+        run: |
+          go test -run '^TestAServicesVariablesSetNoSourcePolicy$' -v ./internal/docker/ | tee policy.log
+          grep -q -- '^--- PASS: TestAServicesVariablesSetNoSourcePolicy (' policy.log
 
   # Every commit of a pull request is signed off (DCO, CONTRIBUTING.md).
   # Dependabot signs its commits off too.

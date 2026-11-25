@@ -40,6 +40,7 @@ import {
   type Level,
   type StepState,
 } from "../deployment-view";
+import { agentOutdated } from "@/components/servers/agent";
 
 // A deployment's page (board: private/design/canvas/ReworkDeployment.dc.html,
 // views failed, building and refused; D-44): what became of it, its pipeline,
@@ -156,13 +157,16 @@ export function DeploymentDetail({ service, projectId, env, serverName, deployme
   const state = rowState(d, liveId, liveKnown);
   const ref = deploymentRef(d) || d.id.slice(0, 8);
   const liveRef = live ? deploymentRef(live) || live.id.slice(0, 8) : "";
+  // A deploy refused for its server's older agent: before it started (a
+  // push's record) or by the runner. Either way the alert has the way out.
+  const outdated = agentOutdated(d.error_msg);
   const refused = wasRefused(d);
   const failed = d.status === "failed" && !refused;
 
   const type = (service.source_type || "git") as PipelineType;
   const stages = stageDefs(type, !!service.compose_repo_url, (service.health_check_retries ?? 0) > 0);
   const pipeline = refused
-    ? [{ key: "failed", label: "Policy", state: "failed" as StepState, time: "refused" }, ...stages.map((s) => ({ key: s.key, label: s.label, state: "todo" as StepState, time: "" }))]
+    ? [{ key: "failed", label: outdated ? "Agent" : "Policy", state: "failed" as StepState, time: "refused" }, ...stages.map((s) => ({ key: s.key, label: s.label, state: "todo" as StepState, time: "" }))]
     : steps(d, groupLog(entries, stages), now).map((s) => (logUnread ? { ...s, time: "" } : s));
   // Who replaced it: the next deployment that went live after it.
   const index = list.findIndex((x) => x.id === d.id);
@@ -277,8 +281,9 @@ export function DeploymentDetail({ service, projectId, env, serverName, deployme
                   <XCircle className="mt-px h-[18px] w-[18px] flex-none text-status-failed" aria-hidden="true" />
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <p className="text-[13px] font-semibold leading-[19px] text-fg [overflow-wrap:anywhere]">
-                      {stopped ? `${stopped.label} failed` : "Failed"}{d.error_msg ? `: ${d.error_msg}` : ""}
+                      {stopped ? `${stopped.label} failed` : "Failed"}{d.error_msg ? `: ${outdated?.text ?? d.error_msg}` : ""}
                     </p>
+                    {outdated && <p className="text-[13px] leading-[19px] text-fg/70">Nothing was sent to the server: what runs there is unchanged.</p>}
                     {previousKept(entries) && (
                       <p className="text-[13px] leading-[19px] text-fg/70">
                         {stopped?.key === "health" ? "The new container started but never passed the check, so it was removed. " : "The new container was removed. "}
@@ -294,6 +299,9 @@ export function DeploymentDetail({ service, projectId, env, serverName, deployme
                       {stopped?.key === "health" && (
                         <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-health`} className="text-link hover:underline">Health check settings</Link>
                       )}
+                      {outdated && (
+                        <Link href={outdated.href} className="text-link hover:underline [overflow-wrap:anywhere]">Upgrade {outdated.server ? `${outdated.server}’s` : "the"} agent</Link>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -303,14 +311,20 @@ export function DeploymentDetail({ service, projectId, env, serverName, deployme
                 <div role="alert" className="flex gap-3 rounded-lg border border-subtle bg-ground/40 px-4 py-3.5">
                   <AlertCircle className="mt-px h-[18px] w-[18px] flex-none text-status-pending" aria-hidden="true" />
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <p className="text-[13px] font-semibold leading-[19px] text-fg">Refused by the deploy policy before anything ran</p>
+                    <p className="text-[13px] font-semibold leading-[19px] text-fg">{outdated ? "Refused before anything ran" : "Refused by the deploy policy before anything ran"}</p>
                     <p className="text-[13px] leading-[19px] text-fg/70 [overflow-wrap:anywhere]">
-                      {d.error_msg && <>{d.error_msg} </>}
+                      {d.error_msg && <>{outdated?.text ?? d.error_msg} </>}
                       Nothing stopped or started{liveRef ? <>; <span className="font-mono text-xs text-fg">{liveRef}</span> is still live</> : null}.
                     </p>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 pt-0.5 text-[13px]">
-                      <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-hooks`} className="text-link hover:underline">Lifecycle hooks</Link>
-                      <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-policy`} className="text-link hover:underline">The policy</Link>
+                      {outdated ? (
+                        <Link href={outdated.href} className="text-link hover:underline [overflow-wrap:anywhere]">Upgrade {outdated.server ? `${outdated.server}’s` : "the"} agent</Link>
+                      ) : (
+                        <>
+                          <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-hooks`} className="text-link hover:underline">Lifecycle hooks</Link>
+                          <Link href={`${serviceHref(projectId, serviceId)}?tab=settings#set-policy`} className="text-link hover:underline">The policy</Link>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

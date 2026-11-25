@@ -594,6 +594,62 @@ func TestNeedsYouSeverity(t *testing.T) {
 	}
 }
 
+// An agent behind the panel is for those who can offer it the upgrade again:
+// the workspace's owners and instance operators, whatever their role there.
+func TestNeedsYouAgentOutdatedIsForOwnersAndOperators(t *testing.T) {
+	repo := newFake()
+	repo.alerts = []Item{
+		{Key: "alert:behind", Kind: "alert", AlertKind: "agent_outdated", Category: "servers", At: time.Now()},
+		{Key: "alert:disk", Kind: "alert", AlertKind: "disk_full", Category: "servers", At: time.Now()},
+	}
+	svc := NewService(repo, fakePages{}, fakeInstance{}, nil, zap.NewNop())
+	for _, c := range []struct {
+		user, role    string
+		behind, other bool
+	}{
+		{"ann", "owner", true, true},
+		{"ann", "developer", false, true},
+		{"ann", "viewer", false, false},
+		{"op", "developer", true, true},
+		{"op", "viewer", true, false},
+	} {
+		items, err := svc.NeedsYou(context.Background(), "o1", c.user, c.role, MarksOpen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := func(key string) bool {
+			return slices.ContainsFunc(items, func(it Item) bool { return it.Key == key })
+		}
+		if has("alert:behind") != c.behind || has("alert:disk") != c.other {
+			t.Errorf("%s as %s: the agent's item %v (want %v), the other alert %v (want %v)", c.user, c.role, has("alert:behind"), c.behind, has("alert:disk"), c.other)
+		}
+	}
+}
+
+// A look-alike container is removed on the server: it is for the
+// workspace's owners and instance operators, not its developers.
+func TestNeedsYouLookAlikeIsForOwnersAndOperators(t *testing.T) {
+	repo := newFake()
+	repo.alerts = []Item{{Key: "alert:lookalike", Kind: "alert", AlertKind: "lookalike_container", Category: "servers", At: time.Now()}}
+	svc := NewService(repo, fakePages{}, fakeInstance{}, nil, zap.NewNop())
+	for _, c := range []struct {
+		user, role string
+		want       bool
+	}{
+		{"ann", "owner", true},
+		{"op", "developer", true},
+		{"ann", "developer", false},
+	} {
+		items, err := svc.NeedsYou(context.Background(), "o1", c.user, c.role, MarksOpen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := slices.ContainsFunc(items, func(it Item) bool { return it.Key == "alert:lookalike" }); got != c.want {
+			t.Errorf("%s as %s: %v, want %v", c.user, c.role, got, c.want)
+		}
+	}
+}
+
 // Every alert kind and item kind has its severity on purpose (D-140): a
 // renamed or misspelled kind would turn an offline server into a warning,
 // and Home's cap would hide it.
@@ -601,7 +657,7 @@ func TestSeverityOf(t *testing.T) {
 	alerts := map[alert.Kind]string{
 		alert.KindServerUnreachable: "problem", alert.KindAgentOffline: "problem", alert.KindBackupFailed: "problem",
 		alert.KindServiceDown: "problem", alert.KindContainerExited: "problem", alert.KindPanelContainer: "problem",
-		alert.KindMirrorFailing: "problem", alert.KindAgentFrozen: "problem", alert.KindServiceRestarting: "problem",
+		alert.KindMirrorFailing: "problem", alert.KindAgentFrozen: "problem", alert.KindServiceRestarting: "problem", alert.KindLookAlikeContainer: "problem",
 		alert.KindDiskFull: "warning", alert.KindVolumeFull: "warning",
 		alert.KindServiceUnhealthy: "warning", alert.KindPanelCertificate: "warning",
 		alert.KindSecurityUpdates: "warning", alert.KindRebootRequired: "warning", alert.KindDockerAdvisory: "warning",

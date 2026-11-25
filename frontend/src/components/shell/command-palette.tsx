@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { deployErrorToast } from "@/components/servers/agent";
 import { useAuth, useIsOperator } from "@/context/AuthContext";
 import { useTheme } from "@/components/theme-provider";
 import { deploymentHref } from "@/components/home/home";
@@ -95,7 +96,7 @@ export function CommandPalette({ open, initialQuery = "", onOpenChange, onCloseA
         setCapacity({ warning, target });
         return;
       }
-      toast.error(err instanceof Error && err.message ? `${target.name}: ${err.message}` : `Failed to deploy ${target.name}`);
+      toast.error(...deployErrorToast(err, err instanceof Error && err.message ? `${target.name}: ${err.message}` : `Failed to deploy ${target.name}`, (href) => router.push(href)));
     },
   });
 

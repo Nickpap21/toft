@@ -30,8 +30,9 @@ export default function ServerPage() {
     queryKey: ["server", id],
     queryFn: () => serverService.get(id),
     retry: false,
-    // An agent that isn't connected changes state by itself: follow it.
-    refetchInterval: (q) => (q.state.data?.connection === "agent" && q.state.data.agent?.status !== "connected" ? 5_000 : 30_000),
+    // An agent that isn't connected changes state by itself, and an offer
+    // of the panel's version ends by itself: follow them.
+    refetchInterval: (q) => (q.state.data?.connection === "agent" && (q.state.data.agent?.status !== "connected" || q.state.data.agent.upgrade?.offering) ? 5_000 : 30_000),
   });
   // A server shared with this workspace is in its list, not readable here.
   const { data: list, isLoading: listLoading, error: listError } = useQuery({ queryKey: ["servers"], queryFn: () => serverService.list(), enabled: !!error });

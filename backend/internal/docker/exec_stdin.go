@@ -102,7 +102,7 @@ func runningContainer(ctx context.Context, dc *client.Client, serviceID, service
 		if c.State != "running" {
 			continue
 		}
-		slot := rollout.IsSlotName(name, serviceID)
+		slot := rollout.IsPlatformSlot(c.Labels, name)
 		if (composeService == "" && slot) || (composeService != "" && !slot && c.Labels[rollout.LabelComposeService] == composeService) {
 			return name, nil
 		}

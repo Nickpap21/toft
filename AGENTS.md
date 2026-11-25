@@ -199,11 +199,15 @@ deployment.OrchestratorFactory (interface, in deployment)
 - The host firewall (`server/firewall.nft`, `server/toft-firewall.service`)
   is installed by the provisioner and `toft upgrade`; change it there,
   never on a server.
+- Every build runs on Toft's builder, through `internal/builder`
+  (`builder.Run`). Never write a `docker build`, a `buildx` command or a
+  compose `up` or `build` outside it (a compose `up --no-build` is the one
+  exception); `internal/builder/only_test.go` fails on one.
 - All compose parsing goes through `internal/composespec`. Never write a
   second parser.
 - Never trust a container's labels alone: tenants choose their images, and
-  images carry labels. Use `rollout.IsSlotName` or the platform-derived
-  compose project.
+  images carry labels. Use `rollout.IsSlot` (`IsPlatformSlot`) or the
+  platform-derived compose project.
 - The deploy policy (`internal/deploypolicy`) runs on every deploy; reserved
   `paas.*`, `traefik.*` and `com.docker.compose.*` labels are rejected.
 

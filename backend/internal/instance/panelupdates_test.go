@@ -46,7 +46,7 @@ func TestPanelUpdates(t *testing.T) {
 	assert.Equal(t, 1, u.Security)
 	assert.True(t, u.Reboot.Required)
 	assert.Equal(t, "29.4.3", u.Docker.Version)
-	assert.Len(t, u.Docker.Advisories, 6)
+	assert.Len(t, u.Docker.Advisories, 7)
 	assert.Empty(t, u.Error)
 
 	hs, err = svc.UpdateProblems(ctx)

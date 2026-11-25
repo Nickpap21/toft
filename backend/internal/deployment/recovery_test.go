@@ -490,6 +490,10 @@ func (f *recFactory) ForServer(srv *server.Server) (Orchestrator, func(), error)
 	return f.orch, func() {}, nil
 }
 
+func (f *recFactory) ForDeploy(_ context.Context, srv *server.Server, _ Builds) (Orchestrator, func(), error) {
+	return f.ForServer(srv)
+}
+
 func (f *recFactory) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

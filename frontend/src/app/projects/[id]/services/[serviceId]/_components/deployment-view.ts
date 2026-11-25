@@ -3,6 +3,7 @@ import type { Service } from "@/lib/api/service.service";
 import { lineStage, type DeployStage, type StageDef } from "@/components/ui/deploy-stage-tracker";
 import type { StatusTone } from "@/lib/status";
 import { formatDuration } from "@/lib/time";
+import { agentOutdated } from "@/components/servers/agent";
 import { deploymentState, differsFrom, logLevel } from "./service-view";
 
 // The Deployments tab and a deployment's page (boards: Deployments,
@@ -116,7 +117,7 @@ export function deployLine(d: Deployment, now: number): string {
   const head = byWho(d);
   const took = d.started_at ? seconds(d.started_at, d.finished_at ?? new Date(now).toISOString()) : null;
   const how =
-    wasRefused(d) ? "refused by the deploy policy"
+    wasRefused(d) ? (agentOutdated(d.error_msg) ? "refused: the server’s agent is behind the panel" : "refused by the deploy policy")
     : d.status === "failed" ? (took !== null ? `failed after ${formatDuration(took)}` : "failed")
     : d.status === "building" || d.status === "pending" ? (took !== null ? `${formatDuration(took)} so far` : "queued")
     : took !== null ? formatDuration(took) : "";

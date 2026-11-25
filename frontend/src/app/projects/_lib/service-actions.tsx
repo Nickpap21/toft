@@ -2,8 +2,10 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { deployErrorToast } from "@/components/servers/agent";
 import {
   ExternalLink,
   FileText,
@@ -105,6 +107,7 @@ export function ServiceRowActions({
   /** The ⋯ menu alone, without Deploy or Follow logs (ReworkSharedServices). */
   menuOnly?: boolean;
 }) {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [confirm, setConfirm] = useState<"deploy" | "restart" | "stop" | null>(null);
   const [capacity, setCapacity] = useState<CapacityWarning | null>(null);
@@ -141,11 +144,13 @@ export function ServiceRowActions({
         setCapacity(warning);
         return;
       }
-      toast.error(
+      toast.error(...deployErrorToast(
+        err,
         err instanceof Error && err.message
           ? `${service.name}: ${err.message}`
           : `Failed to deploy ${service.name}`,
-      );
+        (href) => router.push(href),
+      ));
     },
   });
   const restart = useMutation({

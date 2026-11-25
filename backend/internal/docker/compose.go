@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -23,10 +22,16 @@ import (
 // vars and nothing else of the platform's (composespec.IsPlatformEnv): a file
 // that reads PATH, HOME, DOCKER_HOST or XDG_RUNTIME_DIR is refused. Every
 // docker compose invocation must therefore run with exactly those four
-// platform variables plus the service's env vars, locally and over SSH, or
-// compose would interpolate a different file from the one that was checked
-// (a remote SSH session adds USER, SHELL, LANG, SSH_CONNECTION and whatever
-// the remote profile exports).
+// platform variables and the two fixed BUILDX_GIT_ values below (names a
+// service can't set) in its environment, locally and over SSH, or compose
+// would interpolate a different file from the one that was checked (a remote
+// SSH session adds USER, SHELL, LANG, SSH_CONNECTION and whatever the remote
+// profile exports).
+//
+// The service's env vars are never in that environment, which compose hands
+// on to what it starts (a build). compose reads them from a file: the
+// project's .env on a server, and on the panel's host a file of the deploy's
+// own (--env-file), outside the project and so outside a build's context.
 
 // logDroppedEnv says which env vars were not handed to docker compose.
 func logDroppedEnv(dropped []string, logFn func(string)) {
@@ -38,31 +43,22 @@ func logDroppedEnv(dropped []string, logFn func(string)) {
 }
 
 // composeProcessEnv returns the environment of a local docker compose
-// process: composespec.RunEnv from getenv (each only when set) and then the
-// service's env vars (already filtered by composespec.ServiceEnv), sorted by
-// name. Nothing else of the backend's environment (its database URL, JWT
-// secret, encryption key, ...) reaches compose.
-func composeProcessEnv(getenv func(string) string, envVars map[string]string) []string {
-	env := make([]string, 0, len(composespec.RunEnv)+len(envVars))
+// process: composespec.RunEnv from getenv (each only when set). Nothing else
+// of the backend's environment (its database URL, JWT secret, encryption
+// key, ...) reaches compose.
+func composeProcessEnv(getenv func(string) string) []string {
+	env := make([]string, 0, len(composespec.RunEnv))
 	for _, key := range composespec.RunEnv {
 		if val := getenv(key); val != "" {
 			env = append(env, key+"="+val)
 		}
 	}
-	keys := make([]string, 0, len(envVars))
-	for k := range envVars {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		env = append(env, k+"="+envVars[k])
-	}
 	return env
 }
 
 // localComposeEnv is composeProcessEnv with the backend's own environment.
-func localComposeEnv(envVars map[string]string) []string {
-	return composeProcessEnv(os.Getenv, envVars)
+func localComposeEnv() []string {
+	return composeProcessEnv(os.Getenv)
 }
 
 // remoteCleanEnvPrefix runs the rest of a remote shell command with only
@@ -72,7 +68,14 @@ func localComposeEnv(envVars map[string]string) []string {
 // compose command would run on. composespec reserves that name, so no
 // compose file reads it. The quotes inside ${VAR:+"..."} keep a
 // value with spaces in one word.
+//
+// BUILDX_GIT_INFO and BUILDX_GIT_LABELS: a compose build invokes buildx,
+// which otherwise reads git from the build context — the repository's own
+// working tree. Toft needs none of it, and the context is the repository's
+// to shape, so buildx runs no git there (as localBuild does for a Dockerfile
+// build).
 const remoteCleanEnvPrefix = `env -i PATH="$PATH" HOME="$HOME" ` +
+	`BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false ` +
 	`${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ` +
 	`${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ` +
 	`${TOFT_EXEC:+"TOFT_EXEC=$TOFT_EXEC"} `
