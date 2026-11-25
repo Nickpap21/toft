@@ -6,14 +6,15 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
-## 1.2.4 (unreleased)
+## 1.2.4 (2026-11-25)
 
-Two security fixes. Every build runs on a builder of Toft's own, on a
+Three security fixes. Every build runs on a builder of Toft's own, on a
 network that reaches the internet and no private address, and an
 instance operator lists the private addresses a server's builds may
 reach. A service's variables no longer reach Docker's build tools as
-their own settings. Two migrations (0086, a new alert kind; 0087, a new
-table). A failed upgrade starts 1.2.3 again without restoring the
+their own settings. A compose stack's container can't pass for a
+service's own. Three migrations (0086 and 0088, new alert kinds; 0087,
+a new table). A failed upgrade starts 1.2.3 again without restoring the
 database. Upgrade from 1.2.3.
 
 ### Before upgrading
