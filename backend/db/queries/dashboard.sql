@@ -173,7 +173,7 @@ LEFT JOIN repository_mirrors rm ON a.kind = 'mirror_failing' AND rm.id::text = a
 LEFT JOIN repositories rr ON rr.id = rm.repository_id
 LEFT JOIN projects p ON p.id = COALESCE(e.project_id, s.project_id, rr.project_id)
 LEFT JOIN servers sv ON a.kind IN ('server_unreachable', 'disk_full', 'backup_failed', 'agent_offline', 'agent_frozen',
-    'security_updates', 'reboot_required', 'docker_advisory') AND sv.id::text = a.subject
+    'security_updates', 'reboot_required', 'docker_advisory', 'agent_outdated', 'lookalike_container') AND sv.id::text = a.subject
 LEFT JOIN shared_volumes v ON a.kind = 'volume_full' AND v.id::text = a.subject
 WHERE a.resolved_at IS NULL
   AND (COALESCE(p.org_id, s.scoped_org_id) = sqlc.arg(org_id)::uuid

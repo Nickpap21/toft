@@ -59,8 +59,9 @@ type Service struct {
 	panelShellOn bool
 	gvisorBusy   atomic.Bool // a gVisor install on the panel's server (panelgvisor.go)
 	gitOn        bool
-	advisories   *advisory.Book // Docker's advisories (panelupdates.go, D-133)
-	deploys      DeployChecker  // a deploy to the panel's server (panelupdaterun.go, D-134)
+	advisories   *advisory.Book    // Docker's advisories (panelupdates.go, D-133)
+	deploys      DeployChecker     // a deploy to the panel's server (panelupdaterun.go, D-134)
+	dests        BuildDestinations // the panel's server's build destinations (panelgvisor.go, D-170)
 	// The panel's server's run of updates (panelupdaterun.go): one start
 	// or read of it at a time, and the last read.
 	panelRunMu   sync.Mutex
@@ -420,6 +421,17 @@ func (s *Service) ListAudit(ctx context.Context, actorID string, limit int, curs
 // (agents paused on the panel, D-100), best effort as audit.
 func (s *Service) WriteAudit(ctx context.Context, actorID, action string, detail map[string]any) {
 	s.audit(ctx, actorID, action, "", detail)
+}
+
+// RecordAudit appends an instance audit row in the context's transaction
+// (dbtx) and reports a failed write: the row is saved with the change it
+// records or not at all (a build destination, D-170).
+func (s *Service) RecordAudit(ctx context.Context, actorID, action string, detail map[string]any) error {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("instance audit detail: %w", err)
+	}
+	return s.repo.WriteAudit(ctx, actorID, action, "", raw)
 }
 
 // audit appends an instance audit row, best effort: a failed write is

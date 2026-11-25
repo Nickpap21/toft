@@ -192,6 +192,17 @@ export function auditWords(
       };
     case "panel.updates_failed":
       return { label: "Updates on the panel’s server failed", note: typeof d.error === "string" ? d.error : "" };
+    // The private addresses builds may reach (D-170). A server's change is
+    // in its workspace's log too, as server.build_destination_*.
+    case "build_destination.added":
+    case "build_destination.removed": {
+      const where = typeof d.server === "string" && d.server ? d.server : "the panel’s server";
+      const what = typeof d.port === "number" ? `${String(d.address ?? "")}:${d.port}` : String(d.address ?? "");
+      return {
+        label: e.action === "build_destination.added" ? `Added a build destination on ${where}` : `Removed a build destination from ${where}`,
+        note: [what, d.note].filter((x) => typeof x === "string" && x).join(" · "),
+      };
+    }
     // The instance-wide switch; a workspace's own is agent.paused in its log.
     case "agents.paused":
       return { label: "Paused agents on this panel", note: "" };

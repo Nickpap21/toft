@@ -96,6 +96,9 @@ An untrusted preview runs walled off:
   (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`). Outbound
   TCP port 25 is blocked. The public internet is open.
 - Its memory limit is the original's plus 64 MiB for gVisor.
+- It builds on a builder of its own, with its own build cache. No
+  [build destination](/toft/guide/servers/#build-destinations) an operator
+  listed is open to it.
 
 Before an untrusted commit builds, Toft refuses a service that mounts a
 shared volume or a server path, or that builds with Nixpacks (whose

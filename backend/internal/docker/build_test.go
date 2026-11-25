@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/rollout/fakedocker"
@@ -68,10 +69,52 @@ func TestBuildArgListRefusesATagThatIsNotAServices(t *testing.T) {
 // its environment, what its DOCKER_CONFIG holds (and its config.json, as
 // login) and what its last argument
 // (a build's context) holds, and returns the folder those are written to.
+// testBuilder is the builder of the tests' orchestrators, which have no
+// host to ask for its firewall (TestTheFirewallIsAskedBeforeEveryBuild
+// does). Its memory is
+// given: a Mac has no /proc/meminfo for ensure.sh to read.
+var testBuilder = builder.Spec{Name: "toft-build", Bridge: "toft-ubuild", Memory: 1 << 30, Firewall: true, Unchecked: true}
+
+// A builder's lock is in /run, which is root's. The tests' builds run as
+// whoever runs the tests, and keep theirs in a folder of their own.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "toft-lock-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	builder.LockDir = dir
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// What a fake docker compose config prints: a stack that builds, and one
+// that only pulls.
+const (
+	stackBuilds = `{"services":{"web":{"build":{"context":"."}}}}`
+	stackPulls  = `{"services":{"web":{"image":"example/web"}}}`
+)
+
+// builderAnswers is what a fake docker's script starts with: every call
+// goes in the file calls, with its DOCKER_CONFIG; ensure.sh finds the
+// builder as it wants it; and docker compose config prints stack.
+func builderAnswers(calls, stack string) string {
+	return `echo "$DOCKER_CONFIG|$1 $2" >> ` + calls + `
+case "$1" in
+network) echo "bridge|$TOFT_BUILDER_BRIDGE|true|build|false"; exit 0;;
+container) exit 1;;
+exec) exit 0;;
+buildx) [ "$2" = build ] || exit 0;;
+esac
+case "$*" in *' config --format json') echo '` + stack + `'; exit 0;; esac
+`
+}
+
 func fakeDocker(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\n" +
+	script := "#!/bin/sh\n" + builderAnswers(dir+"/calls", stackPulls) +
 		"printf '%s\\n' \"$@\" > " + dir + "/args\n" +
 		"cat > " + dir + "/stdin\n" +
 		"env > " + dir + "/env\n" +
@@ -114,7 +157,7 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	sha := "abc"
 	var logged []string
 	source := sourceTar(t, map[string]string{"services/api/Dockerfile": "FROM scratch\n", ".dockerignore": "secret\n", "secret": "s"}, nil)
-	err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), source, "services/api", testImageTag, nil,
+	err := (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), source, "services/api", testImageTag, nil,
 		map[string]*string{"TOFT_GIT_SHA": &sha}, nil, func(l string) { logged = append(logged, l) })
 	require.NoError(t, err)
 
@@ -126,7 +169,7 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	args := strings.Split(strings.TrimSpace(read("args")), "\n")
 	buildDir := args[len(args)-1]
 	assert.Equal(t, []string{
-		"build", "-t", testImageTag, "-f", buildDir + "/services/api/Dockerfile",
+		"buildx", "build", "--builder", "toft-build", "--load", "-t", testImageTag, "-f", buildDir + "/services/api/Dockerfile",
 		"--build-arg", "TOFT_GIT_SHA=abc",
 		"--build-arg", "BUILDKIT_SYNTAX=" + dockerfileFrontend,
 		"--build-arg", "BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID,
@@ -139,6 +182,7 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	env := read("env")
 	assert.NotContains(t, env, "JWT_SECRET")
 	assert.Contains(t, env, "BUILDX_GIT_INFO=false\n", "buildx runs no git in a tenant's tree")
+	assert.Contains(t, env, "BUILDX_GIT_LABELS=false\n")
 	var cfg string
 	for _, line := range strings.Split(env, "\n") {
 		if v, ok := strings.CutPrefix(line, "DOCKER_CONFIG="); ok {
@@ -147,6 +191,18 @@ func TestLocalBuildRunsDockerBuild(t *testing.T) {
 	}
 	require.NotEmpty(t, cfg)
 	assert.NoDirExists(t, cfg, "the config directory is removed after the build")
+	// ensure.sh itself ran first, on the build's own Docker config, which
+	// is where it writes the builder's definition.
+	var calls []string
+	for _, c := range strings.Split(strings.TrimSpace(read("calls")), "\n") {
+		got, call, _ := strings.Cut(c, "|")
+		assert.Equal(t, cfg, got, call)
+		calls = append(calls, call)
+	}
+	// The builder's container, which isn't there, is looked for again once
+	// the check has the builder's lock.
+	assert.Equal(t, []string{"buildx version", "network inspect", "container inspect", "container inspect", "buildx rm", "buildx create",
+		"buildx inspect", "exec buildx_buildkit_toft-build0", "buildx build"}, calls)
 	assert.Contains(t, logged, "#1 building")
 	assert.Contains(t, logged, "Image built: "+testImageTag)
 }
@@ -170,7 +226,7 @@ func TestLocalBuildPullsWithTheServicesLogin(t *testing.T) {
 		for _, f := range []string{"login", "nixenv"} {
 			_ = os.Remove(filepath.Join(dir, f))
 		}
-		err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil),
+		err := (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil),
 			"", testImageTag, nixpacks, nil, &deployment.RegistryAuth{Server: "ghcr.io", Username: "bot", Password: "hunter2"}, func(string) {})
 		require.NoError(t, err, name)
 		assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"Ym90Omh1bnRlcjI="}}}`, read("login"), name)
@@ -189,7 +245,7 @@ func TestLocalBuildPullsWithTheServicesLogin(t *testing.T) {
 
 		for _, none := range []*deployment.RegistryAuth{nil, {Server: "ghcr.io", Username: "bot"}} {
 			_ = os.Remove(filepath.Join(dir, "login"))
-			err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil),
+			err := (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil),
 				"", testImageTag, nixpacks, nil, none, func(string) {})
 			require.NoError(t, err, name)
 			assert.Empty(t, read("login"), "%s: no password, no login", name)
@@ -213,7 +269,7 @@ func TestLocalBuildRefusesADockerfileLinkedOutOfTheTree(t *testing.T) {
 		"its folder is a link":                   {"api", map[string]string{"api": outside}},
 		"its folder is a link, to one with none": {"api", map[string]string{"api": t.TempDir()}},
 	} {
-		err := (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"main.go": "package main\n"}, tc.links),
+		err := (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"main.go": "package main\n"}, tc.links),
 			tc.baseDir, testImageTag, nil, nil, nil, func(string) {})
 		require.ErrorIs(t, err, service.ErrInvalidConfig, name)
 		assert.ErrorContains(t, err, "a link out of the repository", name)
@@ -233,7 +289,7 @@ func TestLocalNixpacksIsKeptToTheTree(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(script), 0o700))
 	t.Setenv("JWT_SECRET", "the backend's")
 	build := func(links map[string]string) error {
-		return (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, links),
+		return (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, links),
 			"", testImageTag, &deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	}
 
@@ -269,7 +325,7 @@ func TestLocalNixpacksWritesAndReadsInItsFolderOnly(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nixpacks"), []byte(script), 0o700))
 	build := func(plan string, buildArgs map[string]*string) error {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "plan"), []byte(plan), 0o600))
-		return (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, nil),
+		return (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, nil),
 			"", testImageTag, &deployment.NixpacksCommands{}, buildArgs, nil, func(string) {})
 	}
 	file := "/etc/toft/config.toml"
@@ -331,7 +387,7 @@ func TestLocalNixpacksRunsInItsSandbox(t *testing.T) {
 
 	got := map[string]string{}
 	linger := 0
-	err = (&LocalOrchestrator{}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, map[string]string{"Procfile": "package.json"}),
+	err = (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), sourceTar(t, map[string]string{"package.json": "{}"}, map[string]string{"Procfile": "package.json"}),
 		"", testImageTag, &deployment.NixpacksCommands{}, nil, nil, func(l string) {
 			if k, v, ok := strings.Cut(strings.TrimPrefix(l, "sandbox "), ": "); ok && strings.HasPrefix(l, "sandbox ") {
 				got[k] = v
@@ -569,11 +625,45 @@ func TestComposeBuildOverrideNamesOnlyBuiltServices(t *testing.T) {
 	assert.Error(t, err, "a build with no service ID has no namespace")
 }
 
+// The check of the builder refuses (Docker has no buildx; the network of
+// the builder's name is another's): on the panel's host no build and no
+// compose up runs, and the deploy fails with the check's words.
+func TestLocalRunsNothingWhenTheBuilderIsRefused(t *testing.T) {
+	for name, c := range map[string]struct{ fake, want string }{
+		"no buildx":         {`[ "$1 $2" = "buildx version" ] && exit 1`, "the builder toft-build: Docker's buildx plugin is missing"},
+		"another's network": {`[ "$1 $2" = "network inspect" ] && { echo "bridge|br-other|true|build|false"; exit 0; }`, "the builder toft-build: The network toft-build on this server isn't the one Toft makes for builds"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bin := t.TempDir()
+			script := "#!/bin/sh\necho \"$@\" >> " + bin + "/args\n" + c.fake + "\n" + builderAnswers(bin+"/calls", stackBuilds)
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o700))
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			source := sourceTar(t, map[string]string{"Dockerfile": "FROM scratch\n"}, nil)
+			err := (&LocalOrchestrator{builder: testBuilder}).BuildFromArchive(context.Background(), source, "", testImageTag, nil, nil, nil, func(string) {})
+			require.ErrorContains(t, err, c.want)
+
+			o := &LocalOrchestrator{dataDir: t.TempDir(), dockerClient: fakedocker.New(t).Client(), log: zap.NewNop(), builder: testBuilder}
+			err = o.RunCompose(context.Background(), "dep-1", testServiceID, "web", "services: {web: {build: .}}\n",
+				nil, nil, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, rollout.Hooks{Log: func(string) {}})
+			require.ErrorContains(t, err, c.want)
+
+			raw, err := os.ReadFile(filepath.Join(bin, "args"))
+			require.NoError(t, err)
+			ran := strings.Split(strings.TrimSpace(string(raw)), "\n")
+			require.Contains(t, ran, "buildx version", "the check ran")
+			for _, line := range ran {
+				assert.False(t, strings.HasPrefix(line, "buildx build") || strings.Contains(line, " up "), "ran after the refusal: %s", line)
+			}
+		})
+	}
+}
+
 // A compose deploy on the panel's host with credentials never logs the
 // host in: its up runs with a docker config of its own, removed afterwards.
 func TestLocalComposeKeepsItsCredentialsToItself(t *testing.T) {
 	bin := t.TempDir()
-	script := "#!/bin/sh\necho \"$@\" >> " + bin + "/args\n" +
+	script := "#!/bin/sh\necho \"$@\" >> " + bin + "/args\n" + builderAnswers(bin+"/calls", stackPulls) +
 		"case \"$*\" in *' up --no-start '*) echo \"$DOCKER_CONFIG\" > " + bin + "/dir; cat \"$DOCKER_CONFIG/config.json\" > " + bin + "/config; exit 1;; esac\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o700))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

@@ -69,7 +69,7 @@ func TestRemoteBuildsRefuseALinkOutOfTheBuildFolder(t *testing.T) {
 	_, err := o.BuildFromGitNixpacks(ctx, "https://example.com/r.git", "main", "app", "img:1", deployment.NixpacksCommands{}, nil, nil, log)
 	assert.ErrorIs(t, err, service.ErrInvalidConfig, "BuildFromGitNixpacks")
 	for _, c := range h.recorded() {
-		assert.NotContains(t, c.cmd, "docker build", "a build ran")
+		assert.NotContains(t, c.cmd, "buildx build", "a build ran")
 		assert.NotContains(t, c.cmd, "nixpacks build", "a build ran")
 	}
 }

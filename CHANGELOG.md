@@ -6,7 +6,321 @@ Releases, with the install script and the signed agent binaries, are on
 [GitHub](https://github.com/Nickpap21/toft/releases). A version marked "not
 published" was tagged, but its release run failed before publishing anything.
 
-## 1.2.3 (2026-11-21)
+## 1.2.4 (unreleased)
+
+Two security fixes. Every build runs on a builder of Toft's own, on a
+network that reaches the internet and no private address, and an
+instance operator lists the private addresses a server's builds may
+reach. A service's variables no longer reach Docker's build tools as
+their own settings. Two migrations (0086, a new alert kind; 0087, a new
+table). A failed upgrade starts 1.2.3 again without restoring the
+database. Upgrade from 1.2.3.
+
+### Before upgrading
+
+- **A build reaches no private address.** A build's `RUN` steps could
+  reach `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
+  `100.64.0.0/10`, and what Docker downloads for a build (a base image,
+  an `ADD` of a URL, a remote build context) came from the server's own
+  network. Neither does now. A build that needs a registry, a package
+  mirror or another server on a private network fails at its first
+  deploy after the upgrade (a timeout in its log) until an instance
+  operator adds the address under **Build destinations**: on the
+  server's page under Settings, or under Instance → Server for the
+  panel's own server (the Servers guide, "What a build can reach").
+  A registry on the server's own loopback can't be listed: give it an
+  address builds can reach, or push the image to another registry.
+- **A build's base image comes from a registry.** A `FROM` (or
+  `COPY --from`) that names an image existing only in the server's
+  Docker (built or loaded there, never pushed) no longer builds; the
+  log says `pull access denied` for it. Push the image to a registry
+  and give the service that registry's login; or, in a compose stack
+  where one service builds on another's image, name it as a build
+  context (`additional_contexts: {base: "service:a"}` and `FROM base`).
+  Nothing Toft generates is affected.
+- **Compose deploys to a server connected through the agent are refused
+  until its agent runs 1.2.4** (409 `agent_outdated`). The panel
+  upgrades an agent when it reconnects after the upgrade. Where that
+  didn't take, the alert `agent_outdated` opens, Home's **Needs you**
+  has an item for the workspace's owners and the instance's operators,
+  and the server's Connection card says why and has **Offer the upgrade
+  again**.
+- **A build can use half of its server's memory**, or of what the
+  panel's own server has for apps (1 GiB where that half is less). A
+  build that needs more is stopped, where it used to run or take the
+  server with it.
+- **A server needs Docker's buildx plugin, and to pull `moby/buildkit`
+  from Docker Hub.** A Docker that Toft installed has the plugin. Where
+  Docker was there before Toft, check with `docker buildx version` and
+  install `docker-buildx-plugin` if it fails: a build on a server
+  without it fails with that sentence. The first build of each service
+  after the upgrade starts with an empty cache.
+- **A build can't send mail**: connections to TCP port 25 from a build
+  are dropped.
+- **Traefik's dashboard on `127.0.0.1:8081` asks for the dashboard's
+  password**, the one in `TRAEFIK_DASHBOARD_USERS` that
+  `traefik.<your domain>` already asks for, and answers 401 to everyone
+  while none is set (the installer's default). To use it through an SSH
+  tunnel, set one (the Install guide, "Firewall").
+  Traefik's metrics port (9100) is no longer published on the panel's
+  server: the panel reads it over Docker's network, and nothing on the
+  host can.
+- **A compose file whose secret or config takes `PATH`, `HOME`,
+  `DOCKER_HOST` or `XDG_RUNTIME_DIR` as its `environment:` is refused**
+  on its next save or deploy (`reserved_env`, which no exception
+  grants). Docker compose runs with those four, the platform's own, so
+  such a secret held the platform's value, not the service's variable of
+  that name. Rename the variable in the service and in the file.
+- **A compose file whose `container_name` starts with `toft` or
+  `buildx_buildkit_` is refused** on its next save or deploy
+  (`reserved_name`, which no exception grants), as one starting with
+  `paas-` already was. Those are the names of Toft's own containers and
+  of its builders'. Rename the container, or remove `container_name`.
+- **A `container_name` is letters, digits, `_`, `.` and `-`, starting
+  with a letter or a digit**, the names Docker itself keeps. Anything
+  else is refused on the file's next save or deploy (`reserved_name`;
+  a one-character name was `compose_invalid` already):
+  Docker also took a name with a leading `/` and dropped the slash, so
+  `/paas-…` passed the rule above and became a reserved name. The
+  builders' networks, `toft-build` and `toft-build-untrusted`, are
+  refused the same way as a `network_mode` and as a network's name, in
+  every network mode.
+- **A network is given by its name, and its bridge is Docker's to
+  name.** Refused on the file's next save or deploy (`reserved_name`),
+  in every network mode: a `network_mode` made only of the characters
+  `0-9` and `a-f`, in either case (Docker reads it as a network's ID or
+  the start of one, so `network_mode: cafe` is refused too; the default
+  network mode already took only `none` and `service:<name>`), a
+  network whose name is 64 such characters, and a network whose
+  `com.docker.network.bridge.name` starts with `toft-`. Under
+  `TOFT_APP_NETWORKS=legacy` these reached a builder's network past its
+  name, or took a builder's bridge name before the builder did.
+- **Nothing is built on a server where Toft's firewall isn't loaded.**
+  Before every build, of a Dockerfile, with Nixpacks or of a compose
+  stack, Toft asks the server for its firewall's rules (`nft list chain
+  ip toft from_untrusted`), and a build fails with "Toft's rules aren't
+  loaded on it" where they are missing: a server whose provisioning
+  never installed the firewall (its Firewall stage failed), one whose
+  `toft-firewall` unit is stopped or failed, one without `nft`. Deploys
+  of an image aren't affected. To
+  check a server before upgrading, run that command on it as root; where
+  it prints an error, Provision the server again from its page (on the
+  panel's own server, `toft upgrade` loads the rules).
+
+### After upgrading
+
+- **Check the agent's version on every server connected through the
+  agent** (above).
+- **Add the private addresses your builds need** (above), then deploy
+  the services that use them.
+- **Each Traefik that reads container labels and that Toft started
+  restarts once**, to pass over a compose container that carries a
+  service's label (Security, below): on a server connected over SSH
+  within 5 minutes of the upgrade, as a provisioning run, and its routes
+  pause for a few seconds; on the panel's server with the upgrade. A
+  server whose last provisioning run failed gets it with its next
+  **Re-provision**. A Traefik you ran before Toft and Toft adopted is
+  never changed: the constraint is in Security, below, to add yourself.
+- **Remove a compose container that carries a service's label** when
+  **Needs you** names one (Security, below). 1.2.4 serves no route from
+  it, but doesn't remove it.
+- **To go back to 1.2.3 by hand, delete the alerts of 1.2.4's two new
+  kinds first**, open or resolved, in the database shell (the Operating
+  guide):
+
+  ```sql
+  DELETE FROM alerts WHERE kind IN ('agent_outdated', 'lookalike_container');
+  ```
+
+  While one is kept, `toft upgrade --to v1.2.3 --force` stops at its
+  schema step ("Migration failed; v1.2.4 keeps running"): 1.2.3's schema
+  doesn't know the kinds. An upgrade that fails goes back by itself and
+  needs none of this. On 1.2.3 builds run on Docker's own
+  BuildKit again and the build destinations open nothing; they are kept
+  for the next upgrade.
+
+### Security
+
+- **A build fetches nothing from its server's own network** (High,
+  GHSA-8p89-m74v-fqqv). Toft built with Docker's built-in BuildKit,
+  which downloads a build's sources (an `ADD` of a URL or a git
+  repository, a remote build context, a base image) in the Docker
+  daemon's network, the server's own, where the host firewall never
+  saw them: a build could read what listens on the server's loopback,
+  the cloud metadata address and its private network. Every build, of
+  a Dockerfile, with Nixpacks or of a compose stack, on the panel's
+  server, over SSH and in the agent, now runs on a BuildKit container
+  Toft makes on each server (`toft-build`), on a network of its own
+  that the host firewall treats as it treats an untrusted preview's:
+  the internet, and no loopback, no link-local address, no private
+  address, and of the server itself only Traefik (TCP 80 and 443) and
+  DNS. Port 53 stays open to any address, as it is for every container.
+  Downloads and `RUN` steps both go through it. A test fails on any
+  build command written outside the builder's package.
+- **A preview on an untrusted network builds on a second builder**
+  (`toft-build-untrusted`), with a cache of its own. The operator's
+  list never opens anything to it.
+- **A service's variables and a compose build secret can't set the
+  build tools' own settings** (High, GHSA-q96x-mm3m-r8f3). On the
+  panel's server `docker compose` ran with the service's variables in
+  its own environment, which it hands to the build it starts, and on
+  every server a compose build secret that takes a variable as its
+  `environment:` put that variable there. A member who sets a compose
+  service's variables and can push to its repository could replace the
+  Dockerfile frontend Toft pins, and on the panel's server read the
+  registry login stored for that service through a proxy they named.
+  Compose now reads a service's variables from a file of the deploy's
+  own on every kind of host, a build secret can't take a variable the
+  docker CLI, buildx or the Go runtime read (`reserved_env`), and a
+  secret or config can't take one of the four variables compose runs
+  with (above).
+- **A compose stack's container can't pass for a service's own**
+  (Critical, 9.0, `CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:H/I:H/A:H`,
+  GHSA-x5xg-mqq8-hp7f). Critical for the routes: on the panel's server a
+  member who can deploy a compose stack could take the panel's own
+  hostname, and an operator who then signed in, or whose open session
+  called the API, gave their password and tokens to the stack's
+  container under the panel's certificate. Toft knew a service's own
+  container, a slot, by the `paas.service_id` label together with a
+  slot's name, and a compose
+  stack could make a container with both: the label from its image, and
+  the name either as `container_name: "/paas-…"` (names starting with
+  `paas-` were refused, but Docker drops a leading slash) or, for a
+  service named `svc`, as compose's own name for the container, which
+  has the shape of an old slot name.
+  - **Routes.** After creating a stack's containers Toft takes the stack
+    down if one carries a `traefik.*` label Toft didn't set, which can
+    only come from its image. That check skipped a container it took for
+    a slot, so a stack could keep a router from the image of its routed
+    service when that image wasn't also checked before the start (one
+    built in the deploy, or one the check couldn't pull), and answer for
+    any hostname its server serves, the panel's own on the panel's
+    server. On the panel's server and on servers connected over SSH,
+    Traefik reads the container's labels itself. On a server connected
+    through the agent, the agent took such a container for the service's
+    slot and wrote its routers, named after the service, into the
+    service's route file.
+  - **Another service's commands and log.** With another service's ID in
+    the label, a post-deploy command, a command an operator runs in the
+    service and an admin-password reset could go to the look-alike, the
+    live log could come from it, and restart, stop and the service's
+    status counted it.
+
+  Workspaces share only the panel's server; inside a workspace this
+  crossed projects. Now a slot is a container with the label, a slot's
+  name and no compose project: compose puts its project label on every
+  container it makes, and Toft blanks that label on its own. Every
+  lookup of a service's container by its label uses that one test, a
+  lookup by a slot's name takes no container compose made, a compose
+  deploy's post-deploy command with no container of the service to run
+  in fails instead of looking for one by name, the check of a stack's
+  routes passes over no container of the stack, and a
+  `container_name` is held to Docker's own pattern before the reserved
+  names are compared (above).
+
+  A container started this way before the upgrade keeps running, and
+  1.2.4 takes its routes away without anyone asking:
+  - Where Traefik reads container labels (the panel's server, servers
+    connected over SSH), it now has a constraint and builds no route
+    from a container that carries a service's label and a compose
+    project. The panel's Traefik gets it with the upgrade, a server's
+    within 5 minutes of it (After upgrading, above).
+  - On a server connected through the agent, the agent writes no route
+    file from such a container and removes one it wrote before, when
+    1.2.4's agent first starts.
+  - The alert **Compose container with a service's label** names each
+    one in **Needs you**, per server, for the workspace's owners and
+    instance operators. Toft asks every server with the disk check
+    (every 5 minutes) and closes the alert when none is left. Nothing is
+    removed for you.
+
+  Toft makes no container with a service's label and a compose project,
+  so nothing of its own is passed over. Every other container's
+  `traefik.*` labels were already held to what Toft wrote when it was
+  deployed. A Traefik Toft adopted isn't Toft's to restart; its
+  constraint is
+  `--providers.docker.constraints=!(LabelRegex("paas.service_id", ".+") && LabelRegex("com.docker.compose.project", ".+"))`.
+
+  To look for one on a server yourself, before or after the upgrade:
+
+  ```sh
+  docker ps -a --filter label=paas.service_id --filter label=com.docker.compose.project \
+    --format '{{.Names}}\t{{.Label "paas.service_id"}}\t{{.Label "com.docker.compose.project"}}' \
+    | awk -F'\t' '$2 != "" && $3 != ""'
+  ```
+
+  The last part matters: without it the list also has Toft's own
+  containers whose image carried a compose label, which Toft set to
+  nothing. Toft never makes a container with a service's label and a
+  compose project, so every line printed is one; the last column is the
+  compose project of the stack that made it (`paas-<service name>-<first
+  8 of the service's ID>`). Delete that service in the panel, or remove
+  the container on the server (`docker rm -f <name>`).
+- **Traefik's dashboard and metrics on the panel's server are closed to
+  the host's loopback** (above): they answered without a password to
+  anything that could send a request from the server.
+- **Nothing is built where the host firewall isn't loaded** (above),
+  and a host that can't be asked builds nothing.
+- **Not changed: gorilla/websocket v1.5.3**, its newest release, which
+  GO-2026-6278 (GHSA-w67g-5rqw-f597) lists: a client's frame mask key
+  comes from `math/rand` (1.5.1 and 1.5.2 took it from `crypto/rand`;
+  1.5.3 went back). Toft's binaries aren't affected in practice: Go
+  has seeded that generator randomly since 1.20, and Toft's one
+  WebSocket client is a server's agent connecting to its panel, where
+  the mask key protects nothing: it keeps a browser's page from
+  choosing the bytes a caching proxy sees, and the agent's frames
+  carry an SSH connection. Toft's vulnerability check lists it as
+  accepted until a release after 1.5.3 has the fix.
+
+### Builds
+
+- **Build destinations.** An instance operator lists, for each server,
+  the private addresses its builds may reach: an IPv4 address or a
+  CIDR, with one TCP port or all of them, at most 100 a server
+  (`GET`/`POST /servers/{serverID}/build-destinations` and
+  `/instance/build-destinations`, `DELETE …/{destinationID}`; operator,
+  session and password). Refused whatever the operator asks: loopback,
+  link-local and public addresses, port 25, the panel's addresses, the
+  server's own, and its Docker's networks and address pools. A change
+  is saved only when the server took the list; each one is in the
+  instance's audit log and the workspace's. The list is a chain of the
+  host firewall, and every server's saved list is written to it again
+  two minutes after the panel starts and every hour, so a list edited
+  on a server is the saved one again within the hour.
+- **A build is the first thing stopped when a server runs out of
+  memory**, before the panel or an app.
+- **A build or a pull run again after a lost connection ends its first
+  run first.** When that can't be confirmed the step isn't run again
+  and the deploy fails with the lost connection.
+- **The disk advisor measures and clears the builders' caches.** The
+  build cache limit holds the builders' caches between them, the
+  untrusted previews' first, and Docker's own cache gets what they
+  left of it.
+- `toft upgrade`, `toft rotate` and a second run of `install.sh` start
+  the panel from the release's images and never build one.
+- `TOFT_DEV_BUILDS_WITHOUT_FIREWALL=on` lets a development stack build
+  on a host without the firewall. The backend doesn't start with it
+  where `ENV=production` or `TOFT_APPS_SLICE` is set.
+
+### Servers
+
+- **The Connection card says why an agent is behind the panel** (it
+  refused the upgrade, with its own words; it took the version and
+  came back as the old one; the panel has no build for its
+  architecture) and whether compose deploys are refused.
+  `POST /servers/{serverID}/agent/upgrade` offers the version again
+  (owners and operators, audited; 202, one offer at a time per server).
+- The Docker advisories Toft ships with include the one Docker
+  published on 2026-11-24 (GHSA-vfmq-r373-x89f, medium, fixed in Docker
+  29.10.1). A panel that reaches GitHub had it from its daily read.
+
+### Fixes
+
+- **A compose stack that builds its images on a server reused the image
+  an earlier deploy had built, and could deploy old code.** It is built
+  on every deploy now.
+
+## 1.2.3 (2026-11-23)
 
 A security fix: a build could run git among the files of the repository
 it built. No migration: a failed upgrade starts 1.2.2 again without

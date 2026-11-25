@@ -202,7 +202,7 @@ func TestUpdatesHealth(t *testing.T) {
 	u = base()
 	u.Docker.Version = "29.4.3"
 	u.Docker.Advisories = advisory.New("", zap.NewNop()).Affecting("29.4.3")
-	assert.Equal(t, "Docker 29.4.3 is affected by 6 published security advisories, the worst high: iptables rules for overlay-network encryption are not reinstalled after a firewalld reload (GHSA-6jhp-7446-hf7f, fixed in 29.9.3)", u.Health(now).Docker)
+	assert.Equal(t, "Docker 29.4.3 is affected by 7 published security advisories, the worst high: iptables rules for overlay-network encryption are not reinstalled after a firewalld reload (GHSA-6jhp-7446-hf7f, fixed in 29.9.3)", u.Health(now).Docker)
 
 	assert.False(t, (*HostUpdates)(nil).Health(now).Known)
 	assert.False(t, (&HostUpdates{Error: "The read couldn't run: dial"}).Health(now).Known, "no read that worked")

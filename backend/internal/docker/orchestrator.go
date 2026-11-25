@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/composespec"
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/domain"
@@ -27,6 +28,7 @@ import (
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/Nickpap21/toft/backend/pkg/gitcred"
 	"github.com/Nickpap21/toft/backend/pkg/lines"
+	"github.com/Nickpap21/toft/backend/pkg/reservation"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -57,6 +59,21 @@ type LocalOrchestrator struct {
 	// latencyCause is why the last read of latencyURL failed, "" when it
 	// did not: a failure is logged when its cause changes, not every minute.
 	latencyCause atomic.Value
+	// builder is the builder this host's builds run on.
+	builder builder.Spec
+	// onHost is RunOnHost where it is nil: a test's answer in its place.
+	onHost func(ctx context.Context, argv []string) (string, error)
+}
+
+// buildHost is where this host's builds run: their commands in the
+// backend's container, and what a build asks of the host itself through the
+// host helper.
+func (o *LocalOrchestrator) buildHost(dir string, logFn func(string)) localHost {
+	onHost := o.onHost
+	if onHost == nil {
+		onHost = o.RunOnHost
+	}
+	return localHost{dir: dir, log: logFn, onHost: onHost}
 }
 
 // NewLocalOrchestrator creates a LocalOrchestrator connected to the local
@@ -71,8 +88,30 @@ func NewLocalOrchestrator(log *zap.Logger, net rollout.NetConfig, dataDir string
 		return nil, fmt.Errorf("connect to local Docker daemon: %w", err)
 	}
 	net = net.WithDefaults()
-	return &LocalOrchestrator{dockerClient: dc, log: log, net: net, dataDir: dataDir, helperOwner: rand.Text(),
+	return &LocalOrchestrator{dockerClient: dc, log: log, net: net, dataDir: dataDir, helperOwner: rand.Text(), builder: builder.Trusted,
 		latencyURL: "http://" + net.ProxyContainer + ":9100/metrics"}, nil
+}
+
+// forDeploy is o for one deploy's pipeline, its builds on spec. It reads no
+// latency: the collector does, on o.
+//
+// On the panel's server (the apps' slice is set) the builder is in that
+// slice with half of the apps' share of memory, so a build takes from the
+// apps and never from the panel. Where that half is under 1 GiB it has
+// 1 GiB in the builders' own slice, whose limit is 1 GiB for the trusted
+// and the untrusted builder together (D-170).
+func (o *LocalOrchestrator) forDeploy(ctx context.Context, spec builder.Spec) (*LocalOrchestrator, error) {
+	if o.net.AppsSlice != "" {
+		cores, mem, _, _, err := o.HostSize(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("size the builder: %w", err)
+		}
+		_, apps := reservation.Apps(cores, mem)
+		if spec.Memory, spec.Cgroup = apps/2, o.net.AppsSlice; spec.Memory < reservation.BuildsMemory {
+			spec.Memory, spec.Cgroup = reservation.BuildsMemory, reservation.BuildsSlice
+		}
+	}
+	return &LocalOrchestrator{dockerClient: o.dockerClient, log: o.log, net: o.net, dataDir: o.dataDir, helperOwner: o.helperOwner, builder: spec}, nil
 }
 
 // BuildFromGit clones repoURL@branch locally, then builds a Docker image from the result.
@@ -126,7 +165,7 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 			dockerfilePath = filepath.Join(filepath.Clean(strings.TrimPrefix(baseDir, "/")), "Dockerfile")
 		}
 		logFn(fmt.Sprintf("Building image %s...", imageTag))
-		return localBuild(ctx, tmpDir, dockerfilePath, imageTag, buildArgs, auth, logFn)
+		return o.localBuild(ctx, tmpDir, dockerfilePath, imageTag, buildArgs, auth, logFn)
 	}
 	buildDir, err := service.JoinBaseDirectory(tmpDir, baseDir)
 	if err != nil {
@@ -136,7 +175,7 @@ func (o *LocalOrchestrator) BuildFromArchive(ctx context.Context, source io.Read
 		return err
 	}
 	logFn(fmt.Sprintf("Building %s with nixpacks...", imageTag))
-	return localNixpacks(ctx, buildDir, imageTag, *nixpacks, buildArgs, auth, logFn)
+	return o.localNixpacks(ctx, buildDir, imageTag, *nixpacks, buildArgs, auth, logFn)
 }
 
 // BuildFromGitNixpacks clones repoURL@branch locally, then builds via nixpacks.
@@ -158,7 +197,7 @@ func (o *LocalOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, b
 	}
 
 	logFn(fmt.Sprintf("[2/2] Building %s with nixpacks...", imageTag))
-	return commit, localNixpacks(ctx, buildDir, imageTag, cmds, buildArgs, auth, logFn)
+	return commit, o.localNixpacks(ctx, buildDir, imageTag, cmds, buildArgs, auth, logFn)
 }
 
 // Rollout runs a single-container deploy's rollout on the local Docker
@@ -236,8 +275,8 @@ func (o *LocalOrchestrator) LogsSince(ctx context.Context, containerName string,
 }
 
 // RunCompose writes the compose file to a new release directory of the
-// service (newComposeRelease) and runs docker compose with the service's env vars as its process environment
-// (for ${VAR} interpolation) and nothing of the backend's own environment but
+// service (newComposeRelease) and runs docker compose with the service's env vars in a file of the deploy's own
+// (localEnvFile, for ${VAR} interpolation) and nothing of the backend's own environment but
 // PATH, HOME, DOCKER_HOST and XDG_RUNTIME_DIR (localCompose). route, when not
 // nil, adds the platform's routing override file (composeRouteOverride).
 func (o *LocalOrchestrator) RunCompose(ctx context.Context, deploymentID string, serviceID, serviceName, composeContent string, envVars map[string]string, route *deployment.ComposeRoute, nets deployment.ComposeNetworks, limits map[string]deployment.ComposeLimit, auth *deployment.RegistryAuth, hooks rollout.Hooks) error {
@@ -394,6 +433,12 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 
 	serviceEnv, dropped := composespec.ServiceEnv(envVars)
 	logDroppedEnv(dropped, logFn)
+	envFile, cleanupEnv, err := localEnvFile(projectDir, serviceEnv, logFn)
+	if err != nil {
+		return err
+	}
+	defer cleanupEnv()
+	project := []string{"--env-file", envFile, "--project-directory", projectDir}
 
 	if !nets.Isolated {
 		// Legacy: routed services join the control plane's network.
@@ -426,9 +471,8 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 		if proj == projectName {
 			continue
 		}
-		down := localCompose(ctx, projectDir, serviceEnv,
-			"--project-directory", projectDir, "-f", composeFile, "--project-name", proj,
-			"down", "--remove-orphans")
+		down := localCompose(ctx, projectDir, append(slices.Clone(project), "-f", composeFile, "--project-name", proj,
+			"down", "--remove-orphans")...)
 		down.Run() //nolint:errcheck — not a failure if nothing to down
 	}
 
@@ -437,9 +481,8 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 		// Refuse an image that routes itself before up replaces anything:
 		// pull the routed service's image and read its labels. A service
 		// built during up is left to the check after it.
-		base := append([]string{"--project-directory", projectDir}, files...)
-		base = append(base, "--project-name", projectName)
-		out, err := localCompose(ctx, projectDir, serviceEnv, append(base, "config", "--images", route.Service)...).Output()
+		base := slices.Concat(project, files, []string{"--project-name", projectName})
+		out, err := localCompose(ctx, projectDir, append(base, "config", "--images", route.Service)...).Output()
 		pull := func(image string) error {
 			cmd := exec.CommandContext(ctx, "docker", "pull", "--quiet", image)
 			cmd.Env = append(os.Environ(), dockerCfg...)
@@ -455,13 +498,7 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 	}
 
 	logFn(fmt.Sprintf("Running docker compose up... (%d vars)", len(serviceEnv)))
-	base := append([]string{"--project-directory", projectDir}, files...)
-	base = append(base, "--project-name", projectName)
-	run := func(args ...string) error {
-		cmd := localCompose(ctx, projectDir, serviceEnv, append(slices.Clone(base), args...)...)
-		cmd.Env = append(cmd.Env, dockerCfg...)
-		return runStream(cmd, logFn)
-	}
+	base := slices.Concat(project, files, []string{"--project-name", projectName})
 	// The stack's routes are checked on its created containers, which
 	// carry their images' labels, before any starts, and again after up,
 	// failed or not: a container up started before failing must not keep
@@ -471,8 +508,8 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 		defer cancel()
 		if err := rollout.CheckStackRoutes(cctx, o.dockerClient, projectName, routedService(route), allowed); err != nil {
 			logFn("✗ " + err.Error())
-			down := localCompose(context.WithoutCancel(ctx), projectDir, serviceEnv,
-				"--project-directory", projectDir, "-f", composeFile, "--project-name", projectName, "down", "--remove-orphans")
+			down := localCompose(context.WithoutCancel(ctx), projectDir,
+				append(slices.Clone(project), "-f", composeFile, "--project-name", projectName, "down", "--remove-orphans")...)
 			_ = down.Run()
 			return err
 		}
@@ -481,14 +518,17 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 	// A failed create (a pull or a build) started nothing and recreated
 	// nothing yet: the running stack is untouched, and checking its old
 	// containers against the new routes would take it down.
-	if err := run("up", "--no-start", "--pull", "always", "--build", "--remove-orphans"); err != nil {
+	host := o.buildHost(projectDir, logFn)
+	if err := builder.FirstUp(ctx, host, o.builder, cfg, base, []string{"--no-start", "--pull", "always", "--remove-orphans"}, logFn); err != nil {
 		return fmt.Errorf("compose up: %w", err)
 	}
 	if err := check(); err != nil {
 		return err
 	}
 	// Nothing pulled, built or recreated: what starts is what was checked.
-	upErr := run("up", "-d", "--pull", "never", "--no-build", "--no-recreate", "--remove-orphans")
+	up := localCompose(ctx, projectDir, append(slices.Clone(base), "up", "-d", "--pull", "never", "--no-build", "--no-recreate", "--remove-orphans")...)
+	up.Env = append(up.Env, dockerCfg...)
+	upErr := runStream(up, logFn)
 	if err := check(); err != nil {
 		return err
 	}
@@ -499,26 +539,33 @@ func (o *LocalOrchestrator) composeUp(ctx context.Context, serviceID, serviceNam
 	return nil
 }
 
+// localEnvFile writes the file compose reads a deploy's variables from on
+// the panel's host (--env-file): serviceEnv (already filtered by
+// composespec.ServiceEnv) above the repository's own .env in projectDir
+// (composespec.LocalEnv). compose's process, whose environment a build it
+// starts gets, has neither; and the file is outside the project, so no
+// build's context holds it.
+func localEnvFile(projectDir string, serviceEnv map[string]string, logFn func(string)) (string, func(), error) {
+	env, dropped, err := composespec.LocalEnv(projectDir, serviceEnv)
+	if err != nil {
+		return "", nil, err
+	}
+	logDroppedEnv(dropped, logFn)
+	content, err := composespec.DotEnvFile(env)
+	if err != nil {
+		return "", nil, err
+	}
+	return writeLocalOverride(overrideFile{name: "service.env", content: content})
+}
+
 // localCompose returns a `docker compose <args>` command that runs in dir
 // with the clean environment of composeProcessEnv: PATH, HOME, DOCKER_HOST
-// and XDG_RUNTIME_DIR from the backend's environment plus serviceEnv (already
-// filtered by composespec.ServiceEnv), and nothing else. Every local docker
-// compose invocation goes through it, so compose interpolates with exactly
-// what the deploy policy checked.
-func localCompose(ctx context.Context, dir string, serviceEnv map[string]string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose"}, args...)...)
-	// Cancelled (the deploy's time limit, D-125), compose gets to stop what
-	// it started rather than being killed mid-way.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 30 * time.Second
-	cmd.Dir = dir
-	cmd.Env = localComposeEnv(serviceEnv) // never nil: a nil Env would inherit everything
-	// A compose build invokes buildx, which otherwise reads git from the
-	// build context — the repository's own working tree. Toft needs none of
-	// it, and the context is the repository's to shape, so buildx runs no
-	// git there (as localBuild does for a Dockerfile build).
-	cmd.Env = append(cmd.Env, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false")
-	return cmd
+// and XDG_RUNTIME_DIR from the backend's environment, and nothing else.
+// Every local docker compose invocation is localHost's, here or through
+// builder.FirstUp, and a deploy's reads localEnvFile, so compose
+// interpolates with exactly what the deploy policy checked.
+func localCompose(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	return localHost{dir: dir}.command(ctx, nil, "docker", append([]string{"compose"}, args...))
 }
 
 // writeLocalOverride writes a platform override file into a private random
@@ -614,7 +661,7 @@ func (o *LocalOrchestrator) StopCompose(ctx context.Context, serviceID, serviceN
 	// by project name, from an empty directory: the stack's file isn't read,
 	// so a ${VAR:?…} its variables no longer fill can't stop it.
 	for _, proj := range rollout.ComposeProjectNames(serviceID, serviceName) {
-		cmd := localCompose(ctx, tmpDir, nil,
+		cmd := localCompose(ctx, tmpDir,
 			"--project-directory", tmpDir,
 			"--project-name", proj,
 			"down", "--remove-orphans",
@@ -754,21 +801,21 @@ func discoverVolumes(ctx context.Context, dc *client.Client, serviceID string) (
 // in the Dockerfile can expose them to RUN steps (e.g. NEXT_PUBLIC_* in Next.js).
 func (o *LocalOrchestrator) buildImage(ctx context.Context, buildContextDir, dockerfilePath, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	o.log.Info("building image", zap.String("tag", imageTag), zap.String("context", buildContextDir), zap.String("dockerfile", dockerfilePath))
-	return localBuild(ctx, buildContextDir, dockerfilePath, imageTag, buildArgs, auth, logFn)
+	return o.localBuild(ctx, buildContextDir, dockerfilePath, imageTag, buildArgs, auth, logFn)
 }
 
 // localBuild runs docker build of imageTag on the local Docker, with the
 // folder dir as the build context (so the CLI applies its .dockerignore)
 // and the Dockerfile at dockerfilePath inside it, which a link in the
 // repository can't take out of it: the CLI reads the Dockerfile on this
-// host. BuildKit where the CLI has buildx (the backend's image does),
-// the classic builder where it doesn't. buildArgs are followed by the two
+// host. It runs on o's builder (builder.Run), never on Docker's own.
+// buildArgs are followed by the two
 // arguments that keep the build to its service (buildArgList). The build
 // has the clean environment compose gets and a Docker config of its own,
 // holding auth (the service's registry login) or nothing: a registry login
 // on this host is not this build's to pull with. The CLI hands the login
 // to the builder for its pulls only; no RUN step sees it.
-func localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
+func (o *LocalOrchestrator) localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	kvs, err := buildArgList(imageTag, buildArgs)
 	if err != nil {
 		return err
@@ -798,19 +845,11 @@ func localBuild(ctx context.Context, dir, dockerfilePath, imageTag string, build
 		return err
 	}
 	defer cleanup()
-	args := []string{"build", "-t", imageTag, "-f", dockerfile}
+	args := []string{"-t", imageTag, "-f", dockerfile}
 	for _, kv := range kvs {
 		args = append(args, "--build-arg", kv)
 	}
-	cmd := exec.CommandContext(ctx, "docker", append(args, dir)...)
-	// BUILDX_GIT_INFO: buildx doesn't run git in the context, which is the
-	// repository's to shape.
-	cmd.Env = append(localComposeEnv(nil), "DOCKER_CONFIG="+cfg, "BUILDX_GIT_INFO=false")
-	// Cancelled (a deleted service, the deploy's time limit), the CLI gets
-	// to tell the builder to stop.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 30 * time.Second
-	if err := runStream(cmd, logFn); err != nil {
+	if err := builder.Run(ctx, o.buildHost("", logFn), o.builder, cfg, builder.Build(append(args, dir)...), logFn); err != nil {
 		return fmt.Errorf("docker build: %w", err)
 	}
 	logFn(fmt.Sprintf("Image built: %s", imageTag))
@@ -843,7 +882,7 @@ func dockerConfigDir(config []byte) (string, func(), error) {
 // localNixpacks builds imageTag from dir with Nixpacks, as
 // RemoteOrchestrator.nixpacksBuild does on a server: nixpacks plans and
 // writes the Dockerfile, localBuild runs it.
-func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
+func (o *LocalOrchestrator) localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.NixpacksCommands, buildArgs map[string]*string, auth *deployment.RegistryAuth, logFn func(string)) error {
 	serviceID, err := builtService(imageTag)
 	if err != nil {
 		return err
@@ -864,7 +903,7 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 		cmd := exec.CommandContext(ctx, "nixpacks", args...)
 		// nixpacks gets the clean environment the build does, none of the
 		// backend's own.
-		cmd.Env = localComposeEnv(nil)
+		cmd.Env = localComposeEnv()
 		return cmd
 	}
 	undo := func() error { return nil }
@@ -902,7 +941,7 @@ func localNixpacks(ctx context.Context, dir, imageTag string, cmds deployment.Ni
 	if err := undo(); err != nil {
 		return fmt.Errorf("nixpacks' sandbox: %w", err)
 	}
-	return localBuild(ctx, dir, ".nixpacks/Dockerfile", imageTag, vars, auth, logFn)
+	return o.localBuild(ctx, dir, ".nixpacks/Dockerfile", imageTag, vars, auth, logFn)
 }
 
 // nixpacksSandboxed is whether localNixpacks runs nixpacks in nixpacksJail:
@@ -1091,29 +1130,16 @@ func activeSlot(ctx context.Context, dc *client.Client, serviceID, serviceName, 
 	return rollout.PickActiveSlot(rollout.RunningSlots(ctx, dc, serviceID, serviceName, envName), "")
 }
 
-// activeContainerName returns the name of whichever slot is currently running,
-// falling back to the blue name if neither is running.
-func activeContainerName(ctx context.Context, dc *client.Client, serviceID, serviceName, envName string) string {
-	switch activeSlot(ctx, dc, serviceID, serviceName, envName) {
-	case "green":
-		return rollout.GreenContainerName(serviceID, serviceName, envName)
-	default:
-		return rollout.BlueContainerName(serviceID, serviceName, envName)
-	}
-}
-
 // resolveContainer finds the active container name for a service.
 // Tries blue/green slots first (if serviceName provided); then falls back to label-based lookup.
 func resolveContainer(ctx context.Context, dc *client.Client, serviceID, serviceName string) string {
 	if serviceName != "" {
 		// Try with empty envName first (legacy names), then label fallback handles the rest.
-		name := activeContainerName(ctx, dc, serviceID, serviceName, "")
-		list, _ := dc.ContainerList(ctx, container.ListOptions{
-			All:     false,
-			Filters: filters.NewArgs(filters.Arg("name", "/"+name)),
-		})
-		if len(list) > 0 {
-			return name
+		switch activeSlot(ctx, dc, serviceID, serviceName, "") {
+		case "blue":
+			return rollout.BlueContainerName(serviceID, serviceName, "")
+		case "green":
+			return rollout.GreenContainerName(serviceID, serviceName, "")
 		}
 	}
 	// Fallback: the service's running slots under any naming scheme
@@ -1186,7 +1212,7 @@ func stopContainer(ctx context.Context, dc *client.Client, serviceID string) err
 	}
 
 	for _, c := range containers {
-		if rollout.SummaryName(c) != containerName { // the name filter also matches longer names
+		if rollout.SummaryName(c) != containerName || c.Labels[rollout.LabelComposeProject] != "" { // the name filter also matches longer names; compose made none of the platform's
 			continue
 		}
 		timeout := 10

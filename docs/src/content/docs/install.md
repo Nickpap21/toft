@@ -24,7 +24,7 @@ stops it with the reason, and nothing is changed.
 | Init | systemd running. Toft needs it for the host firewall and backups. |
 | cgroups | cgroup v2 (the unified hierarchy) mounted. |
 | Disk | 11 GB free under `/var/lib`, for images, the database and backups. |
-| Size | 2 vCPU and 4 GB RAM to run apps beside the panel (Toft checks for 3.5 GiB, which a server sold as 4 GB passes after the kernel's share). A smaller server is warned that it can run the panel only. |
+| Size | 2 vCPU and 4 GB RAM to run apps beside the panel (Toft checks for 3.5 GiB, which a server sold as 4 GB passes after the kernel's share). A smaller server is warned that it can run the panel only. At 4 GB with apps beside the panel, a build gets 1 GiB of memory: enough for a small Node app, tight for a large one, which is stopped when it needs more. For those, take 8 GB or more, or deploy them to a server you add: a service is built on the server it runs on. |
 | Ports | 80 and 443 free for Traefik, and 2222 free for git over SSH (unless you install with `--no-git`). A port in use stops it, naming the program or container that holds it. |
 | Docker | Docker 29 or newer with the compose plugin. |
 | OpenSSL | OpenSSL 3, to check the signature of the release's image manifest before it pulls the images by their digests. |
@@ -148,7 +148,11 @@ Allow these inbound in your provider's firewall:
 | TCP 2222 | Git over SSH (or the port in `TOFT_GIT_SSH_PORT`). Not needed with `--no-git`. |
 
 Keep your own SSH port open too. The backend (8080), the frontend (3000) and
-Traefik's dashboard (8081) listen on `127.0.0.1` only.
+Traefik's dashboard (8081) listen on `127.0.0.1` only. The dashboard also asks
+for a password: put the output of `htpasswd -nB admin` in
+`TRAEFIK_DASHBOARD_USERS` in `/etc/toft/secrets.env`, in single quotes, and
+run `toft upgrade --to <this release> --force`. It stays closed while none is
+set.
 
 Toft also installs a host firewall, `toft-firewall.service`, which limits what
 app containers may reach on the server itself: only ports 80 and 443 and DNS,

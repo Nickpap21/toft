@@ -84,16 +84,15 @@ func TestRemoteCleanEnv_InAShell(t *testing.T) {
 	})
 }
 
-func TestComposeProcessEnv_OnlyPlatformBasicsAndServiceVars(t *testing.T) {
+func TestComposeProcessEnv_OnlyPlatformBasics(t *testing.T) {
 	backend := map[string]string{
 		"PATH": "/usr/bin", "HOME": "/root", "DOCKER_HOST": "unix:///var/run/docker.sock",
 		"JWT_SECRET": "s3cret", "DATABASE_URL": "postgres://panel", "ENCRYPTION_KEY": "k",
 	}
 	getenv := func(k string) string { return backend[k] }
-	got := composeProcessEnv(getenv, map[string]string{"B": "2", "A": "1"})
-	assert.Equal(t, []string{"PATH=/usr/bin", "HOME=/root", "DOCKER_HOST=unix:///var/run/docker.sock", "A=1", "B=2"}, got)
+	assert.Equal(t, []string{"PATH=/usr/bin", "HOME=/root", "DOCKER_HOST=unix:///var/run/docker.sock"}, composeProcessEnv(getenv))
 
-	empty := composeProcessEnv(func(string) string { return "" }, nil)
+	empty := composeProcessEnv(func(string) string { return "" })
 	assert.NotNil(t, empty, "a nil Env would make exec inherit the backend's environment")
 	assert.Empty(t, empty)
 }
@@ -101,7 +100,7 @@ func TestComposeProcessEnv_OnlyPlatformBasicsAndServiceVars(t *testing.T) {
 func TestLocalCompose_NeverInheritsTheBackendEnvironment(t *testing.T) {
 	t.Setenv("JWT_SECRET", "panel-secret")
 	t.Setenv("HOME", "/home/panel")
-	cmd := localCompose(context.Background(), t.TempDir(), nil, "version")
+	cmd := localCompose(context.Background(), t.TempDir(), "version")
 	require.NotNil(t, cmd.Env)
 	assert.NotContains(t, strings.Join(cmd.Env, "\n"), "panel-secret")
 	assert.Contains(t, cmd.Env, "HOME=/home/panel")

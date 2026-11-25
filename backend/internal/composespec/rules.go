@@ -52,8 +52,11 @@ const (
 	// set by the platform; a deploy that sets them could hijack routing or
 	// impersonate another service's containers.
 	RuleReservedLabel Rule = "reserved_label"
-	// RuleReservedName: container names starting with "paas-" belong to the
-	// platform and to other services.
+	// RuleReservedName: container names starting with "paas-",
+	// "buildx_buildkit_" or "toft" belong to the platform and to other
+	// services, and so do the builders' networks and bridge names starting
+	// with "toft-". A container name Docker would rewrite (a leading "/")
+	// and a network given by what reads as its ID are refused with them.
 	RuleReservedName Rule = "reserved_name"
 	// RuleExternalRef: the compose file reads a file outside its own
 	// directory (include, extends, env_file, label_file, build context,
@@ -65,7 +68,10 @@ const (
 	// compose service, because the platform runs the CLI with them; and a
 	// compose file (or a .env file it is interpolated with) cannot read them,
 	// because their value at deploy time is the platform's, which the check
-	// does not see.
+	// does not see. Nor can a build take one, or a setting of the build
+	// tools, as a secret: compose puts a build's secret that is a variable
+	// in the build's environment. Nor can a secret or a config take one of
+	// the platform's own that compose runs with (RunEnv) as its source.
 	RuleReservedEnv Rule = "reserved_env"
 	// RuleComposeInvalid: the file could not be loaded, so it cannot be
 	// checked.
@@ -206,9 +212,9 @@ var ruleInfos = []RuleInfo{
 	{Rule: RuleReservedLabel, Grantable: false, Description: "Reserved labels (paas.*, traefik.*, com.docker.compose.*)",
 		Why: "These labels decide routing and which service a container belongs to: setting them could take over another site's domain or pass for another service.",
 		Fix: "Remove them. For routing, choose the compose service and port under Settings → Domain Routing."},
-	{Rule: RuleReservedName, Grantable: false, Description: "Reserved container names (paas-*)",
-		Why: "Containers named paas-* belong to the platform and to other services.",
-		Fix: "Remove container_name, or use a name that does not start with paas-."},
+	{Rule: RuleReservedName, Grantable: false, Description: "Reserved container names (paas-*, buildx_buildkit_*, toft*), the builders' networks, a network given by its ID and bridge names starting with toft-",
+		Why: "Containers with these names belong to the platform, its builders and other services, and only a builder runs on its network. A network's ID or a bridge's name would reach the same network past its name.",
+		Fix: "Remove container_name, or use a name of letters, digits, '_', '.' and '-' that does not start with paas-, buildx_buildkit_ or toft. Use the stack's own networks, by name, and leave the bridge's name to Docker."},
 	{Rule: RuleExternalRef, Grantable: false, Description: "Files outside the compose project (include, extends, env_file, build context, symlinks)",
 		Why: "The compose file would read files from elsewhere on the server, outside its own project.",
 		Fix: "Keep every file the compose file uses inside its repository or project."},

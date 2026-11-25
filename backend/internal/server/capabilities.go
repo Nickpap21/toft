@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Nickpap21/toft/backend/db/sqlcdb"
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/pkg/agentproto"
 	"github.com/jackc/pgx/v5"
@@ -94,7 +95,7 @@ printf 'security:%s\n' "$(docker info --format '{{json .SecurityOptions}}' 2>/de
 printf 'pools:%s\n' "$(docker info --format '{{json .DefaultAddressPools}}' 2>/dev/null)"
 printf 'runtimeargs:%s\n' "$(docker info --format '{{json .Runtimes}}' 2>/dev/null)"
 printf 'runsc:%s\n' "$(runsc --version 2>/dev/null | head -n 1)"
-if nft list chain ip toft from_untrusted >/dev/null 2>&1; then echo previewfw:1; else echo previewfw:0; fi
+if ` + builder.FirewallChain + ` >/dev/null 2>&1; then echo previewfw:1; else echo previewfw:0; fi
 if ip -o addr show dev ` + agentproto.DNSRelayInterface + ` 2>/dev/null | grep -q ' ` + agentproto.DNSRelayAddr + `/' &&
   timeout 20 docker run --rm --network bridge --pull missing ` + rollout.ProbeToolImage + ` nslookup ` + agentproto.DNSRelayCheckName + ` ` + agentproto.DNSRelayAddr + ` >/dev/null 2>&1; then echo dnsrelay:1; else echo dnsrelay:0; fi
 for r in $(docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}' 2>/dev/null); do

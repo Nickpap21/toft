@@ -176,6 +176,10 @@ func (r *routes) sync(ctx context.Context) (int, error) {
 		if c.State != container.StateRunning || !strings.EqualFold(c.Labels["traefik.enable"], "true") {
 			continue
 		}
+		if rollout.IsLookAlike(c.Labels) {
+			// Nobody's: a file it had from an older agent goes below.
+			continue
+		}
 		name := rollout.SummaryName(c)
 		cand := candidate{name: name, deployment: c.Labels[rollout.LabelDeploymentID], labels: c.Labels, created: c.Created}
 		if rollout.IsPlatformSlot(c.Labels, name) {

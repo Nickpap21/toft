@@ -34,10 +34,14 @@ export type AlertKind =
     // A server's agent away, or frozen after a restore (D-106, D-113).
     | "agent_offline"
     | "agent_frozen"
+    // A server's agent behind the panel, its upgrade not taken.
+    | "agent_outdated"
     // A host's updates (D-133), about a server or "control-plane".
     | "security_updates"
     | "reboot_required"
-    | "docker_advisory";
+    | "docker_advisory"
+    // Containers with a service's label and a compose project, about a server.
+    | "lookalike_container";
 
 /** An alert open now or fired in the last 30 days (GET /alerts). */
 export interface RecentAlert {

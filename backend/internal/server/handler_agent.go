@@ -244,6 +244,21 @@ func (h *Handler) rotateAgentKey(c *gin.Context) {
 	h.respondServer(c, serverID)
 }
 
+// offerAgentUpgrade offers the panel's version to an agent that is behind
+// it, again: 202 with the server as the offer starts; its answer lands on
+// the server's view.
+func (h *Handler) offerAgentUpgrade(c *gin.Context) {
+	if !h.adminGate(c, false) {
+		return
+	}
+	serverID := c.Param("serverID")
+	if err := h.service.OfferAgentUpgrade(c.Request.Context(), middleware.UserIDFrom(c), serverID); err != nil {
+		h.agentError(c, "offer the agent's upgrade", err)
+		return
+	}
+	h.respondServerStatus(c, serverID, http.StatusAccepted)
+}
+
 func (h *Handler) revokeAgent(c *gin.Context) {
 	if !h.adminGate(c, false) {
 		return
@@ -273,6 +288,10 @@ func (h *Handler) chooseAgentState(adopt bool) gin.HandlerFunc {
 }
 
 func (h *Handler) respondServer(c *gin.Context, serverID string) {
+	h.respondServerStatus(c, serverID, http.StatusOK)
+}
+
+func (h *Handler) respondServerStatus(c *gin.Context, serverID string, status int) {
 	srv, err := h.service.GetServer(c.Request.Context(), serverID)
 	if err != nil {
 		respond.Error(c, http.StatusNotFound, "server not found")
@@ -280,7 +299,7 @@ func (h *Handler) respondServer(c *gin.Context, serverID string) {
 	}
 	resp := toResponse(srv)
 	h.service.WithAgentView(c.Request.Context(), &resp)
-	respond.JSON(c, http.StatusOK, resp)
+	respond.JSON(c, status, resp)
 }
 
 // agentError maps the agent's errors to answers with stable codes.
@@ -303,6 +322,10 @@ func (h *Handler) agentError(c *gin.Context, what string, err error) {
 		code, status = "not_frozen", http.StatusConflict
 	case errors.Is(err, ErrNoAgent):
 		code, status = "no_agent", http.StatusConflict
+	case errors.Is(err, ErrAgentNotBehind):
+		code, status = "agent_not_behind", http.StatusConflict
+	case errors.Is(err, ErrAgentUpgradeRunning):
+		code, status = "agent_upgrade_running", http.StatusConflict
 	case errors.Is(err, ErrAlreadyAgent), errors.Is(err, ErrAlreadySSH):
 		code, status = "connection_unchanged", http.StatusConflict
 	case errors.Is(err, ErrNoSSHKey):

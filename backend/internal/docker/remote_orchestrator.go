@@ -15,11 +15,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/composespec"
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/service"
 	"github.com/Nickpap21/toft/backend/pkg/gitcred"
+	"github.com/Nickpap21/toft/backend/pkg/sshclient"
 	"github.com/Nickpap21/toft/backend/pkg/sshpool"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -51,23 +53,22 @@ type RemoteOrchestrator struct {
 	host remoteHost
 	net  rollout.NetConfig
 	log  *zap.Logger
-	// agent: the server's agent runs rollouts and compose ups the panel
-	// hands it (D-111) rather than the panel driving them over the tunnel.
-	agent bool
+	// agentNow answers what the server's agent can do. It is asked at each
+	// hand-off and not when the orchestrator is made: a deploy clones and
+	// builds first, and the agent may have connected, or been upgraded,
+	// since. nil: the server has no agent.
+	agentNow func() agentAbilities
 	// epoch is the panel's, on each hand-off (D-113).
 	epoch string
-	// deadlines: the agent ends a rollout at the deploy's time limit (D-125).
-	deadlines bool
-	// checks: the agent creates slots with the service's own container
-	// check (rollout.Slot.Check).
-	checks bool
 	// metrics: the server's agent samples it every minute and keeps the
 	// samples (D-113); the collector asks it for them (AgentServiceStats).
 	metrics bool
+	// builder is the builder the server's builds run on.
+	builder builder.Spec
 }
 
 func newRemoteOrchestrator(h remoteHost, net rollout.NetConfig, log *zap.Logger) *RemoteOrchestrator {
-	return &RemoteOrchestrator{host: h, net: net.WithDefaults(), log: log}
+	return &RemoteOrchestrator{host: h, net: net.WithDefaults(), log: log, builder: builder.Trusted}
 }
 
 // cleanup runs a best-effort cleanup command. It runs even when ctx has been
@@ -82,12 +83,25 @@ func (o *RemoteOrchestrator) cleanup(ctx context.Context, cmd string) {
 // when the connection to the server dropped under it (an agent that
 // reconnected, D-106). Any other failure is returned as it is.
 func (o *RemoteOrchestrator) streamRetry(ctx context.Context, cmd string, logFn func(string)) error {
-	err := o.host.ExecStream(ctx, cmd, logFn)
+	return o.retryLost(ctx, logFn, func(ctx context.Context) error { return o.host.ExecStream(ctx, cmd, logFn) })
+}
+
+// retryLost is streamRetry for a step of more than one command: all of
+// run is run again. What the first run left on the server (a lost
+// connection ends nothing there) is ended before the second starts, so a
+// deploy never has two builds running; when that can't be made sure of,
+// the step is not run again.
+func (o *RemoteOrchestrator) retryLost(ctx context.Context, logFn func(string), run func(context.Context) error) error {
+	first := sshclient.Marked(ctx)
+	err := run(first)
 	if err == nil || ctx.Err() != nil || !errors.Is(err, sshpool.ErrConnectionLost) {
 		return err
 	}
 	logFn("Lost the connection to the server; running this step again once it is back...")
-	return o.host.ExecStream(ctx, cmd, logFn)
+	if _, reapErr := o.host.Exec(ctx, sshclient.Reaper(first)); reapErr != nil {
+		return fmt.Errorf("%w; what it had started on the server could not be stopped, so the step was not run again", err)
+	}
+	return run(ctx)
 }
 
 // BuildFromGit clones repoURL@branch on the remote server and runs docker build there.
@@ -141,7 +155,7 @@ func (o *RemoteOrchestrator) BuildFromGit(ctx context.Context, repoURL, branch, 
 // config of its own, holding auth (the service's registry login) or
 // nothing: a registry login on the server (a compose deploy's, or one made
 // by hand) is not this build's to pull with, and a builder someone selected
-// there is not the one it runs on.
+// there is not the one it runs on: that is o.builder (builder.Run).
 func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, buildArgs map[string]*string, auth *deployment.RegistryAuth, dockerfile, dir string, logFn func(string)) error {
 	args, err := buildArgList(imageTag, buildArgs)
 	if err != nil {
@@ -156,17 +170,17 @@ func (o *RemoteOrchestrator) dockerBuild(ctx context.Context, imageTag string, b
 		return err
 	}
 	defer cleanup()
-	// BUILDX_GIT_INFO: buildx doesn't run git in the context, which is the
-	// repository's to shape (as in localBuild). BUILDX_GIT_LABELS too: set
-	// in the login's environment it would have buildx run git all the same.
-	cmd := cfg + "BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build -t " + imageTag
+	words := []string{"-t", imageTag}
 	for _, a := range args {
-		cmd += " --build-arg " + shellEscape(a)
+		words = append(words, "--build-arg", a)
 	}
 	if dockerfile != "" {
-		cmd += " -f " + shellEscape(dockerfile)
+		words = append(words, "-f", dockerfile)
 	}
-	if err := o.streamRetry(ctx, cmd+" "+shellEscape(dir)+" 2>&1", logFn); err != nil {
+	// After a lost connection the builder is made sure of again, with the build.
+	if err := o.retryLost(ctx, logFn, func(ctx context.Context) error {
+		return builder.Run(ctx, sshHost{host: o.host, log: logFn}, o.builder, cfg, builder.Build(append(words, dir)...), logFn)
+	}); err != nil {
 		return fmt.Errorf("remote docker build: %w", err)
 	}
 	return nil
@@ -411,8 +425,8 @@ func (o *RemoteOrchestrator) BuildFromGitNixpacks(ctx context.Context, repoURL, 
 func (o *RemoteOrchestrator) Rollout(ctx context.Context, spec rollout.Spec, route deployment.Routing, hooks rollout.Hooks) rollout.Result {
 	o.log.Info("rollout (remote)", zap.String("service_id", spec.Slot.ServiceID), zap.String("image", spec.Slot.Image))
 	spec.Slot.Labels = slotLabels(spec, route)
-	if o.agent && hooks.HandOff != nil {
-		return o.handOff(ctx, rollout.Request{Spec: spec, Net: o.net}, hooks)
+	if a := o.abilities(); a.rollouts && hooks.HandOff != nil {
+		return o.handOff(ctx, a, rollout.Request{Spec: spec, Net: o.net}, hooks)
 	}
 	dc, err := o.host.DockerClient()
 	if err != nil {
@@ -456,7 +470,7 @@ func (o *RemoteOrchestrator) pull(ctx context.Context, imageRef string, auth *ro
 	defer cleanup()
 
 	logFn(fmt.Sprintf("Pulling %s...", imageRef))
-	return o.streamRetry(ctx, cfg+fmt.Sprintf("docker pull %s 2>&1", shellEscape(imageRef)), logFn)
+	return o.streamRetry(ctx, dockerConfigEnv(cfg)+fmt.Sprintf("docker pull %s 2>&1", shellEscape(imageRef)), logFn)
 }
 
 // Stop removes all slot containers for the service on the remote server via SSH-tunnelled Docker.
@@ -492,22 +506,24 @@ func (o *RemoteOrchestrator) StreamLogs(ctx context.Context, serviceID string, t
 func remoteActiveContainerName(ctx context.Context, sc interface {
 	Exec(ctx context.Context, cmd string) (string, error)
 }, serviceID, serviceName string) string {
-	// By the paas.service_id label, keeping only containers with a slot's
-	// reserved name (rollout.IsSlotName): an image can carry the label too.
+	// By the paas.service_id label, keeping only the platform's own slots
+	// (rollout.IsSlot): an image can carry the label too. Each line is the
+	// name, then the compose project when the container has one.
 	out, err := sc.Exec(ctx, fmt.Sprintf(
-		"docker ps --filter %s --format '{{.Names}}' 2>/dev/null",
-		shellEscape("label="+rollout.LabelServiceID+"="+serviceID),
+		"docker ps --filter %s --format '{{.Names}} {{.Label \"%s\"}}' 2>/dev/null",
+		shellEscape("label="+rollout.LabelServiceID+"="+serviceID), rollout.LabelComposeProject,
 	))
 	if err == nil {
-		for _, name := range strings.Split(out, "\n") {
-			if name = strings.TrimSpace(name); rollout.IsSlotName(name, serviceID) {
-				return name
+		for _, line := range strings.Split(out, "\n") {
+			if f := strings.Fields(line); len(f) == 1 && rollout.IsSlot(f[0], serviceID, "") {
+				return f[0]
 			}
 		}
 	}
 	// Try blue/green slots by name (useful when serviceName is known; empty envName = legacy names).
 	for _, name := range []string{rollout.BlueContainerName(serviceID, serviceName, ""), rollout.GreenContainerName(serviceID, serviceName, "")} {
-		out, err := sc.Exec(ctx, fmt.Sprintf("docker inspect --format '{{.State.Running}}' %s 2>/dev/null", name))
+		// "true" alone: running, and compose did not make it.
+		out, err := sc.Exec(ctx, fmt.Sprintf("docker inspect --format '{{.State.Running}} {{index .Config.Labels \"%s\"}}' %s 2>/dev/null", rollout.LabelComposeProject, name))
 		if err == nil && strings.TrimSpace(out) == "true" {
 			return name
 		}
@@ -562,11 +578,10 @@ func (o *RemoteOrchestrator) cloneOnRemote(ctx context.Context, repoURL, branch,
 
 // dockerConfigDir makes a docker CLI config directory on the server for
 // one build or deploy, holding config (a config.json; nil for none), and
-// returns the `DOCKER_CONFIG=<dir> ` a docker command there starts with,
-// and what removes the directory. The link in it: the CLI's plugins
+// returns it with what removes it. The link in it: the CLI's plugins
 // (buildx, compose) installed for the SSH user, not system-wide, are found
 // through the config directory.
-func (o *RemoteOrchestrator) dockerConfigDir(ctx context.Context, config []byte) (prefix string, cleanup func(), err error) {
+func (o *RemoteOrchestrator) dockerConfigDir(ctx context.Context, config []byte) (dir string, cleanup func(), err error) {
 	cfg, err := o.host.Exec(ctx, `d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`)
 	if err != nil {
 		return "", nil, fmt.Errorf("create a docker config dir: %w", err)
@@ -581,15 +596,19 @@ func (o *RemoteOrchestrator) dockerConfigDir(ctx context.Context, config []byte)
 			return "", nil, fmt.Errorf("write the registry credentials: %w", err)
 		}
 	}
-	return "DOCKER_CONFIG=" + shellEscape(cfg) + " ", cleanup, nil
+	return cfg, cleanup, nil
 }
+
+// dockerConfigEnv is what a docker command on a server starts with to use
+// the config directory dir.
+func dockerConfigEnv(dir string) string { return "DOCKER_CONFIG=" + shellEscape(dir) + " " }
 
 // registryConfigDir is a dockerConfigDir holding auth's credentials for
 // server, empty without credentials. A deploy pulls with a config of its
 // own, not a `docker login` on the server: a login there is every other
 // deploy's to pull with, and Toft's own would be for as long as the deploy
 // runs, its logout ending theirs.
-func (o *RemoteOrchestrator) registryConfigDir(ctx context.Context, auth *rollout.RegistryAuth, server string) (prefix string, cleanup func(), err error) {
+func (o *RemoteOrchestrator) registryConfigDir(ctx context.Context, auth *rollout.RegistryAuth, server string) (dir string, cleanup func(), err error) {
 	if auth == nil || auth.Password == "" {
 		return o.dockerConfigDir(ctx, nil)
 	}
@@ -622,6 +641,9 @@ func (o *RemoteOrchestrator) newComposeRelease(ctx context.Context, serviceID st
 // remoteCompose's env -i), and runs docker compose there. route, when not
 // nil, adds the platform's routing override file (composeRouteOverride).
 func (o *RemoteOrchestrator) RunCompose(ctx context.Context, deploymentID string, serviceID, serviceName, composeContent string, envVars map[string]string, route *deployment.ComposeRoute, nets deployment.ComposeNetworks, limits map[string]deployment.ComposeLimit, auth *deployment.RegistryAuth, hooks rollout.Hooks) error {
+	if err := o.abilities().outdated; err != nil {
+		return err
+	}
 	release, err := o.newComposeRelease(ctx, serviceID)
 	if err != nil {
 		return err
@@ -640,6 +662,9 @@ func (o *RemoteOrchestrator) RunCompose(ctx context.Context, deploymentID string
 // the same .env into repoDir before the policy check
 // (composespec.StageDotEnv), so the check read what compose reads here.
 func (o *RemoteOrchestrator) RunComposeFromRepo(ctx context.Context, deploymentID string, serviceID, serviceName, repoDir, composeFilePath string, envVars map[string]string, route *deployment.ComposeRoute, nets deployment.ComposeNetworks, limits map[string]deployment.ComposeLimit, auth *deployment.RegistryAuth, hooks rollout.Hooks) error {
+	if err := o.abilities().outdated; err != nil {
+		return err
+	}
 	logFn := hooks.Log
 	// Tar the local repo and upload it into a new release directory.
 	logFn("Uploading repo to remote...")
@@ -682,7 +707,13 @@ func (o *RemoteOrchestrator) RunComposeFromRepo(ctx context.Context, deploymentI
 // restarts.
 func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, serviceID, serviceName, release, projectDir, composeFile string, envVars map[string]string, route *deployment.ComposeRoute, nets deployment.ComposeNetworks, limits map[string]deployment.ComposeLimit, auth *deployment.RegistryAuth, hooks rollout.Hooks) error {
 	logFn := hooks.Log
-	onAgent := o.agent && hooks.HandOff != nil
+	// Asked again here, where the up is handed over: the upload took a
+	// while.
+	agent := o.abilities()
+	if agent.outdated != nil {
+		return agent.outdated
+	}
+	onAgent := agent.rollouts && hooks.HandOff != nil
 	projectName := rollout.ComposeProjectName(serviceID, serviceName)
 
 	// The project directory's .env is what compose interpolates ${VAR} with
@@ -733,7 +764,7 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 	if err != nil {
 		return err
 	}
-	files := "-f " + shellEscape(composeFile)
+	files, fileArgs := "-f "+shellEscape(composeFile), []string{"-f", composeFile}
 	for _, ov := range overrides {
 		overridePath, cleanup, err := o.uploadOverride(ctx, ov)
 		if err != nil {
@@ -741,6 +772,7 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 		}
 		defer cleanup()
 		files += " -f " + shellEscape(overridePath)
+		fileArgs = append(fileArgs, "-f", overridePath)
 	}
 
 	// Take down a stack still running under a legacy project name (the
@@ -769,7 +801,7 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 			"--project-directory %s %s --project-name %s config --images %s 2>/dev/null",
 			shellEscape(projectDir), files, shellEscape(projectName), shellEscape(route.Service))))
 		if image := singleImage(out); err == nil && image != "" {
-			if _, err := o.host.Exec(ctx, dockerCfg+"docker pull --quiet "+shellEscape(image)+" >/dev/null 2>&1"); err == nil {
+			if _, err := o.host.Exec(ctx, dockerConfigEnv(dockerCfg)+"docker pull --quiet "+shellEscape(image)+" >/dev/null 2>&1"); err == nil {
 				if dc, err := o.host.DockerClient(); err == nil {
 					keys, ok := routedImageViolations(ctx, dc, image, allowed)
 					dc.Close()
@@ -792,9 +824,10 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 			ovs = append(ovs, rollout.ComposeOverride{Name: ov.name, Content: ov.content})
 		}
 		logFn(fmt.Sprintf("Running docker compose up on the server's agent... (%d vars)", len(serviceEnv)))
-		res := o.handOff(ctx, rollout.Request{Compose: &rollout.ComposeUp{
+		b := o.builder.Full()
+		res := o.handOff(ctx, agent, rollout.Request{Compose: &rollout.ComposeUp{
 			DeploymentID: deploymentID, ServiceID: serviceID, ServiceName: serviceName,
-			ProjectDir: projectDir, ComposeFile: composeFile, Overrides: ovs, DotEnv: dotEnv, Auth: auth,
+			ProjectDir: projectDir, ComposeFile: composeFile, Overrides: ovs, DotEnv: dotEnv, Auth: auth, Builder: &b,
 			RoutedService: routedService(route), AllowedLabels: allowed,
 		}}, hooks)
 		if res.Step != "" {
@@ -810,12 +843,6 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 		return fmt.Errorf("SSH Docker client: %w", err)
 	}
 	defer dc.Close()
-	up := func(flags string) error {
-		return o.host.ExecStream(ctx, remoteCleanEnv(dockerCfg+fmt.Sprintf(
-			"docker compose --project-directory %s %s --project-name %s up %s --remove-orphans 2>&1",
-			shellEscape(projectDir), files, shellEscape(projectName), flags,
-		)), logFn)
-	}
 	// The stack's routes are checked on its created containers, which
 	// carry their images' labels, before any starts, and again after up,
 	// failed or not: a container up started before failing must not keep
@@ -834,14 +861,18 @@ func (o *RemoteOrchestrator) composeUp(ctx context.Context, deploymentID, servic
 	// A failed create (a pull or a build) started nothing and recreated
 	// nothing yet: the running stack is untouched, and checking its old
 	// containers against the new routes would take it down.
-	if err := up("--no-start --pull always"); err != nil {
+	project := append([]string{"--project-directory", projectDir}, fileArgs...)
+	project = append(project, "--project-name", projectName)
+	host := sshHost{host: o.host, log: logFn}
+	if err := builder.FirstUp(ctx, host, o.builder, dockerCfg, project, []string{"--no-start", "--pull", "always", "--remove-orphans"}, logFn); err != nil {
 		return err
 	}
 	if err := check(); err != nil {
 		return err
 	}
 	// Nothing pulled, built or recreated: what starts is what was checked.
-	upErr := up("-d --pull never --no-build --no-recreate")
+	upErr := host.Stream(ctx, []string{"DOCKER_CONFIG=" + dockerCfg}, "docker",
+		append(append([]string{"compose"}, project...), "up", "-d", "--pull", "never", "--no-build", "--no-recreate", "--remove-orphans")...)
 	if err := check(); err != nil {
 		return err
 	}

@@ -33,6 +33,7 @@ import { ServersIcon } from "@/components/shell/nav-icons";
 import { LoadFailed, readFailed } from "@/components/shell/unreachable";
 import { ServerDrawer } from "@/components/ui/server-drawer";
 import { BackupCard } from "@/components/servers/backup-card";
+import { BuildDestinationsCard } from "@/components/servers/build-destinations-card";
 import { SharingCard } from "@/components/servers/sharing-card";
 import { IsolationCard } from "@/components/servers/isolation-card";
 import { UpdatesCard } from "@/components/servers/updates-card";
@@ -127,6 +128,8 @@ export function OwnerView({ server }: { server: Server }) {
     enabled: canManage,
   });
   const shares = sharesRead.data ?? [];
+  // The card's own query, by its key: read once, counted in the index.
+  const destinations = useQuery({ queryKey: ["build-destinations", id], queryFn: () => serverService.listBuildDestinations(id), enabled: isOperator && !isLocal, retry: false });
   // Set only when the read failed: the Capacity bar and the Remove dialog
   // would otherwise say nothing is set aside and no share ends.
   const retryShares = readFailed(sharesRead) ? () => void sharesRead.refetch() : undefined;
@@ -387,7 +390,9 @@ export function OwnerView({ server }: { server: Server }) {
             ...(!isLocal ? [{ id: "isolation", label: "Isolation" }] : []),
             { id: "traefik", label: "Traefik" },
             { id: "dns", label: "DNS provider" },
-            ...(!isLocal ? [{ id: "firewall", label: "Firewall and ports" }, { id: "backup", label: "Backups" }] : []),
+            ...(!isLocal ? [{ id: "firewall", label: "Firewall and ports" }] : []),
+            ...(!isLocal && isOperator ? [{ id: "build-destinations", label: "Build destinations", ...(destinations.data?.length ? { count: { n: destinations.data.length } } : {}) }] : []),
+            ...(!isLocal ? [{ id: "backup", label: "Backups" }] : []),
             ...(canManage && !isLocal ? [{ id: "overrides", label: "Capacity overrides" }] : []),
             ...(canManage ? [{ id: "sharing", label: "Sharing", count: { n: shares.length } }, { id: "remove", label: "Remove server", danger: true }] : []),
           ]}
@@ -418,6 +423,11 @@ export function OwnerView({ server }: { server: Server }) {
           {!isLocal && (
             <div id="firewall" tabIndex={-1}>
               <Firewall server={server} />
+            </div>
+          )}
+          {!isLocal && isOperator && (
+            <div id="build-destinations" tabIndex={-1}>
+              <BuildDestinationsCard serverId={id} />
             </div>
           )}
           {!isLocal && <BackupCard serverId={id} serverName={server.name} canManage={canManage} />}

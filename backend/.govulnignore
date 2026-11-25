@@ -8,6 +8,19 @@
 GO-2026-4887
 GO-2026-4883
 
+# gorilla/websocket v1.5.3, the newest tag: a client's frame mask key comes
+# from math/rand (conn.go, newMaskKey). v1.5.1 and v1.5.2 read crypto/rand
+# and v1.5.3 went back; after it the fix is on an untagged commit only
+# (v1.5.4-0.20240701034025-d67f41855da4). Accepted: math/rand's top-level
+# functions are randomly seeded since Go 1.20 (Toft builds with 1.26, where
+# they read the runtime's generator), and the only client is the agent's
+# dial to its panel (cmd/toft-agent/run.go; ws:// when the panel's address
+# is http), where the mask key isn't a protection: it keeps a browser's page
+# from choosing the bytes a caching proxy sees, and the agent's frames
+# carry SSH (pkg/wsconn). Check for a release after v1.5.3 on 2026-12-18;
+# remove the line when one is adopted.
+GO-2026-6278
+
 # Not listed, and not to be: GO-2026-5617, GO-2026-5668 and GO-2026-5746
 # (docker cp and the archive endpoint; no fixed release either). They name
 # functions of the daemon package, which the backend doesn't import, so

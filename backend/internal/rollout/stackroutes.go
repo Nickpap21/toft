@@ -15,12 +15,13 @@ import (
 // traefik.* labels that the platform did not set: on the routed service (routed,
 // "" when none) any
 // key outside allowed (they came from its image and would add routers), on
-// every other service a traefik.enable that is not false. Platform slots
-// that carry the project label from their image are not the stack's.
+// every other service a traefik.enable that is not false. Every container
+// with the project's label is checked, whatever its name and its other
+// labels say: both can come from the file or the image.
 func StackRouteViolations(list []container.Summary, project, routed string, allowed map[string]bool) []string {
 	var out []string
 	for _, c := range list {
-		if c.Labels[LabelComposeProject] != project || IsPlatformSlot(c.Labels, SummaryName(c)) {
+		if c.Labels[LabelComposeProject] != project {
 			continue
 		}
 		if routed == "" || c.Labels["com.docker.compose.service"] != routed {

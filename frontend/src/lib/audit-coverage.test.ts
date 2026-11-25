@@ -15,7 +15,9 @@ const POSITION: Record<string, number> = {
   WriteAuditLog: 3,
   WriteAuditLogDetail: 3,
   RecordAuditLog: 3,
+  RecordAuditLogDetail: 3,
   WriteAudit: 2,
+  RecordAudit: 2,
   audit: 2,
   Audit: 4,
   auditRepo: 1,
@@ -69,6 +71,8 @@ const DYNAMIC: Record<string, string[]> = {
   'internal/agent/service.go .WriteAuditLogDetail("agent."+next)': ["agent.approved", "agent.denied"],
   'internal/deployment/handler.go .WriteAuditLog("deployment."+strings.ToLower(kind))': ["deployment.rollback", "deployment.redeploy"],
   "internal/observability/handler.go .audited(kind)": ["observability.loki_changed", "observability.grafana_changed", "observability.prometheus_changed"],
+  'internal/server/build_destinations.go .RecordAuditLogDetail("server.build_destination_"+verb)': ["server.build_destination_added", "server.build_destination_removed"],
+  'internal/server/build_destinations.go .RecordAudit("build_destination."+verb)': ["build_destination.added", "build_destination.removed"],
   "internal/instance/panelupdaterun.go .audit(action)": ["panel.updates_succeeded", "panel.updates_failed"],
   'internal/disk/service.go .Audit(auditAction(h.ID, "disk_clean_started"))': both("disk_clean_started"),
   'internal/disk/service.go .Audit(auditAction(h.ID, "disk_cleaned"))': both("disk_cleaned"),
@@ -153,7 +157,7 @@ type Log = "instance" | "workspace";
 /** The disk advisor writes panel.* to the instance log and server.* to the
  *  workspace's (diskAudit, cmd/server/main.go). */
 const logOf = (writer: string, action: string): Log =>
-  writer === "WriteAudit" || writer === "audit" || action.startsWith("panel.") ? "instance" : "workspace";
+  writer === "WriteAudit" || writer === "RecordAudit" || writer === "audit" || action.startsWith("panel.") ? "instance" : "workspace";
 
 /** h.audited's argument is the kind in "observability.<kind>_changed". */
 const actionOf = (writer: string, literal: string) => (writer === "audited" ? `observability.${literal}_changed` : literal);

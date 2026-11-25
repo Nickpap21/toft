@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Nickpap21/toft/backend/db/sqlcdb"
+	"github.com/Nickpap21/toft/backend/internal/dbtx"
 	"github.com/Nickpap21/toft/backend/pkg/actor"
 	"github.com/Nickpap21/toft/backend/pkg/crypto"
 )
@@ -606,7 +607,7 @@ func (r *postgresRepository) WriteAuditLog(ctx context.Context, orgID, actorID, 
 	} else if id, err := uuid.Parse(actor.APIKeyFrom(ctx)); err == nil {
 		keyID = pgtype.UUID{Bytes: id, Valid: true}
 	}
-	return sqlcdb.New(r.db).WriteAuditEntry(ctx, sqlcdb.WriteAuditEntryParams{
+	return sqlcdb.New(dbtx.On(ctx, r.db)).WriteAuditEntry(ctx, sqlcdb.WriteAuditEntryParams{
 		OrgID: pgtype.UUID{Bytes: oid, Valid: true}, ActorID: actorUUID,
 		Action: action, Resource: &resource, Metadata: detail, AgentConnectionID: agentID, ApiKeyID: keyID,
 	})

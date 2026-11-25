@@ -1,21 +1,25 @@
 package docker
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/rollout/fakedocker"
 
 	"github.com/Nickpap21/toft/backend/internal/deployment"
 	"github.com/Nickpap21/toft/backend/internal/server"
 	"github.com/Nickpap21/toft/backend/internal/service"
+	"github.com/Nickpap21/toft/backend/pkg/sshclient"
 	"github.com/Nickpap21/toft/backend/pkg/sshpool"
 	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
@@ -48,6 +52,12 @@ type fakeHost struct {
 	docker      *fakedocker.Docker
 	// subsystem answers SubsystemStream (nil: an error).
 	subsystem func(name, stdin string, lineFn func(string)) error
+	// stack is what the server's docker compose config prints ("": a stack
+	// that builds nothing).
+	stack string
+	// firewall answers a build's question of the server's firewall (nil:
+	// it is loaded).
+	firewall func() (string, error)
 }
 
 func (f *fakeHost) SubsystemStream(ctx context.Context, name string, stdin io.Reader, lineFn func(string)) error {
@@ -74,6 +84,17 @@ func (f *fakeHost) Exec(ctx context.Context, cmd string) (string, error) {
 	// of its own first.
 	if strings.Contains(cmd, "mktemp -d /tmp/paas-docker-") {
 		return testDockerConfig + "\n", nil
+	}
+	// A build asks the server's firewall first.
+	if strings.HasPrefix(cmd, builder.FirewallChain) {
+		if f.firewall == nil {
+			return "loaded\n", nil
+		}
+		return f.firewall()
+	}
+	// A compose deploy asks the server whether its stack builds.
+	if strings.Contains(cmd, " config --format json ") {
+		return cmp.Or(f.stack, stackPulls), nil
 	}
 	if f.exec == nil {
 		return "", nil
@@ -123,10 +144,21 @@ func (f *fakeHost) DockerClient() (*dockerclient.Client, error) {
 	return f.docker.Client(), nil
 }
 
+// heldBuild is how a build's command reaches a server: the lock's two
+// variables, then the shell that takes the builder's lock and becomes the
+// docker after it, its script quoted whole (builder.Run).
+var heldBuild = regexp.MustCompile(`(?s)TOFT_BUILDER_LOCK=\S+/(\S+)\.lock TOFT_BUILDER_WAIT=300 sh -c '#!/bin/sh\n.*?exec "\$@"\n' sh docker `)
+
+// recorded is the commands the server got, a build's script written as
+// "[lock <builder>]".
 func (f *fakeHost) recorded() []call {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]call(nil), f.calls...)
+	calls := append([]call(nil), f.calls...)
+	for i := range calls {
+		calls[i].cmd = heldBuild.ReplaceAllString(calls[i].cmd, "[lock $1] docker ")
+	}
+	return calls
 }
 
 func (f *fakeHost) find(fragment string) (call, bool) {
@@ -144,8 +176,12 @@ func blockUntilDone(ctx context.Context, _ string) error {
 	return ctx.Err()
 }
 
+// newTestRemote is a deploy's orchestrator on a server (whose firewall is
+// loaded, as fakeHost answers).
 func newTestRemote(h *fakeHost) *RemoteOrchestrator {
-	return newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
+	o := newRemoteOrchestrator(h, rollout.NetConfig{}, zap.NewNop())
+	o.builder.Firewall = true
+	return o
 }
 
 // A base directory that leaves the build folder (a row saved before it was
@@ -262,11 +298,13 @@ func TestRemoteRunComposeUploadsPrivatelyUnderCtx(t *testing.T) {
 
 	create, ok := h.find("up --no-start")
 	require.True(t, ok)
-	assert.Contains(t, create.cmd, "--project-name 'paas-web-svc-1' up --no-start --pull always --remove-orphans 2>&1",
-		"updated in place: no --force-recreate")
+	assert.Contains(t, create.cmd, "--project-name paas-web-svc-1 up --no-start --pull always --remove-orphans --no-build 2>&1",
+		"updated in place: no --force-recreate; the server's own reading of the stack shows no build")
+	_, ensured := h.find("TOFT_BUILDER=")
+	assert.False(t, ensured, "a stack that builds nothing needs no builder")
 	up, ok := h.find("up -d")
 	require.True(t, ok)
-	assert.Contains(t, up.cmd, "--project-name 'paas-web-svc-1' up -d --pull never --no-build --no-recreate --remove-orphans 2>&1",
+	assert.Contains(t, up.cmd, "--project-name paas-web-svc-1 up -d --pull never --no-build --no-recreate --remove-orphans 2>&1",
 		"what starts is what was created and checked")
 	_, downCurrent := h.find("--project-name 'paas-web-svc-1' down")
 	assert.False(t, downCurrent, "the running stack is not taken down first")
@@ -317,7 +355,7 @@ func TestRemoteRunComposeChecksCreatedContainersAndFailedUps(t *testing.T) {
 		for k, v := range evil {
 			labels[k] = v
 		}
-		h := &fakeHost{docker: f, exec: func(_ context.Context, cmd string) (string, error) {
+		h := &fakeHost{docker: f, stack: stackBuilds, exec: func(_ context.Context, cmd string) (string, error) {
 			if strings.Contains(cmd, "mktemp -d") {
 				return "/var/paas/compose/" + slotSvcID + "/r-abc\n", nil
 			}
@@ -341,6 +379,23 @@ func TestRemoteRunComposeChecksCreatedContainersAndFailedUps(t *testing.T) {
 	h, err := run(false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "traefik.http.routers.paas-"+slotSvcID[:8]+"-x.rule")
+	// The server's reading shows a build: the builder is made sure of
+	// there, in the clean environment and with the deploy's Docker config,
+	// and the up names it.
+	var seq []string
+	for _, c := range h.recorded() {
+		if strings.Contains(c.cmd, "TOFT_BUILDER=") || strings.Contains(c.cmd, " up --no-start ") {
+			seq = append(seq, c.kind+" "+strings.SplitAfter(c.cmd, " sh -c ")[0])
+		}
+	}
+	const release = "/var/paas/compose/" + slotSvcID + "/r-abc"
+	assert.Equal(t, []string{
+		"exec e=$(mktemp) && { " + remoteCleanEnvPrefix + "DOCKER_CONFIG=" + testDockerConfig + " TOFT_BUILDER=toft-build TOFT_BUILDER_BRIDGE=toft-ubuild TOFT_BUILDER_IMAGE=" + builder.Image +
+			" TOFT_BUILDER_MEMORY='' TOFT_BUILDER_CGROUP='' TOFT_BUILDER_CACHE=10% TOFT_BUILDER_LOCK=" + builder.LockDir + "/toft-build.lock TOFT_BUILDER_WAIT=300 sh -c ",
+		"stream " + remoteCleanEnvPrefix + "DOCKER_CONFIG=" + testDockerConfig + " BUILDX_BUILDER=toft-build DOCKER_BUILDKIT=1 [lock toft-build] docker compose --project-directory " + release +
+			" -f " + release + "/docker-compose.yml -f " + release + "/docker-compose.route.yml --project-name " + proj +
+			" up --no-start --pull always --remove-orphans --build 2>&1",
+	}, seq)
 	_, started := h.find(" up -d ")
 	assert.False(t, started, "nothing starts once a created container fails the check")
 	_, down := h.find("--project-name '" + proj + "' down")
@@ -364,7 +419,7 @@ func TestRemoteRunComposeFailedCreateLeavesTheRunningStackAlone(t *testing.T) {
 		rollout.LabelComposeProject: proj, "com.docker.compose.service": "web",
 		"traefik.enable": "true", "traefik.http.routers.paas-" + slotSvcID[:8] + "-old.rule": "Host(`old.example.com`)",
 	})
-	h := &fakeHost{docker: f, exec: func(_ context.Context, cmd string) (string, error) {
+	h := &fakeHost{docker: f, stack: stackBuilds, exec: func(_ context.Context, cmd string) (string, error) {
 		if strings.Contains(cmd, "mktemp -d") {
 			return "/var/paas/compose/" + slotSvcID + "/r-abc\n", nil
 		}
@@ -527,7 +582,43 @@ func TestFactoryForServer(t *testing.T) {
 		_, _, err := NewFactory(nil, rollout.NetConfig{}, nil, zap.NewNop()).ForServer(srv)
 		assert.Error(t, err)
 	})
+
+	t.Run("an agent's abilities are asked when they are used", func(t *testing.T) {
+		agents := &agentsFake{host: &ensureOnly{}}
+		f := NewFactory(nil, rollout.NetConfig{}, agents, zap.NewNop())
+		orch, _, err := f.ForServer(&server.Server{ID: "srv-1", Name: "web-1", Connection: server.ConnectionAgent})
+		require.NoError(t, err)
+		remote := orch.(*RemoteOrchestrator)
+		assert.Equal(t, "epoch-1", remote.epoch)
+		assert.Equal(t, agentAbilities{}, remote.abilities(), "no agent is connected")
+
+		// The agent connects after the orchestrator was made, older than
+		// the panel; then it is upgraded.
+		agents.rollouts, agents.outdated = true, &server.AgentOutdatedError{ServerID: "srv-1"}
+		assert.Equal(t, agentAbilities{rollouts: true, deadlines: true, checks: true, outdated: agents.outdated}, remote.abilities())
+		agents.outdated = nil
+		assert.Equal(t, agentAbilities{rollouts: true, deadlines: true, checks: true}, remote.abilities())
+
+		orch, _, err = f.ForServer(srv)
+		require.NoError(t, err)
+		assert.Equal(t, agentAbilities{}, orch.(*RemoteOrchestrator).abilities(), "a server reached over SSH has no agent")
+	})
 }
+
+// agentsFake is an SSHProvider and the RolloutAgents of its servers: an
+// agent that runs rollouts or doesn't, older than the panel or not.
+type agentsFake struct {
+	host     sshpool.RemoteHost
+	rollouts bool
+	outdated error
+}
+
+func (a *agentsFake) SSH(*server.Server) sshpool.RemoteHost      { return a.host }
+func (a *agentsFake) AgentRunsRollouts(string) bool              { return a.rollouts }
+func (a *agentsFake) AgentKeepsDeadlines(string) bool            { return true }
+func (a *agentsFake) AgentAppliesContainerChecks(string) bool    { return true }
+func (a *agentsFake) AgentOutdated(*server.Server) error         { return a.outdated }
+func (a *agentsFake) PanelEpoch(context.Context) (string, error) { return "epoch-1", nil }
 
 // dockerConfigHost is a fakeHost whose server makes cfg as the docker
 // config directory of a build or a deploy, and release as a compose
@@ -605,7 +696,7 @@ func TestRemoteRunComposeKeepsItsCredentialsToItself(t *testing.T) {
 		assert.NotContains(t, c.cmd, "docker login")
 		if strings.Contains(c.cmd, " up ") {
 			ups++
-			assert.Contains(t, c.cmd, ` DOCKER_CONFIG='`+cfg+`' docker compose --project-directory `, "inside the clean environment")
+			assert.Contains(t, c.cmd, ` DOCKER_CONFIG=`+cfg+` docker compose --project-directory `, "inside the clean environment")
 			assert.True(t, strings.HasPrefix(c.cmd, "env -i "), c.cmd)
 		}
 	}
@@ -719,7 +810,7 @@ func TestRemoteBuildReturnsTheClonedCommit(t *testing.T) {
 				order = append(order, "head")
 			case c.cmd == "rm -rf '/tmp/paas-build-abc/.git'":
 				order = append(order, "drop .git")
-			case strings.Contains(c.cmd, " build ") && !strings.Contains(c.cmd, "clone"):
+			case c.kind == "stream" && strings.Contains(c.cmd, " build "):
 				order = append(order, "build")
 			}
 		}
@@ -933,6 +1024,10 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 	var seq []string
 	for _, c := range h.recorded() {
 		if strings.Contains(c.cmd, "nixpacks") || strings.Contains(c.cmd, "docker") {
+			// ensure.sh is quoted whole in its command: up to the script.
+			if strings.Contains(c.cmd, "TOFT_BUILDER=") {
+				c.cmd = strings.SplitAfter(c.cmd, " sh -c ")[0]
+			}
 			seq = append(seq, c.cmd)
 		}
 	}
@@ -942,10 +1037,13 @@ func TestRemoteNixpacksBuildIsToftsOwn(t *testing.T) {
 		"e=$(mktemp) && { " + remoteCleanEnvPrefix + "nixpacks plan '/tmp/paas-build-abc' '--env' 'TOFT_GIT_SHA=abc' 2>\"$e\"; s=$?; [ $s = 0 ] || cat \"$e\"; rm -f \"$e\"; exit $s; }",
 		remoteCleanEnvPrefix + "nixpacks build '/tmp/paas-build-abc' --out '/tmp/paas-build-abc' --cache-key " + testServiceID + " '--env' 'TOFT_GIT_SHA=abc' 2>&1",
 		`d=$(mktemp -d /tmp/paas-docker-XXXXXX) && ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins" && echo "$d"`,
-		"DOCKER_CONFIG='/tmp/paas-docker-abc' BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build -t " + testImageTag +
-			` --build-arg 'FOO=it'\''s $HOME' --build-arg 'NODE_ENV=production'` +
-			" --build-arg 'BUILDKIT_SYNTAX=" + dockerfileFrontend + "' --build-arg 'BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID + "'" +
-			" -f '/tmp/paas-build-abc/.nixpacks/Dockerfile' '/tmp/paas-build-abc' 2>&1",
+		// The builder is made sure of on the server, then the build runs on it.
+		"e=$(mktemp) && { " + remoteCleanEnvPrefix + "DOCKER_CONFIG=/tmp/paas-docker-abc TOFT_BUILDER=toft-build TOFT_BUILDER_BRIDGE=toft-ubuild TOFT_BUILDER_IMAGE=" + builder.Image +
+			" TOFT_BUILDER_MEMORY='' TOFT_BUILDER_CGROUP='' TOFT_BUILDER_CACHE=10% TOFT_BUILDER_LOCK=" + builder.LockDir + "/toft-build.lock TOFT_BUILDER_WAIT=300 sh -c ",
+		remoteCleanEnvPrefix + "DOCKER_CONFIG=/tmp/paas-docker-abc BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false [lock toft-build] docker buildx build --builder toft-build --load -t " + testImageTag +
+			` --build-arg 'FOO=it'\''s $HOME' --build-arg NODE_ENV=production` +
+			" --build-arg BUILDKIT_SYNTAX=" + dockerfileFrontend + " --build-arg BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID +
+			" -f /tmp/paas-build-abc/.nixpacks/Dockerfile /tmp/paas-build-abc 2>&1",
 		"rm -rf '/tmp/paas-docker-abc'",
 	}, seq)
 }
@@ -988,14 +1086,15 @@ func TestRemoteBuildPullsWithTheServicesLogin(t *testing.T) {
 				assert.NotContains(t, c.cmd, "DOCKER_CONFIG", "%s: nixpacks gets no login", name)
 			}
 			if strings.Contains(c.cmd, cfg) {
-				seq = append(seq, c.kind+" "+strings.SplitAfter(c.cmd, "docker build")[0])
+				seq = append(seq, c.kind+" "+strings.SplitAfter(strings.SplitAfter(c.cmd, " buildx build")[0], " TOFT_BUILDER=")[0])
 			}
 		}
 		assert.Equal(t, []string{
 			"exec umask 077 && rm -f '" + cfg + "/config.json' && : > '" + cfg + "/config.json'",
 			"upload '" + cfg + "/config.json'",
 			"exec chmod 600 '" + cfg + "/config.json'",
-			"stream DOCKER_CONFIG='" + cfg + "' BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build",
+			"exec e=$(mktemp) && { " + remoteCleanEnvPrefix + "DOCKER_CONFIG=" + cfg + " TOFT_BUILDER=",
+			"stream " + remoteCleanEnvPrefix + "DOCKER_CONFIG=" + cfg + " BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false [lock toft-build] docker buildx build",
 			"exec rm -rf '" + cfg + "'",
 		}, seq, name)
 		assert.JSONEq(t, `{"auths":{"ghcr.io":{"auth":"Ym90Omh1bnRlcjI="}}}`, h.uploads["'"+cfg+"/config.json'"], name)
@@ -1005,9 +1104,9 @@ func TestRemoteBuildPullsWithTheServicesLogin(t *testing.T) {
 			require.NoError(t, build(newTestRemote(h), none), name)
 			_, uploaded := h.find("config.json")
 			assert.False(t, uploaded, "%s: no login, no config.json", name)
-			b, ok := h.find("docker build")
+			b, ok := h.find("docker buildx build --builder toft-build --load")
 			require.True(t, ok, name)
-			assert.True(t, strings.HasPrefix(b.cmd, "DOCKER_CONFIG='"+cfg+"' "), "%s: an empty config of its own: %s", name, b.cmd)
+			assert.True(t, strings.HasPrefix(b.cmd, remoteCleanEnvPrefix+"DOCKER_CONFIG="+cfg+" "), "%s: an empty config of its own: %s", name, b.cmd)
 		}
 	}
 }
@@ -1018,7 +1117,7 @@ func TestRemoteNixpacksRefusesAnUnreadablePlan(t *testing.T) {
 	_, err := newTestRemote(h).BuildFromGitNixpacks(context.Background(), "https://example.com/r.git", "main", "", testImageTag,
 		deployment.NixpacksCommands{}, nil, nil, func(string) {})
 	require.ErrorContains(t, err, "read the nixpacks plan")
-	_, built := h.find("docker build")
+	_, built := h.find("buildx build")
 	assert.False(t, built)
 }
 
@@ -1094,7 +1193,7 @@ func TestRemoteBuildFromArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cmds []string
-	for _, c := range h.calls {
+	for _, c := range h.recorded() {
 		cmds = append(cmds, c.cmd)
 	}
 	all := strings.Join(cmds, "\n")
@@ -1102,9 +1201,9 @@ func TestRemoteBuildFromArchive(t *testing.T) {
 		"tar -x -o -f - -C '/tmp/paas-build-abc123'",
 		// The build's own arguments, then the two that keep it to its
 		// service (D-167), with a Docker config of its own.
-		"DOCKER_CONFIG='/tmp/paas-docker-abc' BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false docker build -t " + testImageTag + " --build-arg 'TOFT_GIT_SHA=abc'" +
-			" --build-arg 'BUILDKIT_SYNTAX=" + dockerfileFrontend + "' --build-arg 'BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID + "'" +
-			" -f '/tmp/paas-build-abc123/services/api/Dockerfile' '/tmp/paas-build-abc123' 2>&1",
+		remoteCleanEnvPrefix + "DOCKER_CONFIG=/tmp/paas-docker-abc BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false [lock toft-build] docker buildx build --builder toft-build --load -t " + testImageTag + " --build-arg TOFT_GIT_SHA=abc" +
+			" --build-arg BUILDKIT_SYNTAX=" + dockerfileFrontend + " --build-arg BUILDKIT_CACHE_MOUNT_NS=paas/" + testServiceID +
+			" -f /tmp/paas-build-abc123/services/api/Dockerfile /tmp/paas-build-abc123 2>&1",
 		"rm -rf '/tmp/paas-docker-abc'",
 		"rm -rf '/tmp/paas-build-abc123'",
 	} {
@@ -1160,6 +1259,132 @@ func TestPullRetriesOnceWhenTheConnectionDrops(t *testing.T) {
 	h.stream = func(context.Context, string) error { pulls++; return errors.New("manifest unknown") }
 	if err := newTestRemote(h).pull(context.Background(), "nginx:nope", nil, func(string) {}); err == nil || pulls != 1 {
 		t.Fatalf("a failed pull must not repeat: err=%v pulls=%d", err, pulls)
+	}
+}
+
+// The check of the builder fails on the server (no buildx, a network that
+// isn't Toft's: ensure.sh's exits): nothing is built and no compose up
+// runs there, and the deploy fails with the check's words.
+func TestRemoteRunsNothingWhenTheBuilderIsRefused(t *testing.T) {
+	h := &fakeHost{stack: stackBuilds, docker: fakedocker.New(t)}
+	h.exec = func(_ context.Context, cmd string) (string, error) {
+		if strings.Contains(cmd, "TOFT_BUILDER=") {
+			return "", errors.New("Docker's buildx plugin is missing on this server (exit status 20)")
+		}
+		return "", nil
+	}
+	const want = "the builder toft-build: Docker's buildx plugin is missing on this server"
+	o := newTestRemote(h)
+	err := o.dockerBuild(context.Background(), testImageTag, nil, nil, "", "/tmp/paas-build-abc", func(string) {})
+	require.ErrorContains(t, err, want)
+	err = o.RunCompose(context.Background(), "dep-1", slotSvcID, "web", "services: {web: {build: .}}\n",
+		nil, nil, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, rollout.Hooks{Log: func(string) {}})
+	require.ErrorContains(t, err, want)
+
+	checks := 0
+	for _, c := range h.recorded() {
+		if strings.Contains(c.cmd, "TOFT_BUILDER=") {
+			checks++
+		}
+		assert.False(t, c.kind == "stream" && (strings.Contains(c.cmd, " build ") || strings.Contains(c.cmd, " up ")), "ran after the refusal: %s", c.cmd)
+	}
+	assert.Equal(t, 2, checks, "the check ran for the build and for the stack")
+}
+
+// A compose up for a server whose agent is older than the panel is refused
+// with that reason before anything reaches the server.
+func TestRemoteRunsNoComposeForAnOutdatedAgent(t *testing.T) {
+	h := &fakeHost{stack: stackBuilds, docker: fakedocker.New(t)}
+	o := newTestRemote(h)
+	outdated := &server.AgentOutdatedError{ServerID: "srv-1", Name: "fsn1", Version: "v0.23.1"}
+	o.agentNow = func() agentAbilities { return agentAbilities{rollouts: true, outdated: outdated} }
+	handed := false
+	hooks := rollout.Hooks{Log: func(string) {}, HandOff: func() error { handed = true; return nil }}
+
+	err := o.RunCompose(context.Background(), "dep-1", slotSvcID, "web", "services: {web: {build: .}}\n",
+		nil, nil, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, hooks)
+	require.ErrorIs(t, err, outdated)
+	err = o.RunComposeFromRepo(context.Background(), "dep-1", slotSvcID, "web", t.TempDir(), "docker-compose.yml",
+		nil, nil, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, hooks)
+	require.ErrorIs(t, err, outdated)
+	assert.ErrorContains(t, err, "/servers/srv-1?tab=settings#connection")
+	assert.Empty(t, h.recorded(), "nothing reached the server")
+	assert.False(t, handed)
+
+	// An agent that connects older than the panel while the release is
+	// uploaded is refused where the up would be handed to it.
+	h = &fakeHost{stack: stackBuilds, docker: fakedocker.New(t), exec: func(_ context.Context, cmd string) (string, error) {
+		if strings.Contains(cmd, "mktemp -d") {
+			return rollout.ComposeDir(slotSvcID) + "/r-abc\n", nil
+		}
+		return "", nil
+	}}
+	o = newTestRemote(h)
+	asked := 0
+	o.agentNow = func() agentAbilities {
+		if asked++; asked == 1 {
+			return agentAbilities{}
+		}
+		return agentAbilities{rollouts: true, outdated: outdated}
+	}
+	err = o.RunCompose(context.Background(), "dep-1", slotSvcID, "web", "services: {web: {build: .}}\n",
+		nil, nil, deployment.ComposeNetworks{Home: "paas-network"}, nil, nil, hooks)
+	require.ErrorIs(t, err, outdated)
+	assert.False(t, handed)
+	for _, c := range h.recorded() {
+		assert.NotContains(t, c.cmd, "docker compose", "no compose command ran")
+	}
+}
+
+// A build cut off by a lost connection is ended on the server, by the mark
+// its commands carried, before it runs again: a deploy never has two builds
+// running. When that can't be made sure of, it doesn't run again.
+func TestALostBuildIsEndedBeforeItRunsAgain(t *testing.T) {
+	for name, ended := range map[string]bool{"ended": true, "not ended": false} {
+		t.Run(name, func(t *testing.T) {
+			// What ends the commands of each builder check and each build.
+			var checks, builds []string
+			h := &fakeHost{}
+			h.exec = func(ctx context.Context, cmd string) (string, error) {
+				switch {
+				case strings.Contains(cmd, "m=TOFT_EXEC=") && !ended:
+					return "", errors.New("exit status 1")
+				case strings.Contains(cmd, "TOFT_BUILDER="):
+					checks = append(checks, sshclient.Reaper(ctx))
+				}
+				return "", nil
+			}
+			h.stream = func(ctx context.Context, cmd string) error {
+				builds = append(builds, sshclient.Reaper(ctx))
+				if len(builds) == 1 {
+					return &sshpool.ConnectionLostError{Err: errors.New("EOF")}
+				}
+				return nil
+			}
+			err := newTestRemote(h).dockerBuild(context.Background(), testImageTag, nil, nil, "", "/tmp/paas-build-abc", func(string) {})
+
+			var order []string
+			for _, c := range h.recorded() {
+				switch {
+				case c.kind == "stream":
+					order = append(order, "build")
+				case strings.Contains(c.cmd, "m=TOFT_EXEC="):
+					order = append(order, "end "+c.cmd)
+				}
+			}
+			require.NotEmpty(t, builds)
+			require.NotEqual(t, "true", builds[0], "the first run carries a mark")
+			assert.Equal(t, builds[0], checks[0], "the check of the builder and the build carry one mark")
+			if !ended {
+				require.ErrorIs(t, err, sshpool.ErrConnectionLost)
+				assert.ErrorContains(t, err, "not run again")
+				assert.Equal(t, []string{"build", "end " + builds[0]}, order)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{"build", "end " + builds[0], "build"}, order)
+			assert.NotEqual(t, builds[0], builds[1], "the second run is not found by the first's mark")
+		})
 	}
 }
 

@@ -4,24 +4,31 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/internal/rollout/fakedocker"
+	"github.com/Nickpap21/toft/backend/internal/testenv"
 	"github.com/docker/docker/api/types/container"
 )
 
 // fakeCompose points the agent at a docker CLI that records what it was
-// given in the returned directory, and a release of testSvc to deploy.
+// given in the returned directory, and a release of testSvc to deploy. A
+// builder's lock, root's in /run, is in a folder of the test's. Beside
+// docker is an nft that lists what it is asked for (firewall): a test that
+// builds puts the directory first on PATH.
 func fakeCompose(t *testing.T) (out, release string) {
 	t.Helper()
 	stateDir = t.TempDir()
 	out = t.TempDir()
-	saved, savedRoot := dockerBin, rollout.ComposeRoot
-	t.Cleanup(func() { dockerBin, rollout.ComposeRoot = saved, savedRoot })
+	saved, savedRoot, savedLock := dockerBin, rollout.ComposeRoot, builder.LockDir
+	t.Cleanup(func() { dockerBin, rollout.ComposeRoot, builder.LockDir = saved, savedRoot, savedLock })
 	rollout.ComposeRoot = t.TempDir()
+	builder.LockDir = t.TempDir()
 	release = filepath.Join(rollout.ComposeDir(testSvc), "r-1")
 	if err := os.MkdirAll(release, 0o700); err != nil {
 		t.Fatal(err)
@@ -30,7 +37,7 @@ func fakeCompose(t *testing.T) (out, release string) {
 		t.Fatal(err)
 	}
 	dockerBin = filepath.Join(out, "docker")
-	script := "#!/bin/sh\n" +
+	script := "#!/bin/sh\n" + answersConfig(stackPulls) +
 		`echo "$@" >> ` + out + "/args\n" +
 		`cat "$3/.env" > ` + out + "/env\n" +
 		`[ -n "$DOCKER_CONFIG" ] && cat "$DOCKER_CONFIG/config.json" > ` + out + "/config\n" +
@@ -39,7 +46,36 @@ func fakeCompose(t *testing.T) (out, release string) {
 	if err := os.WriteFile(dockerBin, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	firewall(t, out, true)
 	return out, release
+}
+
+// firewall is the server's nft in dir: one that lists the chain a build
+// asks for, or one on which Toft's rules aren't loaded. What it was asked
+// goes in the file asked.
+func firewall(t *testing.T, dir string, loaded bool) {
+	t.Helper()
+	script := "#!/bin/sh\necho \"$*\" >> " + dir + "/asked\n"
+	if !loaded {
+		script += "echo 'Error: No such file or directory' >&2\nexit 1\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nft"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// What docker compose config answers for a stack that builds nothing, and
+// for one that builds.
+const (
+	stackPulls  = `{"services":{"web":{"image":"example/web"}}}`
+	stackBuilds = `{"services":{"web":{"build":{"context":"."}}}}`
+)
+
+// answersConfig is the start of a fake docker's script: it answers docker
+// compose config, the reading that says whether the stack builds, with
+// stack.
+func answersConfig(stack string) string {
+	return `case "$*" in *' config --format json') echo '` + stack + `'; exit 0;; esac` + "\n"
 }
 
 func composeRequest(release string) rollout.Request {
@@ -82,7 +118,7 @@ func TestAgentRunsAComposeUp(t *testing.T) {
 	want := "compose --project-directory " + release + " -f " + release + "/docker-compose.yml -f " +
 		filepath.Join(rolloutDir(), "dep-c.d", "paas-route.yml") + " --project-name " +
 		rollout.ComposeProjectName(testSvc, "web")
-	want = want + " up --no-start --pull always --remove-orphans\n" + want + " up -d --pull never --no-build --no-recreate --remove-orphans\n"
+	want = want + " up --no-start --pull always --remove-orphans --no-build\n" + want + " up -d --pull never --no-build --no-recreate --remove-orphans\n"
 	if args != want {
 		t.Fatalf("args\n%q\nwant\n%q", args, want)
 	}
@@ -192,12 +228,272 @@ func TestAgentRefusesAStackThatRoutesItselfBeforeItStarts(t *testing.T) {
 	}
 }
 
+// A stack that docker compose config shows as building goes up on Toft's
+// builder: the agent makes sure of it first (ensure.sh, with the deploy's
+// own Docker config), then runs the create with --build and the builder
+// named in its environment.
+func TestAgentBuildsAStackOnTheBuilder(t *testing.T) {
+	if _, err := os.Stat("/proc/meminfo"); err != nil {
+		testenv.Skip(t, "the builder's memory limit is read from /proc/meminfo")
+	}
+	out, release := fakeCompose(t)
+	// ensure.sh finds docker on PATH; the network is there, the builder's
+	// container isn't.
+	t.Setenv("PATH", out+":"+os.Getenv("PATH"))
+	script := "#!/bin/sh\n" + answersConfig(stackBuilds) +
+		`echo "$DOCKER_CONFIG|$BUILDX_BUILDER|$*" >> ` + out + "/args\n" +
+		`case "$1 $2" in "network inspect") echo "bridge|$TOFT_BUILDER_BRIDGE|true|build|false";; "container inspect") exit 1;; esac` + "\n"
+	if err := os.WriteFile(dockerBin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := testRollouts(fakedocker.New(t))
+	if err := m.start(composeRequest(release)); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-c"); rec.Progress.Result == nil || rec.Progress.Result.Step != "" {
+		t.Fatalf("result %+v\n%s", rec.Progress, read(t, logFile("dep-c")))
+	}
+	cfg := filepath.Join(rolloutDir(), "dep-c.d", "docker")
+	stack := "compose --project-directory " + release + " -f " + release + "/docker-compose.yml -f " +
+		filepath.Join(rolloutDir(), "dep-c.d", "paas-route.yml") + " --project-name " + rollout.ComposeProjectName(testSvc, "web")
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(read(t, out+"/args")), "\n") {
+		// The builder's settings are ensure.sh's own; its commands are what counts here.
+		if words := strings.Fields(line); len(words) > 2 && strings.HasSuffix(words[0], "|buildx") {
+			line = strings.Join(words[:2], " ")
+		}
+		got = append(got, line)
+	}
+	want := []string{
+		cfg + "||buildx version",
+		cfg + "||network inspect -f {{.Driver}}|{{index .Options \"com.docker.network.bridge.name\"}}|{{index .Labels \"paas.managed\"}}|{{index .Labels \"paas.network.kind\"}}|{{.EnableIPv6}} toft-build",
+		cfg + "||container inspect -f {{.HostConfig.NetworkMode}}|{{range .Config.Env}}{{println .}}{{end}} buildx_buildkit_toft-build0",
+		// Again, once the check has the builder's lock.
+		cfg + "||container inspect -f {{.HostConfig.NetworkMode}}|{{range .Config.Env}}{{println .}}{{end}} buildx_buildkit_toft-build0",
+		cfg + "||buildx rm",
+		cfg + "||buildx create",
+		cfg + "||buildx inspect",
+		cfg + "||exec buildx_buildkit_toft-build0 sh -c p=$(pidof buildkitd) && for i in $p; do echo 1000 >/proc/$i/oom_score_adj || exit 1; done",
+		cfg + "|toft-build|" + stack + " up --no-start --pull always --remove-orphans --build",
+		cfg + "||" + stack + " up -d --pull never --no-build --no-recreate --remove-orphans",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A panel rolled back to 1.2.3 sends no builder with a compose deploy (the
+// request had none then). The agent builds on its own toft-build, on the
+// bridge the firewall holds, never on Docker's default builder, and asks
+// its server's firewall first as for any build: where the rules aren't
+// loaded, it builds nothing.
+func TestAPanelRolledBackTo123BuildsOnTheAgentsOwnBuilder(t *testing.T) {
+	if _, err := os.Stat("/proc/meminfo"); err != nil {
+		testenv.Skip(t, "the builder's memory limit is read from /proc/meminfo")
+	}
+	out, release := fakeCompose(t)
+	t.Setenv("PATH", out+":"+os.Getenv("PATH"))
+	script := "#!/bin/sh\n" + answersConfig(stackBuilds) +
+		`echo "builder=$BUILDX_BUILDER|$*" >> ` + out + "/args\n" +
+		`case "$1 $2" in "network inspect") echo "bridge|$TOFT_BUILDER_BRIDGE|true|build|false";; "container inspect") exit 1;; esac` + "\n"
+	if err := os.WriteFile(dockerBin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// 1.2.3's request has no Builder field: the agent reads it as none.
+	req := composeRequest(release)
+	if req.Compose.Builder != nil {
+		t.Fatalf("the request names a builder, which 1.2.3's doesn't: %+v", req.Compose.Builder)
+	}
+	m := testRollouts(fakedocker.New(t))
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-c"); rec.Progress.Result == nil || rec.Progress.Result.Step != "" {
+		t.Fatalf("result %+v\n%s", rec.Progress, read(t, logFile("dep-c")))
+	}
+	if asked := read(t, out+"/asked"); asked != "list chain ip toft from_untrusted\n" {
+		t.Fatalf("the firewall was asked %q", asked)
+	}
+	ran := read(t, out+"/args")
+	created, built := false, false
+	for _, line := range strings.Split(strings.TrimSpace(ran), "\n") {
+		named, cmd, _ := strings.Cut(line, "|")
+		switch {
+		case strings.HasPrefix(cmd, "buildx create "):
+			created = true
+			for _, want := range []string{"--name toft-build ", "--driver docker-container", "--driver-opt network=toft-build "} {
+				if !strings.Contains(cmd+" ", want) {
+					t.Fatalf("the builder was made without %q:\n%s", want, cmd)
+				}
+			}
+		case strings.HasSuffix(cmd, " --build") || strings.Contains(cmd, " --build ") || strings.Contains(cmd, " build "):
+			built = true
+			if named != "builder=toft-build" {
+				t.Fatalf("a build ran on %q, not on the agent's toft-build:\n%s", named, cmd)
+			}
+		}
+	}
+	if !created || !built {
+		t.Fatalf("made the builder: %v, built: %v\n%s", created, built, ran)
+	}
+
+	// The server's firewall isn't loaded.
+	firewall(t, out, false)
+	if err := os.Remove(out + "/args"); err != nil {
+		t.Fatal(err)
+	}
+	req = composeRequest(release)
+	req.Compose.DeploymentID = "dep-d"
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-d"); rec.Progress.Result == nil || !strings.Contains(rec.Progress.Result.Err, "Toft's rules aren't loaded on it") {
+		t.Fatalf("result %+v", rec.Progress.Result)
+	}
+	if ran := read(t, out+"/args"); strings.Contains(ran, "buildx") || strings.Contains(ran, " up ") {
+		t.Fatalf("docker built without the firewall:\n%s", ran)
+	}
+}
+
+// The check of the builder refuses on the agent's server (Docker has no
+// buildx): the agent runs no compose up at all, and the deploy fails with
+// the check's words.
+func TestAgentRunsNothingWhenTheBuilderIsRefused(t *testing.T) {
+	out, release := fakeCompose(t)
+	t.Setenv("PATH", out+":"+os.Getenv("PATH"))
+	script := "#!/bin/sh\n" + answersConfig(stackBuilds) + `echo "$*" >> ` + out + "/args\n" +
+		`[ "$1 $2" = "buildx version" ] && exit 1` + "\nexit 0\n"
+	if err := os.WriteFile(dockerBin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := testRollouts(fakedocker.New(t))
+	if err := m.start(composeRequest(release)); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	const want = "docker compose up: the builder toft-build: Docker's buildx plugin is missing"
+	if rec, _ := readRecord("dep-c"); rec.Progress.Result == nil || rec.Progress.Result.Step != rollout.StepComposeUp ||
+		!strings.HasPrefix(rec.Progress.Result.Err, want) {
+		t.Fatalf("result %+v\n%s", rec.Progress.Result, read(t, logFile("dep-c")))
+	}
+	if ran := strings.TrimSpace(read(t, out+"/args")); ran != "buildx version" {
+		t.Fatalf("docker ran, after the check refused:\n%s", ran)
+	}
+}
+
+// The builder is the panel's to describe: an agent whose own BuildKit is
+// another release's makes the builder the request names, so the container
+// the panel's builds on the server started is kept, not removed under a
+// build that runs on it. One that isn't Toft's builder is refused before
+// docker runs.
+func TestAgentMakesThePanelsBuilder(t *testing.T) {
+	panels := builder.Spec{Name: "toft-build", Bridge: "toft-ubuild", Memory: 1 << 30, Firewall: true,
+		Image: "moby/buildkit:v0.1.0@sha256:" + strings.Repeat("a", 64), Cache: "20GB"}
+	if panels.Image == builder.Image {
+		t.Fatal("the test needs an image that isn't the agent's own")
+	}
+	out, release := fakeCompose(t)
+	t.Setenv("PATH", out+":"+os.Getenv("PATH"))
+	// The builder's container is there, made for the panel's settings.
+	script := "#!/bin/sh\n" + answersConfig(stackBuilds) + `echo "$*" >> ` + out + "/args\n" +
+		`case "$1 $2" in "network inspect") echo "bridge|$TOFT_BUILDER_BRIDGE|true|build|false";; ` +
+		`"container inspect") printf 'toft-build|TOFT_BUILDER_SPEC=%s\nPATH=/bin\n' "` + panels.Image + ` toft-build 1073741824  20GB";; esac` + "\n"
+	if err := os.WriteFile(dockerBin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	req := composeRequest(release)
+	req.Compose.Builder = &panels
+	m := testRollouts(fakedocker.New(t))
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-c"); rec.Progress.Result == nil || rec.Progress.Result.Step != "" {
+		t.Fatalf("result %+v\n%s", rec.Progress, read(t, logFile("dep-c")))
+	}
+	ran := read(t, out+"/args")
+	if strings.Contains(ran, "rm -f") {
+		t.Fatalf("the agent removed the builder's container:\n%s", ran)
+	}
+	for _, want := range []string{"--driver-opt image=" + panels.Image + " ", "--driver-opt memory=1073741824 ", " up --no-start --pull always --remove-orphans --build"} {
+		if !strings.Contains(ran, want) {
+			t.Fatalf("docker didn't run %q:\n%s", want, ran)
+		}
+	}
+
+	if err := os.Remove(out + "/args"); err != nil {
+		t.Fatal(err)
+	}
+	req = composeRequest(release)
+	req.Compose.DeploymentID = "dep-d"
+	req.Compose.Builder = &builder.Spec{Name: "default", Bridge: "docker0"}
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-d"); rec.Progress.Result == nil || !strings.HasPrefix(rec.Progress.Result.Err, "the panel's builder: no builder of Toft's is") {
+		t.Fatalf("result %+v", rec.Progress.Result)
+	}
+	if ran := read(t, out+"/args"); ran != "" {
+		t.Fatalf("docker ran for a builder that isn't Toft's:\n%s", ran)
+	}
+
+	// A builder that is no deploy's builds nothing: the stack is read, and
+	// that is all. A deploy's, for an untrusted preview, builds on that
+	// builder once the server's firewall has answered, and builds nothing
+	// where the rules aren't loaded.
+	untrusted := builder.Spec{Name: "toft-build-untrusted", Bridge: "toft-upbuild", Memory: 1 << 30}
+	req = composeRequest(release)
+	req.Compose.DeploymentID, req.Compose.Builder = "dep-e", &untrusted
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-e"); rec.Progress.Result == nil || !strings.Contains(rec.Progress.Result.Err, "Toft's rules aren't loaded on it") {
+		t.Fatalf("result %+v", rec.Progress.Result)
+	}
+	if ran := read(t, out+"/args"); strings.Contains(ran, "buildx") || strings.Contains(ran, " up ") {
+		t.Fatalf("docker built without the firewall:\n%s", ran)
+	}
+	walled := untrusted
+	walled.Firewall = true
+	firewall(t, out, false)
+	req = composeRequest(release)
+	req.Compose.DeploymentID, req.Compose.Builder = "dep-g", &walled
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-g"); rec.Progress.Result == nil || !strings.Contains(rec.Progress.Result.Err, "Toft's rules aren't loaded on it") {
+		t.Fatalf("result %+v", rec.Progress.Result)
+	}
+	if ran := read(t, out+"/args"); strings.Contains(ran, "buildx") || strings.Contains(ran, " up ") {
+		t.Fatalf("docker built where the firewall isn't loaded:\n%s", ran)
+	}
+	firewall(t, out, true)
+	req = composeRequest(release)
+	req.Compose.DeploymentID, req.Compose.Builder = "dep-f", &walled
+	if err := m.start(req); err != nil {
+		t.Fatal(err)
+	}
+	<-m.whenIdle()
+	if rec, _ := readRecord("dep-f"); rec.Progress.Result == nil || rec.Progress.Result.Step != "" {
+		t.Fatalf("result %+v\n%s", rec.Progress, read(t, logFile("dep-f")))
+	}
+	if ran := read(t, out+"/args"); !strings.Contains(ran, "--driver-opt network=toft-build-untrusted ") {
+		t.Fatalf("the agent didn't build on the untrusted builder:\n%s", ran)
+	}
+}
+
 // A create that fails (a pull or a build) has recreated nothing: the running
 // stack still carries the last good deploy's routes. The result is the
 // create's error, and the stack is neither checked nor taken down.
 func TestAgentLeavesTheRunningStackAloneWhenCreateFails(t *testing.T) {
 	out, release := fakeCompose(t)
-	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\necho \"$@\" >> "+out+"/args\n"+
+	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\n"+answersConfig(stackPulls)+"echo \"$@\" >> "+out+"/args\n"+
 		"case \"$*\" in *' up --no-start '*) echo pull access denied; exit 1;; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +525,7 @@ func TestAgentLeavesTheRunningStackAloneWhenCreateFails(t *testing.T) {
 func TestAgentTakesDownAStackThatRoutesItselfWhenUpFails(t *testing.T) {
 	out, release := fakeCompose(t)
 	// up -d fails, as when a dependency never turns healthy.
-	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\necho \"$@\" >> "+out+"/args\n"+
+	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\n"+answersConfig(stackPulls)+"echo \"$@\" >> "+out+"/args\n"+
 		"case \"$*\" in *' up -d '*) sleep 0.5; exit 1;; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -325,5 +621,29 @@ func TestComposeUpStaysInTheServicesReleases(t *testing.T) {
 		if err := checkComposeUp(c); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+// A command of the builder's check that the deploy's end interrupts is
+// asked to end first (SIGTERM), so it can finish what it was doing.
+func TestComposeHostOutputAsksACommandToEnd(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			if _, err := os.Stat(dir + "/started"); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	_, err := composeHost{clean: os.Environ()}.Output(ctx, nil, "sh", "-c",
+		"trap 'echo asked > "+dir+"/asked; exit 0' TERM; echo started > "+dir+"/started; while :; do sleep 0.05; done")
+	if ctx.Err() == nil {
+		t.Fatalf("the command ended by itself: %v", err)
+	}
+	if got := read(t, dir+"/asked"); got != "asked\n" {
+		t.Fatalf("the command was killed without being asked (err %v)", err)
 	}
 }

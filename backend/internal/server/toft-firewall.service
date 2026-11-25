@@ -11,6 +11,9 @@ Before=docker.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/toft/firewall.nft
+# The operator's build destinations (D-170), after the table and apart from
+# it: when nft refuses the list, the table stays loaded and the list empty.
+ExecStartPost=-/bin/sh -c '[ ! -e /etc/toft/firewall.d/build-destinations.nft ] || exec /usr/sbin/nft -f /etc/toft/firewall.d/build-destinations.nft'
 
 [Install]
 WantedBy=multi-user.target

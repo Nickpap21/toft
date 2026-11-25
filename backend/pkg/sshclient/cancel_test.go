@@ -335,3 +335,43 @@ func TestDeadlineEndsTheCommandWithoutThePanel(t *testing.T) {
 	require.Eventually(t, func() bool { return len(procsWith(n)) == 0 }, 6*time.Second, 50*time.Millisecond,
 		"still running past its deadline and margin")
 }
+
+// A step's commands carry one mark (Marked), and what they left running when
+// the connection was lost under them is ended from a new connection by
+// Reaper: in the background, deaf to SIGTERM, all of it.
+func TestReaperEndsWhatALostConnectionLeft(t *testing.T) {
+	assert.Equal(t, "true", Reaper(context.Background()), "no mark, nothing to end")
+	if runtime.GOOS != "linux" {
+		t.Skip("the reaper reads /proc")
+	}
+	if exec.Command("grep", "-z", "--version").Run() != nil {
+		testenv.Skip(t, "no GNU grep here")
+	}
+	old := reapGrace
+	reapGrace = time.Second
+	t.Cleanup(func() { reapGrace = old })
+
+	srv := sshtest.New(t, sshtest.WithShell())
+	c := dialT(t, testConfig(srv))
+	n := sleepArg()
+	t.Cleanup(func() { _ = exec.Command("pkill", "-KILL", "-f", "sleep "+n).Run() })
+
+	step := Marked(context.Background())
+	errc := make(chan error, 2)
+	go func() { _, err := c.ExecContext(step, "sleep "+n+" & sleep "+n); errc <- err }()
+	go func() {
+		errc <- c.ExecStreamContext(step, "sh -c 'trap \"\" TERM; sleep "+n+"'", func(string) {})
+	}()
+	require.Eventually(t, func() bool { return len(procsWith("sleep\x00"+n)) == 3 }, 5*time.Second, 20*time.Millisecond)
+	srv.DropAll()
+	require.Error(t, <-errc)
+	require.Error(t, <-errc)
+	require.Len(t, procsWith("sleep\x00"+n), 3, "the dropped connection alone ended them: the test proves nothing")
+
+	again := dialT(t, testConfig(srv))
+	_, err := again.ExecContext(context.Background(), Reaper(step))
+	require.NoError(t, err)
+	assert.Empty(t, procsWith(n), "still running on the server")
+	_, err = again.ExecContext(context.Background(), Reaper(step))
+	require.NoError(t, err, "nothing left to end")
+}

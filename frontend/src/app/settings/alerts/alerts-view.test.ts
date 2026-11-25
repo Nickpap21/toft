@@ -66,5 +66,13 @@ describe("alertSubject", () => {
       where: "server",
       href: "/servers/srv",
     });
+    expect(alertSubject(alert({ kind: "agent_outdated", subject: "srv", subject_name: "fsn1" })).href).toBe(
+      "/servers/srv?tab=settings#connection",
+    );
+    expect(alertSubject(alert({ kind: "lookalike_container", subject: "srv", subject_name: "fsn1" }))).toEqual({
+      name: "fsn1",
+      where: "server",
+      href: "/servers/srv",
+    });
   });
 });

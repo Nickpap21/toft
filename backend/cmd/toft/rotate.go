@@ -137,7 +137,7 @@ func (u *upgrader) restartBackend(ctx context.Context) error {
 	if len(ids) != 2 {
 		return errors.New("the backend and the frontend aren't both running")
 	}
-	if err := u.compose(ctx, u.p.current, "up", "-d", "--no-deps", "--force-recreate", "backend"); err != nil {
+	if err := u.compose(ctx, u.p.current, "up", "-d", "--no-deps", "--force-recreate", "--no-build", "backend"); err != nil {
 		return fmt.Errorf("restart the backend: %w", err)
 	}
 	if err := u.healthy(ctx, ids); err != nil {

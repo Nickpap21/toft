@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nickpap21/toft/backend/internal/builder"
 	"github.com/Nickpap21/toft/backend/internal/composespec"
 	"github.com/Nickpap21/toft/backend/internal/rollout"
 )
@@ -84,44 +85,50 @@ func (m *rollouts) composeUp(ctx context.Context, id string, c rollout.ComposeUp
 	if err := writeNew(dotEnv, c.DotEnv); err != nil {
 		return fail("write the env file: " + err.Error())
 	}
-	args := []string{"compose", "--project-directory", c.ProjectDir, "-f", c.ComposeFile}
+	stack := []string{"--project-directory", c.ProjectDir, "-f", c.ComposeFile}
 	for _, ov := range c.Overrides {
 		p := filepath.Join(dir, ov.Name)
 		if err := writeNew(p, ov.Content); err != nil {
 			return fail("write " + ov.Name + ": " + err.Error())
 		}
-		args = append(args, "-f", p)
+		stack = append(stack, "-f", p)
 	}
-	args = append(args, "--project-name", project)
+	stack = append(stack, "--project-name", project)
+	args := append([]string{"compose"}, stack...)
 
 	// Only the platform variables the policy expects (composespec.RunEnv),
 	// and the registry's credentials in a config of the deploy's own.
-	env := make([]string, 0, len(composespec.RunEnv)+1)
+	clean := make([]string, 0, len(composespec.RunEnv))
 	for _, k := range composespec.RunEnv {
 		if v := os.Getenv(k); v != "" {
-			env = append(env, k+"="+v)
+			clean = append(clean, k+"="+v)
 		}
 	}
 	cfg, err := dockerConfig(dir, c.Auth)
 	if err != nil {
 		return fail("write the registry credentials: " + err.Error())
 	}
-	env = append(env, "DOCKER_CONFIG="+cfg)
 	// A compose build invokes buildx, which otherwise reads git from the
 	// build context — the repository's own working tree. Toft needs none of
 	// it, and the context is the repository's to shape, so buildx runs no
 	// git there.
-	env = append(env, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false")
+	clean = append(clean, "BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false")
+	env := append(slices.Clone(clean), "DOCKER_CONFIG="+cfg)
 
 	logf, err := os.OpenFile(logFile(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fail("open the log: " + err.Error())
 	}
 	defer logf.Close()
-	// run runs one docker compose command of the deploy, its PID on record
-	// so a restart waits for it (waitForUp).
-	run := func(extra ...string) error {
-		cmd := exec.CommandContext(ctx, dockerBin, append(slices.Clone(args), extra...)...)
+	// run runs one command of the deploy: docker itself, or for a build the
+	// shell that takes the builder's lock and becomes docker
+	// (builder.Run). Its PID goes on record so a restart waits for it
+	// (waitForUp).
+	run := func(env []string, name string, args ...string) error {
+		if name == "docker" {
+			name = dockerBin
+		}
+		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Env, cmd.Stdout, cmd.Stderr = env, logf, logf
 		// At the deploy's time limit compose gets to stop what it started.
 		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -175,14 +182,28 @@ func (m *rollouts) composeUp(ctx context.Context, id string, c rollout.ComposeUp
 	// A failed create (a pull or a build) started nothing and recreated
 	// nothing yet: the running stack is untouched, and checking its old
 	// containers against the new routes would take it down.
-	if err := run("up", "--no-start", "--pull", "always", "--remove-orphans"); err != nil {
+	host := composeHost{clean: clean, run: run}
+	// A panel that names no builder is one from before the builder was its
+	// to describe (a panel rolled back): the agent builds on its own, never
+	// on Docker's. Whichever it is, the agent asks this server's firewall
+	// before it builds (builder.Run).
+	spec := builder.Trusted
+	spec.Firewall = true
+	if c.Builder != nil {
+		if err := c.Builder.Check(); err != nil {
+			return fail("the panel's builder: " + err.Error())
+		}
+		spec = *c.Builder
+	}
+	if err := builder.FirstUp(ctx, host, spec, cfg, stack, []string{"--no-start", "--pull", "always", "--remove-orphans"},
+		func(line string) { appendLogLine(id, line) }); err != nil {
 		return fail("docker compose up: " + err.Error())
 	}
 	if err := check(); err != nil {
 		return fail(err.Error())
 	}
 	// Nothing pulled, built or recreated: what starts is what was checked.
-	upErr := run("up", "-d", "--pull", "never", "--no-build", "--no-recreate", "--remove-orphans")
+	upErr := run(env, "docker", append(slices.Clone(args), "up", "-d", "--pull", "never", "--no-build", "--no-recreate", "--remove-orphans")...)
 	if err := check(); err != nil {
 		return fail(err.Error())
 	}
@@ -190,6 +211,42 @@ func (m *rollouts) composeUp(ctx context.Context, id string, c rollout.ComposeUp
 		return fail("docker compose up: " + upErr.Error())
 	}
 	return rollout.Result{Changed: true}
+}
+
+// composeHost is where builder.FirstUp runs a compose deploy's commands on
+// the agent's server (builder.Host): in the clean environment compose gets.
+type composeHost struct {
+	clean []string
+	// run is composeUp's: the up's PID goes on record.
+	run func(env []string, name string, args ...string) error
+}
+
+func (h composeHost) Output(ctx context.Context, env []string, name string, args ...string) (string, error) {
+	if name == "docker" {
+		name = dockerBin
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(slices.Clone(h.clean), env...)
+	// As the deploy's other commands end: the command is asked first, and
+	// what it started that still holds its output is cut off 30 s later.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 30 * time.Second
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+		return string(out), fmt.Errorf("%s (%w)", strings.TrimSpace(string(exit.Stderr)), err)
+	}
+	return string(out), err
+}
+
+func (h composeHost) Stream(_ context.Context, env []string, name string, args ...string) error {
+	return h.run(append(slices.Clone(h.clean), env...), name, args...)
+}
+
+// OnHost runs script as the agent, which is root on its server.
+func (h composeHost) OnHost(ctx context.Context, script string) (string, error) {
+	out, err := exec.CommandContext(ctx, "sh", "-c", script).Output()
+	return string(out), err
 }
 
 // waitForUp waits for the docker compose up a restart left running: pid,

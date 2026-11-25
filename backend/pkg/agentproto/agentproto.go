@@ -39,6 +39,8 @@ const (
 // CapContainerCheck: its rollouts create a slot with the service's own
 // container check in place of the image's (rollout.Slot.Check); an older
 // agent would drop it and keep the image's.
+// CapBuilder: its compose ups build on Toft's builder and run with
+// --no-build, never with compose's own build.
 const (
 	CapRollout        = "rollout"
 	CapDesired        = "desired"
@@ -48,6 +50,7 @@ const (
 	CapDeadline       = "deadline"
 	CapHostUpdate     = "host-update"
 	CapContainerCheck = "container-check"
+	CapBuilder        = "builder"
 )
 
 // The DNS relay (D-115): gVisor's own network stack can't reach Docker's DNS

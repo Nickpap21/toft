@@ -291,6 +291,21 @@ jobs:
       - name: Dockerfile frontend (docker/dockerfile:1 newer than the pin in backend/internal/docker/buildkit.go fails)
         run: scripts/dockerfile-frontend.sh
 
+  # Daily only, as dockerfile-frontend is: a new BuildKit release fails
+  # this run, never a push that has nothing to do with it.
+  buildkit-image:
+    permissions:
+      contents: read
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: BuildKit image (moby/buildkit:latest newer than the pin in backend/internal/builder/builder.go fails)
+        run: scripts/buildkit-image.sh
+
   # Every commit of a pull request is signed off (DCO, CONTRIBUTING.md).
   # Dependabot signs its commits off too.
   dco:
