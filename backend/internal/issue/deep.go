@@ -469,6 +469,17 @@ func (s *Service) Clone(ctx context.Context, projectID string, number int, actor
 	if err != nil {
 		return nil, err
 	}
+	if in.Projects != nil && st.ParentID != "" {
+		// The clone keeps the parent: one of another project is refused,
+		// as parentFor refuses it.
+		parent, err := s.repo.IssueRef(ctx, st.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(in.Projects, parent.ProjectID) {
+			return nil, ErrIssueNotFound
+		}
+	}
 	dst := src
 	if in.ProjectID != "" && in.ProjectID != projectID {
 		if dst, err = s.repo.Project(ctx, in.ProjectID); err != nil {
@@ -482,7 +493,7 @@ func (s *Service) Clone(ctx context.Context, projectID string, number int, actor
 	if strings.TrimSpace(title) == "" {
 		title = st.Title
 	}
-	n, err := s.cloneOne(ctx, src, dst, st, title, st.ParentID, actorID, in.Keep)
+	n, err := s.cloneOne(ctx, src, dst, st, title, st.ParentID, actorID, in.Keep, in.Projects)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +526,7 @@ func (s *Service) Clone(ctx context.Context, projectID string, number int, actor
 			if err != nil {
 				return nil, err
 			}
-			if _, err := s.cloneOne(ctx, kp, dst, child, child.Title, clone.ID, actorID, in.Keep); err != nil {
+			if _, err := s.cloneOne(ctx, kp, dst, child, child.Title, clone.ID, actorID, in.Keep, in.Projects); err != nil {
 				return nil, err
 			}
 		}
@@ -523,8 +534,9 @@ func (s *Service) Clone(ctx context.Context, projectID string, number int, actor
 	return s.Get(ctx, dst.ID, n)
 }
 
-// cloneOne clones st (of project src) into dst under parentID.
-func (s *Service) cloneOne(ctx context.Context, src, dst *Project, st *Stored, title, parentID, actorID string, keep []string) (int, error) {
+// cloneOne clones st (of project src) into dst under parentID. Kept
+// relations are those with an issue in projects (nil: any).
+func (s *Service) cloneOne(ctx context.Context, src, dst *Project, st *Stored, title, parentID, actorID string, keep, projects []string) (int, error) {
 	var err error
 	if dst.Key, err = s.ensureKey(ctx, dst); err != nil {
 		return 0, err
@@ -564,7 +576,7 @@ func (s *Service) cloneOne(ctx context.Context, src, dst *Project, st *Stored, t
 		}
 	}
 	if slices.Contains(keep, "relations") {
-		if err := s.repo.CopyRelations(ctx, st.ID, clone.ID, actorID); err != nil {
+		if err := s.repo.CopyRelations(ctx, st.ID, clone.ID, actorID, projects); err != nil {
 			return 0, err
 		}
 	}

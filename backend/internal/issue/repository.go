@@ -99,7 +99,7 @@ type Repository interface {
 	DeleteRelation(ctx context.Context, relationID string) error
 	BlockedIssues(ctx context.Context, blockerID string) ([]string, error)
 	CopyLabels(ctx context.Context, src, dst string) error
-	CopyRelations(ctx context.Context, src, dst, actorID string) error
+	CopyRelations(ctx context.Context, src, dst, actorID string, projectIDs []string) error
 
 	// Elsewhere in the panel.
 	PullIssues(ctx context.Context, pullIDs []string) (map[string][]code.IssueRef, error)
