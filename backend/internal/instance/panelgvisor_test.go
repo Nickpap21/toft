@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Nickpap21/toft/backend/internal/instance"
+	"github.com/Nickpap21/toft/backend/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -100,6 +101,14 @@ func TestCheckPanelGvisor(t *testing.T) {
 // on the host's shell, a file written through stdin, apt's output streamed.
 // A failure is recorded with its log, audited with its step, and the server
 // is probed again.
+// fakeDests records whose stored build destinations an install asked for.
+type fakeDests struct{ asked []string }
+
+func (f *fakeDests) BuildDestinationsApplier(_ context.Context, serverID string) func(server.Shell, func(string)) error {
+	f.asked = append(f.asked, serverID)
+	return nil
+}
+
 func TestInstallPanelGvisorThroughTheHelper(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepo(ada)
@@ -135,10 +144,13 @@ func TestInstallPanelGvisorThroughTheHelper(t *testing.T) {
 		return "", errors.New("unexpected")
 	}}
 	svc := instance.NewService(repo, zap.NewNop()).WithPanelMonitor(probe, &fakeStore{}, t.TempDir(), t.TempDir())
+	dests := &fakeDests{}
+	svc.WithBuildDestinations(dests)
 
 	var lines []string
 	err := svc.InstallPanelGvisor(ctx, ada.id, func(l string) { lines = append(lines, l) })
 	require.Error(t, err)
+	assert.Equal(t, []string{""}, dests.asked, "the install, which loads the firewall, is handed what writes the panel's server's build destinations")
 	assert.Contains(t, err.Error(), "apt-get install runsc=20261012.0")
 	assert.Contains(t, wrote["/etc/apt/sources.list.d/gvisor.list"], "https://storage.googleapis.com/gvisor/releases 20261012 main")
 	assert.Contains(t, wrote["/usr/share/keyrings/gvisor-archive-keyring.asc"], "BEGIN PGP PUBLIC KEY BLOCK")

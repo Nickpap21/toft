@@ -282,7 +282,9 @@ var probeInputs = map[string]string{
 	"PATCH /api/v1/shared-volumes/{volumeID}":                                                `{"size_limit_bytes": 1073741824}`,
 	"PATCH /api/v1/projects/{projectID}/repositories/{repositoryID}":                         `{"default_branch": "main"}`, // moving it moves protection (L2)
 	"POST /api/v1/instance/operators":                                                        `{"email": "probe@example.com", "password": "probe-password"}`,
+	"POST /api/v1/instance/build-destinations":                                               `{"address": "10.0.5.20", "port": 5000}`,
 	"POST /api/v1/org/members":                                                               `{"email": "probe@example.com", "role": "viewer"}`,
+	"POST /api/v1/servers/{serverID}/build-destinations":                                     `{"address": "10.0.5.20", "port": 5000}`,
 	"POST /api/v1/projects/{projectID}/repositories/{repositoryID}/pulls/{pullNumber}/merge": `{"method": "merge", "expected_head_sha": "` + strings.Repeat("a", 40) + `"}`,
 	"POST /api/v1/services/{serviceID}/deploy-policy/exception":                              `{"version": "v", "allowed_rules": ["privileged"], "reason": "probe", "values_digest": "probe"}`,
 	"POST /api/v1/services/{serviceID}/domains":                                              `{"hostname": "app.example.com"}`,
@@ -561,7 +563,8 @@ func accessRouter(t *testing.T) (*gin.Engine, *directory) {
 	h.deployPolicy = deploypolicy.NewHandler(deploypolicy.NewService(nil, deploypolicy.ModeEnforce, log).
 		WithOperatorChecker(dir).WithOwnershipChecker(dir), log)
 	h.agent = agent.NewHandler(agent.NewService(agentRows{}, dir, dir, nil, log), func() string { return "" }, nil, log)
-	h.disk = disk.NewHandler(disk.NewService(diskRows{}, diskNoHosts{}, nil, diskNoAudit{}, diskProbePeople{dir}, nil, log), log)
+	cleans := &sync.WaitGroup{}
+	h.disk = disk.NewHandler(disk.NewService(diskRows{cleans}, diskNoHosts{}, nil, diskCleans{cleans}, diskProbePeople{dir}, nil, log), log)
 	r := newRouter(&config.Config{JWTSecret: accessSecret}, log, h, routerDeps{apiKeys: dir, orgs: dir, users: dir,
 		services: services, environments: envs})
 	return r, dir
@@ -813,6 +816,7 @@ var routeAccess = map[string]access{
 	"DELETE /api/v1/environments/{environmentID}/secrets/{key}":                                               {role: "developer"},
 	"DELETE /api/v1/instance/agents/pause":                                                                    {role: "operator", session: true, password: true},
 	"DELETE /api/v1/instance/backup":                                                                          {role: "operator"},
+	"DELETE /api/v1/instance/build-destinations/{destinationID}":                                              {role: "operator", session: true, password: true},
 	"DELETE /api/v1/instance/operators/{userID}":                                                              {role: "operator", session: true},
 	"DELETE /api/v1/instance/users/{userID}":                                                                  {role: "operator", session: true},
 	"DELETE /api/v1/org":                                                                                      {role: "owner"},
@@ -833,6 +837,7 @@ var routeAccess = map[string]access{
 	"PUT /api/v1/servers/{serverID}/ssh":                                                                      {role: "owner"},
 	"DELETE /api/v1/servers/{serverID}/agent":                                                                 {role: "owner", session: true},
 	"DELETE /api/v1/servers/{serverID}/backup":                                                                {role: "owner"},
+	"DELETE /api/v1/servers/{serverID}/build-destinations/{destinationID}":                                    {role: "operator", session: true, password: true},
 	"DELETE /api/v1/servers/{serverID}/dns-provider":                                                          {role: "owner"},
 	"DELETE /api/v1/servers/{serverID}/shares/{orgID}":                                                        {role: "owner"},
 	"DELETE /api/v1/services/{serviceID}":                                                                     {role: "developer"},
@@ -883,6 +888,7 @@ var routeAccess = map[string]access{
 	"GET /api/v1/inbox/updates":                                                                    {role: "viewer"},
 	"GET /api/v1/instance/audit-log":                                                               {role: "operator"},
 	"GET /api/v1/instance/backup":                                                                  {role: "operator"},
+	"GET /api/v1/instance/build-destinations":                                                      {role: "operator"},
 	"GET /api/v1/instance/operators":                                                               {role: "operator"},
 	"GET /api/v1/instance/panel":                                                                   {role: "operator"},
 	"GET /api/v1/instance/panel-host":                                                              {role: "viewer"},
@@ -975,6 +981,7 @@ var routeAccess = map[string]access{
 	"GET /api/v1/servers":                                                                                       {role: "viewer"},
 	"GET /api/v1/servers/{serverID}":                                                                            {role: "viewer"},
 	"GET /api/v1/servers/{serverID}/backup":                                                                     {role: "viewer"},
+	"GET /api/v1/servers/{serverID}/build-destinations":                                                         {role: "operator"},
 	"GET /api/v1/servers/{serverID}/capabilities":                                                               {role: "viewer"},
 	"GET /api/v1/servers/{serverID}/updates":                                                                    {role: "viewer"},
 	"GET /api/v1/servers/{serverID}/updates/run":                                                                {role: "viewer"},
@@ -1063,6 +1070,7 @@ var routeAccess = map[string]access{
 	"POST /api/v1/inbox/read":                                                                                {role: "viewer"},
 	"POST /api/v1/inbox/undone":                                                                              {role: "viewer"},
 	"POST /api/v1/instance/agents/pause":                                                                     {role: "operator", session: true},
+	"POST /api/v1/instance/build-destinations":                                                               {role: "operator", session: true, password: true},
 	"POST /api/v1/instance/operators":                                                                        {role: "operator", session: true},
 	"POST /api/v1/instance/panel/capabilities":                                                               {role: "operator"},
 	"POST /api/v1/instance/panel/updates":                                                                    {role: "operator"},
@@ -1129,7 +1137,9 @@ var routeAccess = map[string]access{
 	// agent nobody has pinned.
 	"POST /api/v1/servers/{serverID}/agent/join-token (first join)":         {role: "owner"},
 	"POST /api/v1/servers/{serverID}/agent/rotate":                          {role: "owner", session: true},
+	"POST /api/v1/servers/{serverID}/agent/upgrade":                         {role: "owner", session: true},
 	"POST /api/v1/servers/{serverID}/agent/use-panel-state":                 {role: "owner", session: true, password: true},
+	"POST /api/v1/servers/{serverID}/build-destinations":                    {role: "operator", session: true, password: true},
 	"POST /api/v1/servers/{serverID}/capabilities":                          {role: "developer"},
 	"POST /api/v1/servers/{serverID}/updates":                               {role: "developer"},
 	"POST /api/v1/servers/{serverID}/updates/run":                           {role: "owner", session: true, password: true},
@@ -1218,10 +1228,14 @@ func (agentRows) ListProjectPolicy(context.Context, string) (map[string]map[stri
 	return map[string]map[string]string{}, nil
 }
 
-// diskRows owns every server for testOrg, with the default policy.
-type diskRows struct{}
+// diskRows owns every server for testOrg, with the default policy. A row
+// is given once the cleans the probes started have ended: a clean ends in
+// a goroutine of its own, and a probe that met one still running would be
+// answered 409 before its checks.
+type diskRows struct{ cleans *sync.WaitGroup }
 
-func (diskRows) Server(_ context.Context, id string) (disk.HostRow, error) {
+func (r diskRows) Server(_ context.Context, id string) (disk.HostRow, error) {
+	r.cleans.Wait()
 	if id == "" {
 		return disk.HostRow{}, nil
 	}
@@ -1244,9 +1258,18 @@ func (diskNoHosts) Host(context.Context, string) (disk.Host, error) {
 	return nil, errors.New("no Docker in the access probes")
 }
 
-type diskNoAudit struct{}
+// diskCleans counts the cleans running, by the two audit rows a clean
+// writes: one when it starts, one when it has ended.
+type diskCleans struct{ running *sync.WaitGroup }
 
-func (diskNoAudit) Audit(context.Context, string, string, string, string, map[string]any) {}
+func (c diskCleans) Audit(_ context.Context, _, _, _, action string, _ map[string]any) {
+	switch {
+	case strings.HasSuffix(action, ".disk_clean_started"):
+		c.running.Add(1)
+	case strings.HasSuffix(action, ".disk_cleaned"):
+		c.running.Done()
+	}
+}
 
 type diskProbePeople struct{ d *directory }
 

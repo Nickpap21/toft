@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentAway, agentChip, agentFrozen, agentStatus, awayFor, desiredRow, frozenItems, frozenRow, placeable } from "./agent";
+import { ApiError } from "@/lib/api/client";
+import { agentAway, agentChip, agentFrozen, agentOutdated, agentStatus, deployErrorToast, awayFor, desiredRow, frozenItems, frozenRow, placeable, upgradeRow } from "./agent";
 
 describe("servers a service can be put on", () => {
   const s = (id: string, o: object) => ({ id, connection: "agent" as const, agent: null, provisioned_at: null, ...o });
@@ -39,6 +40,68 @@ describe("agent state", () => {
     expect(awayFor("2026-10-22T12:03:00Z", now)).toBe("2 h 14 min");
     expect(awayFor("2026-10-22T12:17:00Z", now)).toBe("2 h");
     expect(awayFor("2026-10-19T12:17:00Z", now)).toBe("3 d");
+  });
+});
+
+describe("an agent behind the panel", () => {
+  const behind = (upgrade: Partial<NonNullable<Parameters<typeof upgradeRow>[0]>["upgrade"]>) =>
+    upgradeRow({ version: "v0.17.0", arch: "amd64", upgrade: { panel_version: "v0.17.1", offering: false, reason: null, detail: null, at: null, compose_refused: true, ...upgrade } });
+  const refused = "Compose deploys to this server are refused until its agent runs v0.17.1.";
+  const held = "The panel doesn’t offer v0.17.1 again by itself until it restarts or is upgraded.";
+
+  it("has no row while the agent runs the panel's version", () => {
+    expect(upgradeRow({ version: "v0.17.1", arch: "amd64", upgrade: null })).toBeNull();
+    expect(upgradeRow(null)).toBeNull();
+  });
+  it("quotes an agent that refused, and offers again", () => {
+    const row = behind({ reason: "refused", detail: "the release key didn’t sign this binary", at: "2026-10-22T14:02:00Z" });
+    expect(row).toMatchObject({ warn: "Behind the panel, which runs v0.17.1", quote: "the release key didn’t sign this binary", note: `${held} ${refused}`, again: true });
+    expect(row?.why).toMatch(/^The agent refused the upgrade at .+\. In its own words:$/);
+    expect(behind({ reason: "refused" })?.why).toBe("The agent refused the upgrade.");
+  });
+  it("says an agent came back, and that nothing was there to offer", () => {
+    expect(behind({ reason: "returned" })?.why).toBe("The agent accepted v0.17.1 but reconnected as v0.17.0. It goes back by itself when the new version can’t connect within 2 minutes.");
+    expect(behind({ reason: "no_build" })).toMatchObject({ why: "This panel’s release files have no agent for linux/amd64, so it had nothing to offer.", note: refused, again: true });
+  });
+  it("says an offer runs until the agent answers it", () => {
+    expect(behind({ offering: true })).toMatchObject({ why: "The panel is offering v0.17.1 to the agent now.", quote: "", note: refused, again: true });
+    expect(behind({ offering: true, reason: "refused", detail: "an older answer" })?.quote).toBe("");
+  });
+  it("says compose deploys are refused only when they are", () => {
+    expect(behind({ reason: "returned", compose_refused: false })?.note).toBe(held);
+    expect(behind({ compose_refused: false })).toMatchObject({ why: "", note: "The panel offers v0.17.1 when the agent connects.", again: false });
+  });
+});
+
+describe("a deploy refused for an older agent", () => {
+  const id = "5f0c2a9e-1b7d-4e63-9a41-0c8d2f6b7e13";
+  it("splits the API's text into what to say and where to go", () => {
+    const text = "fsn1-prod-01's agent (v0.17.0) is older than the panel and can't run this deploy safely. Upgrade the agent, then deploy again";
+    expect(agentOutdated(`${text}: /servers/${id}?tab=settings#connection`)).toEqual({ text: `${text.replaceAll("'", "’")}.`, href: `/servers/${id}?tab=settings#connection`, server: "fsn1-prod-01" });
+    expect(agentOutdated(`api: ${text}: /servers/${id}?tab=settings#connection`)?.server).toBe("fsn1-prod-01");
+    expect(agentOutdated(`my old server's agent (v0.17.0) is older: /servers/${id}?tab=settings#connection`)?.server).toBeNull();
+  });
+  it("gives a toast the way to the Connection card by the API's code, a service's name in front or not", () => {
+    const went: string[] = [];
+    const msg = `web-1's agent (v0.17.0) is older than the panel. Upgrade the agent, then deploy again: /servers/${id}?tab=settings#connection`;
+    const outdated = new ApiError(msg, 409, { error: msg, data: { code: "agent_outdated", server_id: id } });
+    const [text, options] = deployErrorToast(outdated, `api: ${msg}`, (h) => went.push(h));
+    expect(text).toBe("api: web-1’s agent (v0.17.0) is older than the panel. Upgrade the agent, then deploy again.");
+    options?.action.onClick();
+    expect(went).toEqual([`/servers/${id}?tab=settings#connection`]);
+    expect(deployErrorToast(new ApiError("exit 1", 500, {}), "api: exit 1", () => {})).toEqual(["api: exit 1"]);
+  });
+  it("never goes by the text: the same words without the code are a plain toast", () => {
+    const msg = `web-1's agent (v0.17.0) is older than the panel. Upgrade the agent, then deploy again: /servers/${id}?tab=settings#connection`;
+    expect(deployErrorToast(new ApiError(msg, 409, { error: msg, data: { code: "capacity_exceeded" } }), msg, () => {})).toEqual([msg]);
+    expect(deployErrorToast(new Error(msg), msg, () => {})).toEqual([msg]);
+    expect(deployErrorToast(new ApiError(msg, 409, { error: msg, data: { code: "agent_outdated" } }), msg, () => {})).toEqual([msg]);
+  });
+  it("leaves every other failure alone, a link elsewhere included", () => {
+    expect(agentOutdated("the health check on /health never answered")).toBeNull();
+    expect(agentOutdated(`see: /servers/${id}?tab=settings#connection and https://example.test`)).toBeNull();
+    expect(agentOutdated("see: //evil.test/servers/x?tab=settings#connection")).toBeNull();
+    expect(agentOutdated(null)).toBeNull();
   });
 });
 

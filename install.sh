@@ -546,7 +546,7 @@ if [ "$running" = "$RELEASE" ]; then
 	[ ! -f /opt/toft/docker-compose.git.yml ] || [ "$(get_secret TOFT_GIT)" = off ] || files="$files -f docker-compose.git.yml"
 	# shellcheck disable=SC2086 # $files is two or four words
 	(cd /opt/toft && TOFT_CONTROL_PLANE_SUBNET="$(docker network inspect paas-network -f '{{range .IPAM.Config}}{{.Subnet}},{{end}}' | sed 's/,$//')" \
-		docker compose $files --env-file "$SECRETS" up -d --remove-orphans >&3 2>&3)
+		docker compose $files --env-file "$SECRETS" up -d --remove-orphans --no-build >&3 2>&3)
 	ok "Toft $RELEASE already runs here"
 else
 	upgrade "Toft $RELEASE did not start" --to "$RELEASE"

@@ -389,9 +389,34 @@ var (
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+type markKey struct{}
+
+// Marked returns ctx with a mark of its own. Every command run with it
+// carries that mark, on an agent's connection too, instead of one each: what
+// a step of several commands left running on a server whose connection was
+// lost is then found together, on a new connection (Reaper).
+func Marked(ctx context.Context) context.Context {
+	return context.WithValue(ctx, markKey{}, rand.Text())
+}
+
+// Reaper is the command that ends every process on the server that carries
+// ctx's mark (Marked). It fails when one is left. Run it with a ctx that is
+// not ctx: it would end itself.
+func Reaper(ctx context.Context) string {
+	mark, _ := ctx.Value(markKey{}).(string)
+	if mark == "" {
+		return "true"
+	}
+	return "sh -c " + shellQuote(reapScript(mark))
+}
+
 // mark returns what a new command on this connection is found by on the
-// server: a TOFT_EXEC value of its own. Empty on an agent's connection.
-func (c *Client) mark() string {
+// server: ctx's mark (Marked), or a TOFT_EXEC value of its own. Empty on an
+// agent's connection without ctx's.
+func (c *Client) mark(ctx context.Context) string {
+	if m, ok := ctx.Value(markKey{}).(string); ok {
+		return m
+	}
 	if c.agent {
 		return ""
 	}
@@ -457,16 +482,21 @@ func (c *Client) reap(ctx context.Context, mark string) {
 		return
 	}
 	defer func() { _ = sess.Close() }()
-	script := "m=TOFT_EXEC=" + mark + `; l() { grep -lzxF -- "$m" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3; }
+	if err := sess.Start("sh -c " + shellQuote(reapScript(mark))); err != nil {
+		return
+	}
+	_ = wait(ctx, sess)
+}
+
+// reapScript ends every process that carries mark: SIGTERM, then SIGKILL to
+// what is left after reapGrace. It exits 0 when none is left.
+func reapScript(mark string) string {
+	return "m=TOFT_EXEC=" + mark + `; l() { grep -lzxF -- "$m" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3; }
 p=$(l); [ -n "$p" ] || { sleep 0.5; p=$(l); }
 [ -n "$p" ] || exit 0
 kill -TERM $p 2>/dev/null
 i=0; while [ $i -lt ` + strconv.Itoa(int(reapGrace/(200*time.Millisecond))) + ` ]; do sleep 0.2; p=$(l); [ -n "$p" ] || exit 0; i=$((i+1)); done
-kill -KILL $p 2>/dev/null; sleep 0.2; p=$(l); [ -z "$p" ] || kill -KILL $p 2>/dev/null`
-	if err := sess.Start("sh -c " + shellQuote(script)); err != nil {
-		return
-	}
-	_ = wait(ctx, sess)
+kill -KILL $p 2>/dev/null; sleep 0.2; p=$(l); [ -z "$p" ] || { kill -KILL $p 2>/dev/null; sleep 0.2; [ -z "$(l)" ]; }`
 }
 
 // lockedBuffer is a bytes.Buffer safe for concurrent stdout/stderr writes. It
@@ -554,7 +584,7 @@ func (c *Client) ExecContext(ctx context.Context, cmd string) (string, error) {
 // ExecInputContext is ExecContext with stdin fed to the remote command; the
 // remote side sees EOF once stdin is exhausted.
 func (c *Client) ExecInputContext(ctx context.Context, cmd string, stdin io.Reader) (string, error) {
-	text, err := c.run(ctx, cmd, stdin, c.mark())
+	text, err := c.run(ctx, cmd, stdin, c.mark(ctx))
 	if err != nil {
 		var openErr *SessionOpenError
 		if ctx.Err() != nil || errors.As(err, &openErr) {
@@ -584,7 +614,7 @@ func (c *Client) SubsystemContext(ctx context.Context, name string, stdin io.Rea
 // remote process is signalled, its session closed and what is left of it
 // ended (reap), and ctx's error is returned.
 func (c *Client) ExecStreamContext(ctx context.Context, cmd string, logFn func(string)) error {
-	return c.stream(ctx, cmd, nil, logFn, c.mark())
+	return c.stream(ctx, cmd, nil, logFn, c.mark(ctx))
 }
 
 // ExecStreamInputContext runs an agent's typed request by its exact name,
@@ -666,7 +696,7 @@ func scanLines(r io.Reader, emit func(string), wg *sync.WaitGroup) {
 // command verbatim: the caller quotes it. The remote file is created or
 // overwritten.
 func (c *Client) UploadContext(ctx context.Context, remotePath string, content []byte) error {
-	out, err := c.run(ctx, "cat > "+remotePath, bytes.NewReader(content), c.mark())
+	out, err := c.run(ctx, "cat > "+remotePath, bytes.NewReader(content), c.mark(ctx))
 	if err != nil {
 		var openErr *SessionOpenError
 		if ctx.Err() != nil || errors.As(err, &openErr) {

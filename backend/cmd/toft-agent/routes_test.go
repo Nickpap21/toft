@@ -55,6 +55,56 @@ func serverURLs(f *rollout.RouteFile, id8 string) []string {
 	return out
 }
 
+// A compose container that carries a service's label routes nothing: the
+// file an older agent wrote from its labels, its image's router among
+// them, is gone after the first sync. Both ways such a container got a
+// slot's name: compose's own name for a service called svc, which is an
+// older slot's, and another service's.
+func TestAgentRemovesTheRoutesOfAComposeContainerWithAServicesLabel(t *testing.T) {
+	stateDir, routesDir = t.TempDir(), t.TempDir()
+	const (
+		own   = "eeee5555-0000-0000-0000-000000000005"
+		other = "aaaa1111-0000-0000-0000-000000000001"
+	)
+	f := fakedocker.New(t)
+	stack := routedLabels(own, "")
+	stack[rollout.LabelServiceID] = own[:8] + "-web-1"
+	stack[rollout.LabelComposeProject] = "paas-svc-" + own[:8]
+	stack["traefik.http.routers.paas-"+own[:8]+"-9.rule"] = "Host(`panel.test`)"
+	stack["traefik.http.routers.paas-"+own[:8]+"-9.entrypoints"] = "websecure"
+	f.Add("paas-svc-"+own[:8]+"-web-1", container.StateRunning, stack)
+	named := routedLabels(other, "dep-x")
+	named[rollout.LabelComposeProject] = "paas-shop-" + own[:8]
+	named["traefik.http.routers.paas-"+other[:8]+"-9.rule"] = "Host(`panel.test`)"
+	named["traefik.http.routers.paas-"+other[:8]+"-9.entrypoints"] = "websecure"
+	f.Add(rollout.BlueContainerName(other, "web", ""), container.StateRunning, named)
+
+	for id, labels := range map[string]map[string]string{own: stack, other: named} {
+		// As the agent before this wrote it, from the container's labels.
+		before, err := rollout.RoutesFor(id[:8], labels, []string{"c"})
+		if err != nil || before == nil || before.HTTP.Routers["paas-"+id[:8]+"-9"].Rule != "Host(`panel.test`)" {
+			t.Fatalf("the file from before: %v", err)
+		}
+		raw, err := yaml.Marshal(before)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(routesDir, rollout.RouteFileName(id[:8])), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := testRollouts(f).routes.sync(context.Background())
+	if err != nil || n != 0 {
+		t.Fatalf("sync: %d %v", n, err)
+	}
+	for _, id := range []string{own, other} {
+		if _, err := os.Stat(filepath.Join(routesDir, rollout.RouteFileName(id[:8]))); !os.IsNotExist(err) {
+			t.Fatalf("%s: its file stayed: %v", id[:8], err)
+		}
+	}
+}
+
 // The agent writes each routed service's file from its serving container
 // (D-113): the desired state's deployment where two slots run, nothing for a
 // service in a rollout, nothing from a container that only claims to be a

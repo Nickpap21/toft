@@ -193,11 +193,15 @@ export const AUDIT_ACTIONS: AuditAction[] = [
     phrase: "replaced the SSH host key of",
     group: "Servers",
   },
+  // The private addresses builds may reach (D-170); an operator's change.
+  { action: "server.build_destination_added", label: "Added a build destination", phrase: "added a build destination on", group: "Servers" },
+  { action: "server.build_destination_removed", label: "Removed a build destination", phrase: "removed a build destination from", group: "Servers" },
   // The server agent (toft-agent), not an AI agent: those are under Agents.
   { action: "server.agent_token_created", label: "Made a server agent join command", phrase: "made a server agent join command for", group: "Servers" },
   { action: "server.agent_joined", label: "A server agent joined", phrase: "joined a server agent to", group: "Servers" },
   { action: "server.agent_rejoined", label: "A server agent rejoined", phrase: "rejoined a server agent to", group: "Servers" },
   { action: "server.agent_key_rotated", label: "Rotated a server agent's key", phrase: "rotated the server agent key of", group: "Servers" },
+  { action: "server.agent_upgrade_offered", label: "Offered a server agent the upgrade again", phrase: "offered the upgrade again to the agent of", group: "Servers" },
   { action: "server.agent_revoked", label: "Revoked a server agent", phrase: "revoked the server agent of", group: "Servers" },
   { action: "server.agent_state_adopted", label: "Adopted a server’s state", phrase: "adopted the state of", group: "Servers" },
   { action: "server.agent_state_discarded", label: "Used the panel’s state for a server", phrase: "used the panel’s state for", group: "Servers" },
@@ -785,6 +789,9 @@ export function auditDetail(e: AuditEntry, workspace = ""): {
       return str(d.fingerprint)
         ? { text: "Now trusts", code: str(d.fingerprint) }
         : { text: "" };
+    case "server.build_destination_added":
+    case "server.build_destination_removed":
+      return { text: str(d.note), code: typeof d.port === "number" ? `${str(d.address)}:${d.port}` : str(d.address) };
     case "server.shell_opened":
       return { text: str(d.from) ? `From ${str(d.from)}` : "" };
     case "server.agent_joined":
@@ -792,6 +799,8 @@ export function auditDetail(e: AuditEntry, workspace = ""): {
       return { text: [str(d.version) && `Agent ${str(d.version)}`, str(d.from) && `from ${str(d.from)}`].filter(Boolean).join(" ") || (str(d.fingerprint) ? "Key" : ""), code: str(d.fingerprint) };
     case "server.agent_key_rotated":
       return str(d.fingerprint) ? { text: "Now trusts", code: str(d.fingerprint) } : { text: "" };
+    case "server.agent_upgrade_offered":
+      return { text: [str(d.from), str(d.to)].filter(Boolean).join(" → ") };
     case "server.agent_revoked":
       return { text: d.uninstalled ? "Uninstalled from the server" : "" };
     case "server.shell_closed": {

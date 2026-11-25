@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Nickpap21/toft/backend/internal/agenthub"
+	"github.com/Nickpap21/toft/backend/internal/rollout"
 	"github.com/Nickpap21/toft/backend/pkg/agentproto"
 	"github.com/Nickpap21/toft/backend/pkg/sshpool"
 	"github.com/stretchr/testify/assert"
@@ -82,7 +83,7 @@ func TestAgentThatWritesRoutesHasTraefikSwitchedToThem(t *testing.T) {
 	ctx := context.Background()
 	srv, _ := repo.GetByID(ctx, "s1")
 
-	host := newRoutesHost(`["--providers.docker=true","` + traefikRedirectPriority + `","` + traefikMetricsEntrypoint + `"]`)
+	host := newRoutesHost(`["--providers.docker=true","` + traefikConstraintFlag + `x","` + traefikRedirectPriority + `","` + traefikMetricsEntrypoint + `"]`)
 	svc.WithSSH(routesConn{host}, nil)
 	hub.known, hub.state = true, agenthub.State{Connected: true, Caps: []string{agentproto.CapRollout, agentproto.CapDesired}}
 	svc.cutOverRoutes(ctx, srv)
@@ -244,7 +245,7 @@ func TestTraefikBefore7fRestartsSoTemporaryNamesAnswerOverHTTP(t *testing.T) {
 
 	// Current already: nothing restarts.
 	repo.runs = nil
-	host = newRoutesHost(`["--providers.docker=true","` + traefikRedirectPriority + `","` + traefikMetricsEntrypoint + `"]`)
+	host = newRoutesHost(`["--providers.docker=true","` + traefikConstraintFlag + `x","` + traefikRedirectPriority + `","` + traefikMetricsEntrypoint + `"]`)
 	svc.WithSSH(routesConn{host}, nil)
 	require.NoError(t, svc.KeepTraefikCurrent(ctx, "s1"))
 	assert.Nil(t, repo.runs)
@@ -261,7 +262,7 @@ func TestTraefikWithoutMetricsRestartsOnceToMeasureLatency(t *testing.T) {
 	ctx := context.Background()
 	for _, files := range []bool{false, true} {
 		repo.runs = nil
-		args := `["--providers.docker=true","` + traefikRedirectPriority + `"]`
+		args := `["--providers.docker=true","` + traefikConstraintFlag + `x","` + traefikRedirectPriority + `"]`
 		repo.servers["s1"].Connection, repo.servers["s1"].ProvisionedAt = ConnectionSSH, &now
 		if files {
 			args = `["` + traefikFileFlag + `/etc/traefik/dynamic","` + traefikRedirectPriority + `"]`
@@ -310,6 +311,57 @@ func TestTraefikWithoutMetricsRestartsOnceToMeasureLatency(t *testing.T) {
 	svc.WithSSH(routesConn{host}, nil)
 	require.NoError(t, svc.KeepTraefikCurrent(ctx, "s1"))
 	assert.Nil(t, repo.runs)
+}
+
+// A Traefik reading labels that Toft started before it passed over a
+// container with a service's label and a compose project restarts once on
+// the health poll, with the constraint: a route such a container had from
+// its image is gone with it. One reading the agent's files has no labels
+// to read and stays.
+func TestTraefikReadingLabelsRestartsOnceToPassOverLookAlikes(t *testing.T) {
+	svc, _, hub := agentService(t)
+	repo := svc.repo.(*fakeRepo)
+	now := time.Now()
+	ctx := context.Background()
+	repo.servers["s1"].Connection, repo.servers["s1"].ProvisionedAt = ConnectionSSH, &now
+
+	args := `["--providers.docker=true","` + traefikRedirectPriority + `","` + traefikMetricsEntrypoint + `"]`
+	host := newRoutesHost(args)
+	answer := host.sh.answer
+	host.sh.answer = func(cmd string) string {
+		if strings.HasPrefix(cmd, "docker container inspect") && !strings.Contains(cmd, "{{json .Args}}") {
+			return "a-hash-from-v1.2.3|" + traefikAcmeVolume + ","
+		}
+		return answer(cmd)
+	}
+	svc.WithSSH(routesConn{host}, nil)
+	require.NoError(t, svc.KeepTraefikCurrent(ctx, "s1"))
+	run := repo.runs["s1"]
+	require.NotNil(t, run)
+	require.NotNil(t, run.OK)
+	assert.True(t, *run.OK, run.Log+run.Error)
+	assert.Contains(t, run.Log, "a service's label and a compose project")
+	start := host.sh.cmds[indexOf(host.sh.cmds, "docker run -d")]
+	assert.Contains(t, start, "'"+traefikConstraintFlag+rollout.LookAlikeConstraint+"'", "quoted for the shell")
+	assert.Equal(t, 1, countOf(host.sh.cmds, "docker rm -f paas-traefik"), "restarted once")
+
+	// Restarted: current.
+	repo.runs = nil
+	host = newRoutesHost(strings.TrimSuffix(args, "]") + `,"` + traefikConstraintFlag + `x"]`)
+	svc.WithSSH(routesConn{host}, nil)
+	require.NoError(t, svc.KeepTraefikCurrent(ctx, "s1"))
+	assert.Nil(t, repo.runs)
+
+	// The agent's files: no labels are read.
+	repo.servers["s1"].Connection = ConnectionAgent
+	hub.known, hub.state = true, agenthub.State{Connected: true, Caps: []string{agentproto.CapRoutes}}
+	host = newRoutesHost(`["` + traefikFileFlag + `/etc/traefik/dynamic","` + traefikRedirectPriority + `","` + traefikMetricsEntrypoint + `"]`)
+	svc.WithSSH(routesConn{host}, nil)
+	require.NoError(t, svc.KeepTraefikCurrent(ctx, "s1"))
+	assert.Nil(t, repo.runs)
+	files, _, err := traefikConfig("", nil, true)
+	require.NoError(t, err)
+	assert.NotContains(t, files, traefikConstraintFlag)
 }
 
 func countOf(cmds []string, prefix string) int {

@@ -25,9 +25,11 @@ export const KIND_LABEL: Record<AlertKind, string> = {
   mirror_failing: "Mirror failing",
   agent_offline: "Agent offline",
   agent_frozen: "Server kept its own state",
+  agent_outdated: "Agent behind the panel",
   security_updates: "Security updates waiting",
   reboot_required: "Reboot required",
   docker_advisory: "Docker affected by an advisory",
+  lookalike_container: "Compose container with a service’s label",
 };
 
 /** What alerts, in the board's order: when each fires and resolves. */
@@ -80,6 +82,16 @@ export const RULES: { kind: AlertKind; fires: string; resolves: string }[] = [
     kind: "agent_frozen",
     fires: "The panel was restored from a backup and a server’s agent kept its own state. Deploys there wait for a choice.",
     resolves: "Resolves when someone adopts the server’s state or uses the panel’s.",
+  },
+  {
+    kind: "agent_outdated",
+    fires: "A server’s agent is older than the panel and its upgrade didn’t take. Compose deploys there are refused until it’s upgraded.",
+    resolves: "Resolves when the upgraded agent connects. A retry leaves it open until then.",
+  },
+  {
+    kind: "lookalike_container",
+    fires: "A container on a server carries both a service’s label and a compose project, which Toft never makes.",
+    resolves: "Resolves when no such container is left on that server.",
   },
   {
     kind: "disk_full",
@@ -243,10 +255,17 @@ export function alertSubject(a: RecentAlert): {
     case "agent_frozen":
     case "disk_full":
     case "backup_failed":
+    case "lookalike_container":
       return {
         name: a.subject_name || "a removed server",
         where: "server",
         href: a.subject_name ? `/servers/${a.subject}` : undefined,
+      };
+    case "agent_outdated":
+      return {
+        name: a.subject_name || "a removed server",
+        where: "server",
+        href: a.subject_name ? `/servers/${a.subject}?tab=settings#connection` : undefined,
       };
     case "mirror_failing":
       return {

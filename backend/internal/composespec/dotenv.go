@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,8 +27,7 @@ import (
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // ServiceEnv returns the service's env vars that may be handed to docker
-// compose, as its process environment or in the .env file the platform
-// writes. It leaves out names the docker and compose CLIs read as their own
+// compose, in the .env file the platform writes. It leaves out names the docker and compose CLIs read as their own
 // settings (IsReservedCLIEnv: DOCKER_HOST, COMPOSE_*, PATH, ...) and names
 // that are not valid variable names (they could add lines to the .env file).
 // The deploy policy refuses both in enforce mode; this is the backstop for
@@ -100,6 +100,23 @@ func DotEnvFile(env map[string]string) ([]byte, error) {
 		}
 	}
 	return content, nil
+}
+
+// LocalEnv is what docker compose interpolates a deploy on the panel's host
+// with, where the repository's own .env is kept: that file as compose reads
+// it with env, the service's variables after ServiceEnv, in its process
+// environment (a line of the file reads them, and they win over it), less
+// the names ServiceEnv leaves out of the file, which dropped lists. The
+// deploy policy reads the file the same way (Source.ReadDotEnv); a file it
+// refuses whole, a symlink out of the repository, is not read.
+func LocalEnv(projectDir string, env map[string]string) (merged map[string]string, dropped []string, err error) {
+	vals, _, err := readDotEnv(projectDir, projectDir, env, &varRecorder{names: map[string]bool{}})
+	if err != nil {
+		return nil, nil, err
+	}
+	merged, dropped = ServiceEnv(vals)
+	maps.Copy(merged, env)
+	return merged, dropped, nil
 }
 
 // StageDotEnv writes the .env file a remote deploy uses into a local clone,

@@ -431,7 +431,9 @@ func TestAttributeStatsTrustsOnlyPlatformLabels(t *testing.T) {
 		statRow("eager_turing", victimID, "", 9, 90),
 		// A container named like victim's slot but labelled app.
 		statRow(victimBlue, appID, "", 11, 110),
-		// app's slot, whose image claims the stack's compose project.
+		// app's slot name and label on a container with the stack's compose
+		// project: compose made it, or its image carried the project before
+		// the platform blanked that label. Nobody's.
 		statRow(appBlue, appID, stackProject, 1, 10),
 		// A slot of a service that is not sampled, whose image claims the stack.
 		statRow(rollout.BlueContainerName(strayID, "stray", ""), strayID, stackProject, 13, 130),
@@ -443,7 +445,6 @@ func TestAttributeStatsTrustsOnlyPlatformLabels(t *testing.T) {
 
 	assert.Equal(t, map[string]service.ContainerStats{
 		stackID: {CPUPercent: 7, MemoryMB: 70},
-		appID:   {CPUPercent: 1, MemoryMB: 10},
 	}, got)
 	_, ok := got[victimID]
 	assert.False(t, ok, "nothing is counted for victim")

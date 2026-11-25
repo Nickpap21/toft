@@ -241,7 +241,7 @@ func (r *postgresRepository) OpenAlerts(ctx context.Context, orgID string) ([]It
 		cat := "deploys"
 		switch row.Kind {
 		case "server_unreachable", "disk_full", "backup_failed", "volume_full", "agent_offline", "agent_frozen",
-			"security_updates", "reboot_required", "docker_advisory":
+			"agent_outdated", "security_updates", "reboot_required", "docker_advisory", "lookalike_container":
 			cat = "servers"
 		case "mirror_failing":
 			cat = "code"

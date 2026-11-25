@@ -27,6 +27,7 @@ import { Segmented, card } from "@/components/settings/settings-frame";
 import { LoadFailed, readFailed } from "@/components/shell/unreachable";
 import { InstanceFrame } from "@/components/instance/instance-frame";
 import { IsolationCard } from "@/components/servers/isolation-card";
+import { BuildDestinationsCard } from "@/components/servers/build-destinations-card";
 import { WatchdogCard } from "@/components/instance/watchdog-card";
 import { gb } from "@/components/servers/disk-view";
 import {
@@ -238,6 +239,7 @@ export default function InstanceServerPage() {
           <DatabaseCard server={fresh} />
           <HostCard server={fresh} />
           <NetworksCard />
+          {isOperator && <BuildDestinationsCard serverId={null} />}
         </div>
       </div>
     </InstanceFrame>

@@ -10,6 +10,7 @@ import { deploymentHref } from "@/components/home/home";
 import { projectService } from "@/lib/api/project.service";
 import { environmentService } from "@/lib/api/environment.service";
 import { serverService } from "@/lib/api/server.service";
+import { deployErrorToast } from "@/components/servers/agent";
 import { domainService } from "@/lib/api/domain.service";
 import { envvarService, varsOf } from "@/lib/api/envvar.service";
 import { secretService } from "@/lib/api/secret.service";
@@ -359,7 +360,7 @@ export default function ServiceDetailPage() {
         return;
       }
       const message = err instanceof Error ? err.message : 'Failed to trigger deployment';
-      toast.error(message);
+      toast.error(...deployErrorToast(err, message, (href) => router.push(href)));
     },
   });
 

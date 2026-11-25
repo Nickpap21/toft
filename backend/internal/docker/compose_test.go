@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ const testServiceID = "0a1b2c3d-1111-2222-3333-444455556666"
 
 func TestRemoteCompose_ExactCommand(t *testing.T) {
 	got := remoteCompose("--project-directory '/tmp/paas-compose-Ab12' -f '/tmp/paas-compose-Ab12/docker-compose.yml' --project-name 'paas-web-0a1b2c3d' up -d 2>&1")
-	want := `env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ${TOFT_EXEC:+"TOFT_EXEC=$TOFT_EXEC"} ` +
+	want := `env -i PATH="$PATH" HOME="$HOME" BUILDX_GIT_INFO=false BUILDX_GIT_LABELS=false ${DOCKER_HOST:+"DOCKER_HOST=$DOCKER_HOST"} ${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"} ${TOFT_EXEC:+"TOFT_EXEC=$TOFT_EXEC"} ` +
 		`docker compose --project-directory '/tmp/paas-compose-Ab12' -f '/tmp/paas-compose-Ab12/docker-compose.yml' --project-name 'paas-web-0a1b2c3d' up -d 2>&1`
 	assert.Equal(t, want, got)
 }
@@ -58,38 +59,40 @@ func TestRemoteCleanEnv_InAShell(t *testing.T) {
 		"SSH_CONNECTION=10.0.0.1 5000 10.0.0.2 22", "MAIL=/var/mail/root", "PROFILE_EXPORT=from-bashrc",
 	}
 
+	// buildx reads no git in a build context (compose can build), so every
+	// clean-env command carries these two; they sort before the rest.
+	gitOff := []string{"BUILDX_GIT_INFO=false", "BUILDX_GIT_LABELS=false"}
 	t.Run("without docker variables", func(t *testing.T) {
-		assert.Equal(t, []string{"HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin"}, run(t, sshSession))
+		assert.Equal(t, append(slices.Clone(gitOff), "HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin"), run(t, sshSession))
 	})
 	t.Run("empty docker variables are left out", func(t *testing.T) {
-		assert.Equal(t, []string{"HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin"},
+		assert.Equal(t, append(slices.Clone(gitOff), "HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin"),
 			run(t, append(sshSession, "DOCKER_HOST=", "XDG_RUNTIME_DIR=")))
 	})
 	t.Run("the command's mark stays", func(t *testing.T) {
-		assert.Equal(t, []string{"HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin", "TOFT_EXEC=MARK"},
+		assert.Equal(t, append(slices.Clone(gitOff), "HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin", "TOFT_EXEC=MARK"),
 			run(t, append(sshSession, "TOFT_EXEC=MARK")))
 	})
 	t.Run("with docker variables, one with a space", func(t *testing.T) {
 		got := run(t, append(sshSession, "DOCKER_HOST=unix:///run/user/1000/docker.sock", "XDG_RUNTIME_DIR=/run/user/1000 x"))
-		assert.Equal(t, []string{
+		assert.Equal(t, append(slices.Clone(gitOff),
 			"DOCKER_HOST=unix:///run/user/1000/docker.sock",
 			"HOME=/root",
 			"PATH=/usr/local/bin:/usr/bin:/bin",
 			"XDG_RUNTIME_DIR=/run/user/1000 x",
-		}, got)
+		), got)
 	})
 }
 
-func TestComposeProcessEnv_OnlyPlatformBasicsAndServiceVars(t *testing.T) {
+func TestComposeProcessEnv_OnlyPlatformBasics(t *testing.T) {
 	backend := map[string]string{
 		"PATH": "/usr/bin", "HOME": "/root", "DOCKER_HOST": "unix:///var/run/docker.sock",
 		"JWT_SECRET": "s3cret", "DATABASE_URL": "postgres://panel", "ENCRYPTION_KEY": "k",
 	}
 	getenv := func(k string) string { return backend[k] }
-	got := composeProcessEnv(getenv, map[string]string{"B": "2", "A": "1"})
-	assert.Equal(t, []string{"PATH=/usr/bin", "HOME=/root", "DOCKER_HOST=unix:///var/run/docker.sock", "A=1", "B=2"}, got)
+	assert.Equal(t, []string{"PATH=/usr/bin", "HOME=/root", "DOCKER_HOST=unix:///var/run/docker.sock"}, composeProcessEnv(getenv))
 
-	empty := composeProcessEnv(func(string) string { return "" }, nil)
+	empty := composeProcessEnv(func(string) string { return "" })
 	assert.NotNil(t, empty, "a nil Env would make exec inherit the backend's environment")
 	assert.Empty(t, empty)
 }
@@ -97,7 +100,7 @@ func TestComposeProcessEnv_OnlyPlatformBasicsAndServiceVars(t *testing.T) {
 func TestLocalCompose_NeverInheritsTheBackendEnvironment(t *testing.T) {
 	t.Setenv("JWT_SECRET", "panel-secret")
 	t.Setenv("HOME", "/home/panel")
-	cmd := localCompose(context.Background(), t.TempDir(), nil, "version")
+	cmd := localCompose(context.Background(), t.TempDir(), "version")
 	require.NotNil(t, cmd.Env)
 	assert.NotContains(t, strings.Join(cmd.Env, "\n"), "panel-secret")
 	assert.Contains(t, cmd.Env, "HOME=/home/panel")
@@ -258,11 +261,17 @@ func TestCopyRepoLeavesOutGitAndKeepsModesAndLinks(t *testing.T) {
 	must(os.WriteFile(filepath.Join(src, "nginx", "nginx.conf"), []byte("events {}"), 0o644))
 	must(os.WriteFile(filepath.Join(src, "run.sh"), []byte("#!/bin/sh"), 0o755))
 	must(os.Symlink("nginx/nginx.conf", filepath.Join(src, "current.conf")))
+	must(os.MkdirAll(filepath.Join(src, "nginx", ".git"), 0o755))
+	must(os.WriteFile(filepath.Join(src, "nginx", ".git", "config"), []byte("x"), 0o644))
+	must(os.MkdirAll(filepath.Join(src, "api"), 0o755))
+	must(os.WriteFile(filepath.Join(src, "api", ".git"), []byte("gitdir: ../nginx"), 0o644))
 
 	must(copyRepo(src, dst))
 
 	_, err := os.Stat(filepath.Join(dst, ".git"))
 	assert.True(t, os.IsNotExist(err), ".git is not copied")
+	assert.NoDirExists(t, filepath.Join(dst, "nginx", ".git"), "nor one further down")
+	assert.NoFileExists(t, filepath.Join(dst, "api", ".git"), "nor a .git file")
 	b, err := os.ReadFile(filepath.Join(dst, "nginx", "nginx.conf"))
 	must(err)
 	assert.Equal(t, "events {}", string(b))

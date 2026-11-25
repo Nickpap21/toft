@@ -16,6 +16,16 @@ const (
 	minMemory = 512 << 20
 )
 
+// On a panel's server whose apps' share is too small to hold a builder
+// (half of it is under BuildsMemory), Toft's builders run outside the apps'
+// slice, in BuildsSlice, which toft upgrade writes too: the builders there
+// have BuildsMemory between them, taken from the panel's reservation while
+// a build runs (D-170).
+const (
+	BuildsSlice  = "toft-builds.slice"
+	BuildsMemory = 1 << 30
+)
+
 // The least a server needs to run the panel and apps (D-62, D-66, D-132):
 // where the apps' share stops being the slice's floor, so the three shares
 // never add up to more than the host has. 3.5 GiB, which a server sold as

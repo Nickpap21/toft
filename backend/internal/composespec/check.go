@@ -5,19 +5,47 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
+
+	"github.com/Nickpap21/toft/backend/internal/builder"
 )
 
 // ReservedLabelPrefixes are label key prefixes only the platform may set.
 var ReservedLabelPrefixes = []string{"paas.", "traefik.", "com.docker.compose."}
 
-// ReservedContainerNamePrefix is the container name prefix the platform uses
-// for its own containers (paas-postgres, paas-traefik, ...) and for every
-// service's containers.
-const ReservedContainerNamePrefix = "paas-"
+// ReservedContainerNamePrefixes are the container name prefixes the
+// platform uses: paas- for its own containers (paas-postgres, paas-traefik,
+// ...) and for every service's, buildx_buildkit_ for its builders', toft
+// for the rest (toft-migrate-<deployment>, ...).
+var ReservedContainerNamePrefixes = []string{"paas-", "buildx_buildkit_", "toft"}
+
+// containerNamePattern is Docker's own pattern for a container's name.
+// Docker also takes one leading "/" and drops it, so a name is compared
+// with the reserved prefixes only once it is written as Docker keeps it.
+var containerNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
+
+// isBuilderNetwork reports whether name is the network of one of the
+// platform's builders. A container on it would be held to a build's
+// firewall rules and could pass for the builder.
+func isBuilderNetwork(name string) bool {
+	n := strings.TrimSpace(name)
+	return strings.EqualFold(n, builder.Trusted.Name) || strings.EqualFold(n, builder.Untrusted.Name)
+}
+
+// networkIDPattern is what Docker can read as a network's ID or the start
+// of one. Docker takes an ID wherever it takes a network's name, so a name
+// of this shape is never compared with the reserved ones: it is refused.
+var networkIDPattern = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+
+// bridgeNameOpt is the driver option that names a network's bridge
+// interface on the host. The platform's own bridges start with "toft-",
+// and the host firewall knows the builders' by that name.
+const bridgeNameOpt = "com.docker.network.bridge.name"
 
 // IsReservedLabel reports whether key is a label only the platform may set.
 // The comparison ignores case and surrounding space.
@@ -112,6 +140,7 @@ func Check(p *types.Project, root string) []Violation {
 	c.volumes()
 	c.networks()
 	c.fileObjects("secrets", secretsAsFiles(p.Secrets))
+	c.buildSecrets()
 	c.fileObjects("configs", configsAsFiles(p.Configs))
 	sort.SliceStable(c.out, func(i, j int) bool { return c.out[i].Field < c.out[j].Field })
 	return c.out
@@ -234,6 +263,10 @@ func (c *checker) service(s types.ServiceConfig) {
 			c.addValue(RuleNetworkModeHost, n, f(field), val, "host networking is not allowed")
 		case strings.HasPrefix(v, types.ContainerPrefix):
 			c.addValue(RuleContainerNamespace, n, f(field), val, "joining another container's network is not allowed (%s)", val)
+		case isBuilderNetwork(v):
+			c.add(RuleReservedName, n, f(field), "the network %q is reserved for the platform's builders", val)
+		case networkIDPattern.MatchString(v):
+			c.add(RuleReservedName, n, f(field), "%q reads as a network's ID: a network is given by its name", val)
 		}
 	}
 	for i, vf := range s.VolumesFrom {
@@ -278,8 +311,15 @@ func (c *checker) service(s types.ServiceConfig) {
 		}
 	}
 
-	if s.ContainerName != "" && strings.HasPrefix(strings.ToLower(s.ContainerName), ReservedContainerNamePrefix) {
-		c.add(RuleReservedName, n, f("container_name"), "container names starting with %q are reserved for the platform", ReservedContainerNamePrefix)
+	if s.ContainerName != "" && !containerNamePattern.MatchString(s.ContainerName) {
+		c.add(RuleReservedName, n, f("container_name"), "container name %q is not allowed: a name is letters, digits, '_', '.' and '-', starting with a letter or a digit", s.ContainerName)
+	} else {
+		for _, prefix := range ReservedContainerNamePrefixes {
+			if strings.HasPrefix(strings.ToLower(s.ContainerName), prefix) {
+				c.add(RuleReservedName, n, f("container_name"), "container names starting with %q are reserved for the platform", prefix)
+				break
+			}
+		}
 	}
 	c.labels(n, f("labels"), s.Labels)
 	if s.Deploy != nil {
@@ -402,6 +442,30 @@ func (c *checker) build(service, field string, b *types.BuildConfig) {
 	c.labels(service, field+".labels", b.Labels)
 }
 
+// buildSecrets refuses a build's secret that is a variable the build tools
+// read as a setting (isBuildEnv): compose starts the build with each such
+// secret in the build's own environment, under the variable's name. A
+// variable of RunEnv is fileObjects' to refuse, for a build or not.
+func (c *checker) buildSecrets() {
+	used := map[string]bool{}
+	for _, services := range []types.Services{c.project.Services, c.project.DisabledServices} {
+		for _, svc := range services {
+			if svc.Build == nil {
+				continue
+			}
+			for _, s := range svc.Build.Secrets {
+				used[s.Source] = true
+			}
+		}
+	}
+	for _, name := range sortedKeys(used) {
+		if v := c.project.Secrets[name].Environment; v != "" && isBuildEnv(v) && !slices.Contains(RunEnv, v) {
+			c.add(RuleReservedEnv, "", "secrets."+name+".environment",
+				"%s is a setting of the build tools and cannot be a build's secret under that name", v)
+		}
+	}
+}
+
 // networkVolumeTypes are the local driver's network share types. The host
 // mounts the share, as root and from its own network: an operator grants
 // each one (volume_driver). tmpfs is the only other type a stack may name
@@ -475,6 +539,14 @@ func (c *checker) networks() {
 		case driver == "host" || driver == "macvlan" || driver == "ipvlan":
 			c.addValue(RuleNetworkModeHost, "", field+".driver", nw.Driver, "network driver %q attaches to the host's network", nw.Driver)
 		}
+		if nwName := firstNonEmpty(nw.Name, name); isBuilderNetwork(nwName) {
+			c.add(RuleReservedName, "", field, "the network %q is reserved for the platform's builders", nwName)
+		} else if n := strings.ToLower(strings.TrimSpace(nwName)); len(n) == 64 && networkIDPattern.MatchString(n) {
+			c.add(RuleReservedName, "", field, "%q reads as a network's ID: a network is given by its name", nwName)
+		}
+		if bridge := nw.DriverOpts[bridgeNameOpt]; strings.HasPrefix(strings.ToLower(strings.TrimSpace(bridge)), "toft-") {
+			c.add(RuleReservedName, "", field+".driver_opts."+bridgeNameOpt, "bridge names starting with %q are reserved for the platform", "toft-")
+		}
 		for _, key := range sortedKeys(nw.Labels) {
 			if IsReservedLabel(key) {
 				c.add(RuleReservedLabel, "", field+".labels."+key, "label %q is reserved for the platform", key)
@@ -484,14 +556,14 @@ func (c *checker) networks() {
 }
 
 type fileObject struct {
-	file   string
-	labels types.Labels
+	file, env string
+	labels    types.Labels
 }
 
 func secretsAsFiles(m types.Secrets) map[string]fileObject {
 	out := make(map[string]fileObject, len(m))
 	for k, v := range m {
-		out[k] = fileObject{file: v.File, labels: v.Labels}
+		out[k] = fileObject{file: v.File, env: v.Environment, labels: v.Labels}
 	}
 	return out
 }
@@ -499,13 +571,15 @@ func secretsAsFiles(m types.Secrets) map[string]fileObject {
 func configsAsFiles(m types.Configs) map[string]fileObject {
 	out := make(map[string]fileObject, len(m))
 	for k, v := range m {
-		out[k] = fileObject{file: v.File, labels: v.Labels}
+		out[k] = fileObject{file: v.File, env: v.Environment, labels: v.Labels}
 	}
 	return out
 }
 
 // fileObjects checks top-level secrets and configs: a file source is a bind
-// mount of that host file into the container.
+// mount of that host file into the container, and a variable compose runs
+// with (RunEnv) as the source is the platform's own value in the
+// container's file.
 func (c *checker) fileObjects(kind string, objs map[string]fileObject) {
 	for _, name := range sortedKeys(objs) {
 		o := objs[name]
@@ -513,6 +587,10 @@ func (c *checker) fileObjects(kind string, objs map[string]fileObject) {
 		if o.file != "" && !c.inside(o.file) {
 			rule := hostMountRule(o.file)
 			c.addValue(rule, "", field+".file", o.file, "%s file %s is outside the project", strings.TrimSuffix(kind, "s"), o.file)
+		}
+		if slices.Contains(RunEnv, o.env) {
+			c.add(RuleReservedEnv, "", field+".environment",
+				"%s is a variable docker compose runs with, the platform's own, and cannot be a %s's source", o.env, strings.TrimSuffix(kind, "s"))
 		}
 		for _, key := range sortedKeys(o.labels) {
 			if IsReservedLabel(key) {

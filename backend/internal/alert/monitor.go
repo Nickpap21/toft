@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ type Probe interface {
 	ListMetricsTargets(ctx context.Context) ([]service.MetricsTarget, error)
 	ProbeServerStates(ctx context.Context, serverID string, targets []service.MetricsTarget) (map[string][]service.ContainerState, error)
 	ProbeServerDisk(ctx context.Context, serverID string) ([]service.DiskUsage, error)
+	// ProbeServerLookAlikes names, sorted, the server's containers that
+	// carry a service's label and a compose project.
+	ProbeServerLookAlikes(ctx context.Context, serverID string) ([]string, error)
 }
 
 // ServerLister lists every remote server's ID, for the disk check.
@@ -176,6 +180,10 @@ type AgentChecker interface {
 	// AgentsFrozen: whether each agent holds another panel epoch's state
 	// (D-113).
 	AgentsFrozen(ctx context.Context) (map[string]bool, error)
+	// AgentsOutdated: true for an agent that refuses compose deploys while
+	// its upgrade to the panel's version didn't take, false for one
+	// connected with the builder; no entry while neither is known.
+	AgentsOutdated(ctx context.Context) (map[string]bool, error)
 }
 
 // WithAgents fires agent_offline for a server whose agent is away.
@@ -214,6 +222,24 @@ func (m *Monitor) checkAgents(ctx context.Context) {
 	}
 	for k := range m.tracker.open {
 		if _, listed := frozen[serverIDOf(k.subject)]; k.kind == KindAgentFrozen && !listed {
+			m.resolve(ctx, k, "the server no longer uses an agent")
+		}
+	}
+
+	outdated, err := m.agentsAway.AgentsOutdated(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			m.log.Warn("alerts: cannot check agents", zap.Error(err))
+		}
+		return
+	}
+	for serverID, o := range outdated {
+		m.apply(ctx, key{KindAgentOutdated, serverSubject(serverID)}, o,
+			"the agent is older than the panel and its upgrade didn't take. Compose deploys there are refused until it's upgraded", "the agent connected with the panel's builder")
+	}
+	for k := range m.tracker.open {
+		// away lists every agent server; outdated only those with a sample.
+		if _, listed := away[serverIDOf(k.subject)]; k.kind == KindAgentOutdated && !listed {
 			m.resolve(ctx, k, "the server no longer uses an agent")
 		}
 	}
@@ -357,6 +383,7 @@ func (m *Monitor) tick(ctx context.Context) {
 	}
 	if m.sample%diskEvery == 0 {
 		m.checkDisks(ctx)
+		m.checkLookAlikes(ctx)
 		if m.backups != nil {
 			m.checkBackups(ctx)
 		}
@@ -559,6 +586,82 @@ func (m *Monitor) checkDisks(ctx context.Context) {
 			m.resolve(ctx, k, "the server was removed")
 		}
 	}
+}
+
+// checkLookAlikes fires lookalike_container for each server, the
+// control-plane server's too, with containers that carry a service's label
+// and a compose project (rollout.IsLookAlike), and resolves it when none is
+// left. It only tells: nothing is removed. A server that doesn't answer
+// keeps its alert as it is.
+func (m *Monitor) checkLookAlikes(ctx context.Context) {
+	ids, err := m.servers.ListServerIDs(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			m.log.Warn("alerts: cannot list servers", zap.Error(err))
+		}
+		return
+	}
+	ids = append([]string{""}, ids...)
+	found := map[string][]string{}
+	var mu sync.Mutex
+	var g errgroup.Group
+	g.SetLimit(serverConcurrency)
+	for _, id := range ids {
+		g.Go(func() error {
+			sctx, cancel := context.WithTimeout(ctx, serverTimeout)
+			defer cancel()
+			names, err := m.probe.ProbeServerLookAlikes(sctx, id)
+			if err == nil {
+				mu.Lock()
+				found[id] = names
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+	if ctx.Err() != nil {
+		return
+	}
+
+	listed := map[string]bool{}
+	for _, id := range ids {
+		listed[serverSubject(id)] = true
+		names, ok := found[id]
+		if !ok {
+			continue
+		}
+		k := key{KindLookAlikeContainer, serverSubject(id)}
+		detail := lookAlikeDetail(names)
+		wasOpen := m.tracker.open[k]
+		m.apply(ctx, k, len(names) > 0, detail, "no such container is left")
+		// An open alert's detail follows the list.
+		if wasOpen && len(names) > 0 {
+			if err := m.store.SetDetail(ctx, k, detail); err != nil {
+				m.log.Warn("alerts: cannot update the look-alike alert", zap.String("server_id", id), zap.Error(err))
+			}
+		}
+	}
+	for k := range m.tracker.open {
+		if k.kind == KindLookAlikeContainer && !listed[k.subject] {
+			m.resolve(ctx, k, "the server was removed")
+		}
+	}
+}
+
+// lookAlikeDetail names the look-alike containers, at most 5, and says what
+// to do about them.
+func lookAlikeDetail(names []string) string {
+	shown, more := names, ""
+	if len(names) > 5 {
+		shown, more = names[:5], fmt.Sprintf(" and %d more", len(names)-5)
+	}
+	verb := "carry"
+	if len(names) == 1 {
+		verb = "carries"
+	}
+	return strings.Join(shown, ", ") + more + " " + verb +
+		" a service's label and a compose project. Toft makes no such container: remove its stack's service, or the container on the server"
 }
 
 // checkVolumes fires volume_full for a shared volume at volumeFire percent

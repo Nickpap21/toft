@@ -40,6 +40,9 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.network=paas-network"
       - "--providers.docker.exposedByDefault=false"
+      # No route from a container that carries a service's label and a
+      # compose project: Toft makes none (rollout.LookAlikeConstraint).
+      - '--providers.docker.constraints=!(LabelRegex("paas.service_id", ".+") && LabelRegex("com.docker.compose.project", ".+"))'
 
       # ── Entrypoints ───────────────────────────────────────────────────────────
       - "--entrypoints.web.address=:80"
@@ -54,7 +57,8 @@ services:
       # a large git push over HTTPS isn't cut (D-71). Apps on this server
       # get the same; remote servers' Traefik keeps 60 s.
       - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=30m"
-      # Metrics on a dedicated loopback-only port (scraped by Prometheus or viewed via SSH tunnel)
+      # Metrics on a port of their own, not published: the backend reads them
+      # over paas-network.
       - "--entrypoints.metrics.address=:9100"
       # Ping on its own entrypoint, bound to the container's loopback: only the
       # health check inside the container reaches it, never an app network
@@ -94,7 +98,7 @@ services:
       - "--providers.file.watch=true"
 
       # ── Prometheus metrics ────────────────────────────────────────────────────
-      # Scraped at http://localhost:9100/metrics (loopback only — see ports below).
+      # Scraped by the backend at http://paas-traefik:9100/metrics.
       # Dashboard → HTTP Metrics panel reads these automatically.
       - "--metrics.prometheus=true"
       - "--metrics.prometheus.entryPoint=metrics"
@@ -111,10 +115,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # Dashboard raw port — loopback only. SSH tunnel: ssh -L 8081:localhost:8081 root@<server>
+      # Dashboard raw port — loopback only, and behind the dashboard's password
+      # (TRAEFIK_DASHBOARD_USERS; closed while none is set).
+      # SSH tunnel: ssh -L 8081:localhost:8081 root@<server>
       - "127.0.0.1:8081:8080"
-      # Prometheus metrics — loopback only. SSH tunnel: ssh -L 9100:localhost:9100 root@<server>
-      - "127.0.0.1:9100:9100"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "traefik-certs:/letsencrypt"
@@ -160,11 +164,12 @@ services:
       - "traefik.http.routers.toft-metrics.entrypoints=metrics"
       - "traefik.http.routers.toft-metrics.service=prometheus@internal"
       - "traefik.http.routers.toft-metrics.middlewares=toft-control-plane-only"
-      # The dashboard on the loopback port (127.0.0.1:8081), control plane only.
+      # The dashboard on the loopback port (127.0.0.1:8081): control plane
+      # only, and with the dashboard's password.
       - "traefik.http.routers.toft-dashboard-local.rule=PathPrefix(`/`)"
       - "traefik.http.routers.toft-dashboard-local.entrypoints=dashboard"
       - "traefik.http.routers.toft-dashboard-local.service=api@internal"
-      - "traefik.http.routers.toft-dashboard-local.middlewares=toft-control-plane-only"
+      - "traefik.http.routers.toft-dashboard-local.middlewares=toft-control-plane-only,dashboard-auth"
 
   postgres:
     image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab

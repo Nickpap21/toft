@@ -223,6 +223,12 @@ describe("one Needs you", () => {
     expect(rows.find((r) => r.key === "agent:a1")).toMatchObject({ kind: "An agent asks to roll back", title: "storefront / api" });
   });
 
+  it("names a compose container with a service’s label on its server", () => {
+    const detail = "web-1 carries a service's label and a compose project.";
+    const [row] = inboxItems([it_("alert:look", "alert", "problem", { alert_kind: "lookalike_container", category: "servers", server_id: "v1", title: "fsn1", detail })], NOW);
+    expect(row).toMatchObject({ tab: "servers", tone: "pending", kind: "Compose container with a service’s label", title: "fsn1", meta: detail, href: "/servers/v1" });
+  });
+
   it("counts the same on Home, in the Inbox and in the sidebar", () => {
     const sidebar = server.length; // counts.needs_you is the server's list length
     const inbox = inboxItems(server, NOW).length;

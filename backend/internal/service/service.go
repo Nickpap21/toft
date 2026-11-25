@@ -2070,13 +2070,17 @@ type AgentStatsReader interface {
 	AgentServiceStats(ctx context.Context, targets []MetricsTarget, after int64) ([]HostSample, error)
 }
 
-// ServiceStateProbe reports container states and disk usage for alerts.
-// Both orchestrators implement it.
+// ServiceStateProbe reports container states, disk usage and look-alike
+// containers for alerts. Both orchestrators implement it.
 type ServiceStateProbe interface {
 	// ServiceStates returns every container, running or not, of each
 	// target, keyed by service ID; a target with none is left out.
 	ServiceStates(ctx context.Context, targets []MetricsTarget) (map[string][]ContainerState, error)
 	DiskUsage(ctx context.Context) ([]DiskUsage, error)
+	// LookAlikes returns, sorted, the names of the containers, running or
+	// not, that carry a service's label and a compose project
+	// (rollout.IsLookAlike).
+	LookAlikes(ctx context.Context) ([]string, error)
 }
 
 // LogDriverReader reports where containers send their output. Both
@@ -2699,6 +2703,21 @@ func (s *ServiceManager) ProbeServerDisk(ctx context.Context, serverID string) (
 		return nil, errors.New("orchestrator does not report disk usage")
 	}
 	return probe.DiskUsage(ctx)
+}
+
+// ProbeServerLookAlikes names a server's containers that carry a service's
+// label and a compose project ("" = the local Docker host), for alerts.
+func (s *ServiceManager) ProbeServerLookAlikes(ctx context.Context, serverID string) ([]string, error) {
+	orch, cleanup, err := s.orchestratorFor(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	probe, ok := orch.(ServiceStateProbe)
+	if !ok {
+		return nil, errors.New("orchestrator does not report look-alike containers")
+	}
+	return probe.LookAlikes(ctx)
 }
 
 // InsertSample records one compose service's sample ("" for a

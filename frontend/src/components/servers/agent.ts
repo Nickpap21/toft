@@ -1,5 +1,6 @@
 // The node agent's state as the pages show it (D-106; boards ServerAgent,
 // AgentOffline, AddServerAgent).
+import { ApiError } from "@/lib/api/client";
 import type { AgentStatus, Server, ServerAgent } from "@/lib/api/server.service";
 import { formatDateTime } from "@/lib/utils";
 
@@ -78,6 +79,54 @@ export function awayFor(iso: string, now: number): string {
 export function clock(iso: string): string {
   const d = new Date(iso);
   return d.toDateString() === new Date().toDateString() ? d.toTimeString().slice(0, 5) : formatDateTime(d);
+}
+
+/** The Version row of an agent behind the panel (board ServerAgent, the
+ *  behind views): null while it isn't. quote is the agent's own text. */
+export function upgradeRow(a: Pick<ServerAgent, "version" | "arch" | "upgrade"> | null | undefined): { warn: string; why: string; quote: string; note: string; again: boolean } | null {
+  const u = a?.upgrade;
+  if (!u) return null;
+  const to = u.panel_version;
+  const refused = u.compose_refused ? `Compose deploys to this server are refused until its agent runs ${to}.` : "";
+  const held = `The panel doesn’t offer ${to} again by itself until it restarts or is upgraded. ${refused}`.trim();
+  const at = u.at ? ` at ${clock(u.at)}` : "";
+  const row = { warn: `Behind the panel, which runs ${to}`, quote: "", again: true };
+  if (u.offering) return { ...row, why: `The panel is offering ${to} to the agent now.`, note: refused };
+  switch (u.reason) {
+    case "refused":
+      return { ...row, why: `The agent refused the upgrade${at}.${u.detail ? " In its own words:" : ""}`, quote: u.detail ?? "", note: held };
+    case "returned":
+      return { ...row, why: `The agent accepted ${to} but reconnected as ${a?.version ?? "the version it left"}. It goes back by itself when the new version can’t connect within 2 minutes.`, note: held };
+    case "no_build":
+      return { ...row, why: `This panel’s release files have no agent for linux/${a?.arch ?? "this architecture"}, so it had nothing to offer.`, note: refused };
+    default:
+      return { ...row, why: "", note: `The panel offers ${to} when the agent connects. ${refused}`.trim(), again: false };
+  }
+}
+
+/** A deploy refused because its server's agent is older than the panel
+ *  (409 agent_outdated; the API's text ends with the path of the server's
+ *  Connection card): the text without the path and in the panel's
+ *  apostrophes, the path, and the server's name when the text gives it.
+ *  Null for any other text. */
+export function agentOutdated(msg: string | null | undefined): { text: string; href: string; server: string | null } | null {
+  const m = /^([\s\S]*): (\/servers\/[0-9a-f-]{36}\?tab=settings#connection)$/.exec(msg ?? "");
+  if (!m) return null;
+  // A name the hostname rule wouldn't pass (an older server's) isn't guessed at.
+  return { text: `${m[1].replaceAll("'", "’")}.`, href: m[2], server: /(?:^|: )([A-Za-z0-9][A-Za-z0-9._-]*)'s agent \(/.exec(m[1])?.[1] ?? null };
+}
+
+/** A deploy's error as toast.error's arguments: message, what to say about
+ *  err. For a deploy refused because its server's agent is older than the
+ *  panel (the API's code agent_outdated, its server_id naming the server),
+ *  the text without the path of the server's Connection card it ends with,
+ *  in the panel's apostrophes, and the way to that card. */
+export function deployErrorToast(err: unknown, message: string, go: (href: string) => void): [string, { action: { label: string; onClick: () => void } }?] {
+  const data = err instanceof ApiError ? (err.body as { data?: { code?: unknown; server_id?: unknown } } | null)?.data : undefined;
+  if (data?.code !== "agent_outdated" || typeof data.server_id !== "string" || !data.server_id) return [message];
+  const href = `/servers/${encodeURIComponent(data.server_id)}?tab=settings#connection`;
+  const text = message.endsWith(`: ${href}`) ? `${message.slice(0, -href.length - 2)}.` : message;
+  return [text.replaceAll("'", "’"), { action: { label: "Upgrade the agent", onClick: () => go(href) } }];
 }
 
 /** Split an "ssh-ed25519 SHA256:…" style fingerprint for display: the

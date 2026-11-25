@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Nickpap21/toft/backend/internal/hoststats"
+	"github.com/Nickpap21/toft/backend/internal/rollout"
 )
 
 // Shell runs commands on the server being provisioned: Exec returns the
@@ -75,6 +76,9 @@ type provisionOpts struct {
 	// BackupEnv is the server's backup env file (D-43), or "" when it has
 	// no backup destination.
 	BackupEnv string
+	// BuildDestinations, when set, writes the server's stored list of build
+	// destinations once the host firewall is loaded (D-170).
+	BuildDestinations func(sc Shell, logFn func(string)) error
 	// SyncRoutes, set where the server's agent writes the routes (D-113),
 	// asks it to write them all (ensureTraefik).
 	SyncRoutes func() (int, error)
@@ -147,6 +151,12 @@ func provision(sc shell, opts provisionOpts, logFn func(string)) (warnings []str
 		// yesterday. The warning says what is open.
 		logFn("Warning: app containers can reach this host's services (sshd, cloud metadata): host firewall setup failed (non-fatal): " + err.Error())
 		warnings = append(warnings, warningHostFirewall)
+	} else if opts.BuildDestinations != nil {
+		if err := opts.BuildDestinations(sc, logFn); err != nil {
+			// Non-fatal: the firewall loaded the list this server had, and
+			// the next save or the hourly pass writes the stored one.
+			logFn("Warning: the build destinations were not written (non-fatal), so this server keeps the list it had: " + err.Error())
+		}
 	}
 	if err := ensureBackup(sc, opts.BackupEnv, logFn); err != nil {
 		// Non-fatal: the backup_failed alert says when none succeeds.
@@ -381,6 +391,7 @@ const (
   --providers.docker=true \
   --providers.docker.network=paas-network \
   --providers.docker.exposedbydefault=false \
+  '` + traefikConstraintFlag + rollout.LookAlikeConstraint + `' \
   --providers.file.filename=/etc/traefik/dynamic.yml \
   --providers.file.watch=true \`
 	traefikProvidersFiles = `  -p 127.0.0.1::8082 \

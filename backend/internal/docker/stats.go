@@ -584,8 +584,9 @@ func newAttributor(targets []service.MetricsTarget) attributor {
 // image and tenants choose their images:
 //  1. paas.service_id counts only on a container the platform created and
 //     labelled itself: a blue/green slot, recognised by its reserved name
-//     (rollout.IsSlotName). Such a container is never counted through its compose
-//     label, which its image may have set.
+//     and by having no compose project (rollout.IsSlot). A container with
+//     the label and a slot's name is never counted through its compose
+//     label; with one, it counts for nobody.
 //  2. Otherwise a compose project counts only when it is a name the
 //     platform derives from a target (rollout.ComposeProjectNames), which is the
 //     project the platform runs that target's stack under; a project name
@@ -616,7 +617,7 @@ func (a attributor) owner(c hostContainer) string {
 // blue/green slot, whose image may set any label.
 func (a attributor) attribute(c hostContainer) (serviceID, composeService string) {
 	if c.ServiceID != "" && rollout.IsSlotName(c.Name, c.ServiceID) {
-		if a.targets[c.ServiceID] {
+		if a.targets[c.ServiceID] && rollout.IsSlot(c.Name, c.ServiceID, c.ComposeProject) {
 			return c.ServiceID, ""
 		}
 		return "", ""

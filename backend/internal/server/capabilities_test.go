@@ -238,3 +238,44 @@ func TestProbeCapabilitiesOverSSH(t *testing.T) {
 	assert.Contains(t, c.Error, "connection reset")
 	assert.Equal(t, "available", c.Levels[0].State)
 }
+
+type panelCapsFake struct {
+	c   *Capabilities
+	err error
+}
+
+func (p panelCapsFake) StoredPanelCapabilities(context.Context) (*Capabilities, error) {
+	return p.c, p.err
+}
+
+// The untrusted class of a host's firewall is known only from a probe that
+// read it loaded: a server never probed, one that can't be read, and the
+// panel's own before its first check all answer false.
+func TestUntrustedFirewallIsTheStoredFactAndFalseWhenUnknown(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(newFakeRepo(&Server{ID: testServerID}), "")
+	assert.False(t, s.UntrustedFirewall(ctx, testServerID), "no store of capabilities")
+	assert.False(t, s.UntrustedFirewall(ctx, ""), "nothing reads the panel's own")
+
+	caps := &memCaps{c: map[string]Capabilities{}}
+	s.WithCapabilities(caps)
+	assert.False(t, s.UntrustedFirewall(ctx, testServerID), "never probed")
+	caps.c[testServerID] = Capabilities{Kernel: "6.8"}
+	assert.False(t, s.UntrustedFirewall(ctx, testServerID), "probed, chain not loaded")
+	caps.c[testServerID] = Capabilities{Kernel: "6.8", PreviewFirewall: true}
+	assert.True(t, s.UntrustedFirewall(ctx, testServerID))
+	assert.False(t, s.UntrustedFirewall(ctx, "00000000-0000-0000-0000-00000000dead"), "no such server")
+
+	for name, tc := range map[string]struct {
+		p    panelCapsFake
+		want bool
+	}{
+		"not checked yet": {panelCapsFake{}, false},
+		"unreadable":      {panelCapsFake{c: &Capabilities{PreviewFirewall: true}, err: errors.New("db down")}, false},
+		"not loaded":      {panelCapsFake{c: &Capabilities{}}, false},
+		"loaded":          {panelCapsFake{c: &Capabilities{PreviewFirewall: true}}, true},
+	} {
+		s.WithPanelCapabilities(tc.p)
+		assert.Equal(t, tc.want, s.UntrustedFirewall(ctx, ""), name)
+	}
+}

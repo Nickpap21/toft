@@ -233,17 +233,33 @@ func (f *fakeAgents) AgentsFrozen(context.Context) (map[string]bool, error) {
 
 // fakeHub reports a fixed state.
 type fakeHub struct {
+	mu      sync.Mutex // state's, where a background offer reads it
 	state   agenthub.State
+	asked   func() // called on each State
 	known   bool
 	started time.Time
 	dropped []string
 }
 
 func (h *fakeHub) Conn(context.Context, string) (net.Conn, error) { return nil, agenthub.ErrOffline }
-func (h *fakeHub) State(string) (agenthub.State, bool)            { return h.state, h.known }
-func (h *fakeHub) Started() time.Time                             { return h.started }
-func (h *fakeHub) MarkUpgrading(string)                           {}
-func (h *fakeHub) Drop(id string)                                 { h.dropped = append(h.dropped, id) }
+func (h *fakeHub) State(string) (agenthub.State, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.asked != nil {
+		h.asked()
+	}
+	return h.state, h.known
+}
+
+// set changes the state beside an offer that may still be reading it.
+func (h *fakeHub) set(change func(*agenthub.State)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	change(&h.state)
+}
+func (h *fakeHub) Started() time.Time   { return h.started }
+func (h *fakeHub) MarkUpgrading(string) {}
+func (h *fakeHub) Drop(id string)       { h.dropped = append(h.dropped, id) }
 
 func agentKey(t *testing.T) string {
 	t.Helper()

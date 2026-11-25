@@ -22,6 +22,8 @@ type fakeProbe struct {
 	states  map[string][]service.ContainerState
 	down    map[string]bool
 	disk    map[string]int
+	// lookAlikes per server; a server not in it doesn't answer.
+	lookAlikes map[string][]string
 }
 
 func (p *fakeProbe) ListMetricsTargets(context.Context) ([]service.MetricsTarget, error) {
@@ -51,6 +53,15 @@ func (p *fakeProbe) ProbeServerDisk(_ context.Context, serverID string) ([]servi
 		return nil, errors.New("unreachable")
 	}
 	return []service.DiskUsage{{Mount: "/", UsedPercent: pct}}, nil
+}
+func (p *fakeProbe) ProbeServerLookAlikes(_ context.Context, serverID string) ([]string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	names, ok := p.lookAlikes[serverID]
+	if !ok {
+		return nil, errors.New("unreachable")
+	}
+	return names, nil
 }
 
 type fakeServers []string
@@ -154,7 +165,7 @@ func TestMonitorFiresAndResolvesAServiceAlert(t *testing.T) {
 
 // fakeAgents: srv-1 is an agent server; up says whether its agent is
 // connected.
-type fakeAgents struct{ up, frozen bool }
+type fakeAgents struct{ up, frozen, outdated, retrying bool }
 
 func (fakeAgents) AgentsAway(context.Context) (map[string]bool, error) {
 	return map[string]bool{"srv-1": false}, nil
@@ -166,6 +177,13 @@ func (a fakeAgents) AgentsConnected(context.Context) (map[string]bool, error) {
 
 func (a fakeAgents) AgentsFrozen(context.Context) (map[string]bool, error) {
 	return map[string]bool{"srv-1": a.frozen}, nil
+}
+
+func (a fakeAgents) AgentsOutdated(context.Context) (map[string]bool, error) {
+	if a.retrying { // away, or its answer isn't known yet
+		return map[string]bool{}, nil
+	}
+	return map[string]bool{"srv-1": a.outdated}, nil
 }
 
 // A server whose agent isn't connected is agent_offline's alone: in
@@ -204,6 +222,74 @@ func TestMonitorAgentFrozenUntilAStateIsChosen(t *testing.T) {
 	m.WithAgents(fakeAgents{up: true})
 	m.tick(context.Background())
 	assert.Equal(t, []string{"agent_frozen srv-1 firing", "agent_frozen srv-1 resolved"}, ev.summary())
+}
+
+// An agent behind the panel whose upgrade didn't take fires agent_outdated
+// at once and stays one alert while it lasts. A retry that runs and fails
+// leaves that alert open, not a resolve followed by a new one: it resolves
+// only when the agent connects with the builder.
+func TestMonitorAgentOutdatedUntilItCatchesUp(t *testing.T) {
+	p := &fakeProbe{disk: map[string]int{"": 40}}
+	st, ev := &memStore{open: map[key]bool{}}, &events{}
+	m := newTestMonitor(p, st, ev).WithAgents(fakeAgents{up: true, outdated: true})
+	m.tick(context.Background())
+	m.tick(context.Background())
+	assert.Equal(t, []string{"agent_outdated srv-1 firing"}, ev.summary())
+
+	m.WithAgents(fakeAgents{retrying: true}) // offered again, restarting
+	m.tick(context.Background())
+	m.WithAgents(fakeAgents{up: true, outdated: true}) // and it failed
+	m.tick(context.Background())
+	assert.Equal(t, []string{"agent_outdated srv-1 firing"}, ev.summary(), "one open alert through the retry")
+	assert.True(t, st.open[key{KindAgentOutdated, serverSubject("srv-1")}])
+
+	m.WithAgents(fakeAgents{up: true})
+	m.tick(context.Background())
+	assert.Equal(t, []string{"agent_outdated srv-1 firing", "agent_outdated srv-1 resolved"}, ev.summary())
+}
+
+// A container with a service's label and a compose project fires
+// lookalike_container on the first check, naming it; the open alert's
+// detail follows the list; a server that doesn't answer keeps it; it
+// resolves when none is left, or when the server is removed.
+func TestMonitorLookAlikeContainers(t *testing.T) {
+	p := &fakeProbe{disk: map[string]int{"": 40, "srv-1": 40}, lookAlikes: map[string][]string{"": {}, "srv-1": {"paas-svc-0a1b2c3d-web-1"}}}
+	st, ev := &memStore{open: map[key]bool{}}, &events{}
+	m := newTestMonitor(p, st, ev)
+	ctx := context.Background()
+	k := key{KindLookAlikeContainer, "srv-1"}
+	check := func() {
+		for range diskEvery {
+			m.tick(ctx)
+		}
+	}
+
+	check()
+	assert.Equal(t, []string{"lookalike_container srv-1 firing"}, ev.summary())
+	assert.Equal(t, "paas-svc-0a1b2c3d-web-1 carries a service's label and a compose project. Toft makes no such container: remove its stack's service, or the container on the server", (*ev)[0].Detail)
+
+	p.lookAlikes["srv-1"] = []string{"a-1", "b-1", "c-1", "d-1", "e-1", "f-1", "g-1"}
+	check()
+	assert.Len(t, *ev, 1, "still one open alert")
+	assert.Equal(t, "a-1, b-1, c-1, d-1, e-1 and 2 more carry a service's label and a compose project. Toft makes no such container: remove its stack's service, or the container on the server", st.details[k])
+
+	delete(p.lookAlikes, "srv-1") // doesn't answer
+	check()
+	assert.Len(t, *ev, 1)
+	assert.True(t, st.open[k], "a server that doesn't answer keeps its alert")
+
+	p.lookAlikes["srv-1"] = []string{}
+	check()
+	assert.Equal(t, []string{"lookalike_container srv-1 firing", "lookalike_container srv-1 resolved"}, ev.summary())
+	assert.Equal(t, "no such container is left", (*ev)[1].Detail)
+
+	p.lookAlikes["srv-1"] = []string{"x-1"}
+	check()
+	m.servers = fakeServers{}
+	check()
+	assert.Equal(t, []string{"lookalike_container srv-1 firing", "lookalike_container srv-1 resolved",
+		"lookalike_container srv-1 firing", "lookalike_container srv-1 resolved"}, ev.summary())
+	assert.Equal(t, "the server was removed", (*ev)[3].Detail)
 }
 
 func TestMonitorUnreachableServerSuspendsItsServices(t *testing.T) {

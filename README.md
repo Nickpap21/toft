@@ -161,7 +161,7 @@ Toft and prints a one-time **setup code**.
 | --- | --- |
 | OS | Ubuntu 22.04+, Debian 12+ |
 | CPU | amd64 or arm64 |
-| Size | 2 vCPU and 4 GB RAM to run apps beside the panel; less runs the panel only |
+| Size | 2 vCPU and 4 GB RAM to run apps beside the panel (builds get 1 GiB there: tight for Node apps); less runs the panel only |
 | Ports | 80 and 443, plus 2222 for git over SSH |
 
 ### Your first deploy

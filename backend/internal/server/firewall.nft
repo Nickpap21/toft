@@ -11,6 +11,14 @@
 # An untrusted preview's own network (D-97; its bridge is named toft-u…) may
 # also not open connections to private addresses outside it, nor to SMTP.
 #
+# The builder's network is one of those (D-170; its bridge is toft-ubuild).
+# What an instance operator let builds reach in the private ranges is the
+# build_destinations chain: empty here, filled by the unit from
+# /etc/toft/firewall.d/build-destinations.nft after this table is loaded
+# and apart from it, so a list nft refuses leaves the table loaded and the
+# list empty. An untrusted preview's builder (toft-upbuild) never jumps
+# there.
+#
 # Loaded at boot by toft-firewall.service, before Docker. Loading it again
 # replaces the table in one transaction. To remove:
 #   systemctl disable --now toft-firewall && nft delete table ip toft
@@ -30,7 +38,10 @@ table ip toft {
 	chain from_untrusted {
 		fib daddr oifname "toft-u*" return
 		tcp dport 25 counter drop
+		iifname "toft-ubuild" jump build_destinations
 		ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } counter drop
+	}
+	chain build_destinations {
 	}
 	chain to_host {
 		tcp dport { 80, 443 } return

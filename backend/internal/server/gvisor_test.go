@@ -114,7 +114,7 @@ var gvisorChanges = []string{"cat > " + gvisorKeyPath, "cat > " + gvisorListPath
 func TestInstallGvisorOnAFreshServer(t *testing.T) {
 	h := freshGvisorHost()
 	var lines []string
-	got, err := installGvisor(h, false, func(l string) { lines = append(lines, l) })
+	got, err := installGvisor(h, false, nil, func(l string) { lines = append(lines, l) })
 	require.NoError(t, err)
 	assert.Equal(t, "systrap", got.platform(), "a KVM guest without /dev/kvm")
 
@@ -149,7 +149,7 @@ func TestInstallGvisorTestsTheStrictNetworkWithTheAgent(t *testing.T) {
 	h := freshGvisorHost()
 	h.ufw = true
 	var lines []string
-	_, err := installGvisor(h, true, func(l string) { lines = append(lines, l) })
+	_, err := installGvisor(h, true, nil, func(l string) { lines = append(lines, l) })
 	require.NoError(t, err)
 	assert.Equal(t, map[string][]string{"runsc": {"--network=host", "--oci-seccomp"}, "runsc-strict": {"--oci-seccomp"}}, h.registered)
 	ufw := indexOf(h.cmds, "ufw allow to 169.254.53.53 port 53")
@@ -159,7 +159,7 @@ func TestInstallGvisorTestsTheStrictNetworkWithTheAgent(t *testing.T) {
 	assert.Contains(t, lines, "  ✓ A strict container found another by name through the agent, and the health probe reached it")
 
 	h.fail = func(cmd string) bool { return strings.HasPrefix(cmd, "echo ") && cmd == h.cmds[ufw+strict] }
-	_, err = installGvisor(h, true, func(string) {})
+	_, err = installGvisor(h, true, nil, func(string) {})
 	require.ErrorContains(t, err, "a strict test container failed")
 }
 
@@ -172,12 +172,12 @@ func TestStrictCheckScriptParses(t *testing.T) {
 
 func TestInstallGvisorAgainChangesNothing(t *testing.T) {
 	h := freshGvisorHost()
-	_, err := installGvisor(h, false, func(string) {})
+	_, err := installGvisor(h, false, nil, func(string) {})
 	require.NoError(t, err)
 
 	h.cmds = nil
 	var lines []string
-	_, err = installGvisor(h, false, func(l string) { lines = append(lines, l) })
+	_, err = installGvisor(h, false, nil, func(l string) { lines = append(lines, l) })
 	require.NoError(t, err)
 	for _, c := range gvisorChanges {
 		assert.False(t, issued(h.cmds, c), "a second install must not run %q", c)
@@ -189,7 +189,7 @@ func TestInstallGvisorAgainChangesNothing(t *testing.T) {
 func TestInstallGvisorReregistersRunscWithoutToftsSettings(t *testing.T) {
 	h := freshGvisorHost()
 	h.runsc, h.registered = gvisorVersion, map[string][]string{"runsc": {}} // registered by hand: no arguments
-	_, err := installGvisor(h, false, func(string) {})
+	_, err := installGvisor(h, false, nil, func(string) {})
 	require.NoError(t, err)
 	assert.True(t, issued(h.cmds, runscPath+" install --runtime=runsc -- --network=host --oci-seccomp"))
 	assert.False(t, issued(h.cmds, "apt-get -o"))
@@ -199,7 +199,7 @@ func TestInstallGvisorReregistersRunscWithoutToftsSettings(t *testing.T) {
 func TestInstallGvisorUsesKVMOnBareMetal(t *testing.T) {
 	h := freshGvisorHost()
 	h.probe = "6.8.0-146-generic\narm64\n/usr/bin/apt-get\nnone\nkvm\nDebian GNU/Linux 13"
-	got, err := installGvisor(h, false, func(string) {})
+	got, err := installGvisor(h, false, nil, func(string) {})
 	require.NoError(t, err)
 	assert.Equal(t, "kvm", got.platform())
 	assert.True(t, issued(h.cmds, "--runtime=runsc -- --network=host --oci-seccomp --platform=kvm"))
@@ -210,7 +210,7 @@ func TestInstallGvisorUsesKVMOnBareMetal(t *testing.T) {
 func TestInstallGvisorPutsDockersConfigurationBack(t *testing.T) {
 	h := freshGvisorHost()
 	h.fail = func(cmd string) bool { return strings.HasPrefix(cmd, "dockerd --validate") }
-	_, err := installGvisor(h, false, func(string) {})
+	_, err := installGvisor(h, false, nil, func(string) {})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "put back as it was")
 	assert.True(t, issued(h.cmds, "mv "+daemonBackup+" "+daemonConfigPath), "the copy is restored")
@@ -226,7 +226,7 @@ func TestInstallGvisorRefusesBeforeChangingAnything(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := freshGvisorHost()
 			h.probe = probe
-			_, err := installGvisor(h, false, func(string) {})
+			_, err := installGvisor(h, false, nil, func(string) {})
 			require.Error(t, err)
 			for _, c := range gvisorChanges {
 				assert.False(t, issued(h.cmds, c), "refused, yet ran %q", c)
@@ -238,7 +238,7 @@ func TestInstallGvisorRefusesBeforeChangingAnything(t *testing.T) {
 func TestInstallGvisorStopsWhenAptFails(t *testing.T) {
 	h := freshGvisorHost()
 	h.fail = func(cmd string) bool { return strings.Contains(cmd, "apt-get -o") }
-	_, err := installGvisor(h, false, func(string) {})
+	_, err := installGvisor(h, false, nil, func(string) {})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "apt-get install runsc=20261012.0")
 	assert.False(t, issued(h.cmds, runscPath+" install"), "Docker is left alone")

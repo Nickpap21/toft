@@ -132,6 +132,10 @@ type Routing struct {
 // The returned cleanup function must always be called.
 type OrchestratorFactory interface {
 	ForServer(srv *server.Server) (Orchestrator, func(), error)
+	// ForDeploy is ForServer for a deploy's pipeline, the only orchestrator
+	// that builds: on the builder b names, and nothing where b has no
+	// firewall (D-170).
+	ForDeploy(ctx context.Context, srv *server.Server, b Builds) (Orchestrator, func(), error)
 }
 
 // ServiceStatusUpdater updates the runtime state of a service after a
@@ -669,6 +673,7 @@ type Service struct {
 	shipper                Shipper                // optional; nil = issues are shipped by their reconcile only
 	dns                    DNSProviderChecker     // nil = wildcard domains refused
 	sandboxes              SandboxChecker         // nil = Sandboxed services refused
+	devBuilds              bool                   // TOFT_DEV_BUILDS_WITHOUT_FIREWALL
 	agents                 AgentGate              // nil = no agent policy (tests)
 	configFileWriter       ConfigFileWriter       // optional; nil = skip config file injection
 	orgSettingsSvc         OrgSettingsReader      // optional; nil = skip capacity gate
@@ -1701,6 +1706,11 @@ func (s *Service) precheck(ctx context.Context, input TriggerInput) (*deploypoli
 		input.MoveFrom != nil && input.MoveFrom.Server != nil && input.MoveFrom.Server.AgentFrozenAt != nil {
 		return nil, server.ErrServerFrozen
 	}
+	if input.SourceType == string(service.SourceTypeDockerCompose) && s.serverSvc != nil {
+		if err := s.serverSvc.AgentOutdated(input.Server); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.checkHostUpdates(ctx, input); err != nil {
 		return nil, err
 	}
@@ -1951,7 +1961,7 @@ func (s *Service) runPipeline(line context.Context, deploymentID string, input T
 	}
 
 	// Obtain an orchestrator for the target server (local or remote).
-	orch, cleanup, err := s.factory.ForServer(input.Server)
+	orch, cleanup, err := s.factory.ForDeploy(ctx, input.Server, s.builds(input, appendLog))
 	if err != nil {
 		s.log.Error("orchestrator init failed", zap.String("deployment_id", deploymentID), zap.Error(err))
 		appendLog("Orchestrator error: " + err.Error())
@@ -2799,8 +2809,8 @@ func (s *Service) runPreDeployCommands(ctx context.Context, deploymentID string,
 // runPostDeployCommands executes a compose deploy's post-deploy exec
 // commands inside its running containers (a single-container deploy's run
 // in its rollout). A command with no target runs in the service's first
-// container. It returns the first failure, already logged; the caller
-// records it.
+// container, and in none when the service has none. It returns the first
+// failure, already logged; the caller records it.
 func (s *Service) runPostDeployCommands(ctx context.Context, deploymentID string, input TriggerInput, orch Orchestrator, appendLog func(string)) error {
 	if len(input.PostDeployCommands) == 0 {
 		return nil
@@ -2811,11 +2821,14 @@ func (s *Service) runPostDeployCommands(ctx context.Context, deploymentID string
 		containers, _ := orch.ListContainers(ctx, input.ServiceID, input.ServiceName)
 		if containerName == "" {
 			// Resolve the active container name (blue/green or compose service).
-			if len(containers) > 0 {
-				containerName = containers[0]
-			} else {
-				containerName = rollout.BlueContainerName(input.ServiceID, input.ServiceName, input.EnvironmentName) // safe fallback
+			if len(containers) == 0 {
+				// Never a container by its name alone: the name is not
+				// the service's until the listing says so.
+				msg := "post-deploy command has no container to run in: the service has none"
+				appendLog("✗ " + msg)
+				return errors.New(msg)
 			}
+			containerName = containers[0]
 		} else if !containsString(containers, containerName) {
 			// A named container must be one of this service's own: the
 			// name is user input and must not reach another service's

@@ -146,7 +146,7 @@ func StartSlot(ctx context.Context, dc *client.Client, cfg NetConfig, plan netpl
 		if SummaryName(c) != newName { // the name filter also matches longer names
 			continue
 		}
-		if dep := s.Labels[LabelDeploymentID]; dep != "" && c.Labels[LabelDeploymentID] == dep && c.Labels[LabelServiceID] == serviceID {
+		if dep := s.Labels[LabelDeploymentID]; dep != "" && c.Labels[LabelDeploymentID] == dep && c.Labels[LabelServiceID] == serviceID && c.Labels[LabelComposeProject] == "" {
 			reuse = c.ID
 			continue
 		}

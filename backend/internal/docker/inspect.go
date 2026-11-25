@@ -152,10 +152,10 @@ func serviceContainerList(ctx context.Context, dc *client.Client, serviceID, ser
 			return nil, fmt.Errorf("ContainerList: %w", err)
 		}
 		for _, c := range list {
-			if q.slotsOnly && !rollout.IsSlotName(rollout.SummaryName(c), serviceID) {
+			if q.slotsOnly && !rollout.IsPlatformSlot(c.Labels, rollout.SummaryName(c)) {
 				continue
 			}
-			if !q.slotsOnly && rollout.IsPlatformSlot(c.Labels, rollout.SummaryName(c)) {
+			if !q.slotsOnly && rollout.LooksLikeSlot(c.Labels, rollout.SummaryName(c)) {
 				continue // a slot whose image carries the project label
 			}
 			if !seen[c.ID] {
@@ -168,7 +168,7 @@ func serviceContainerList(ctx context.Context, dc *client.Client, serviceID, ser
 }
 
 // containerStatesFrom maps listed containers to what recovery needs. Slot
-// marks serviceID's own blue/green slots (rollout.IsSlotName).
+// marks serviceID's own blue/green slots (rollout.IsPlatformSlot).
 func containerStatesFrom(list []container.Summary, serviceID string) []deployment.ContainerState {
 	out := make([]deployment.ContainerState, 0, len(list))
 	for _, c := range list {
@@ -185,7 +185,7 @@ func containerStatesFrom(list []container.Summary, serviceID string) []deploymen
 			Created:        created,
 			DeploymentID:   c.Labels[rollout.LabelDeploymentID],
 			ServiceID:      c.Labels[rollout.LabelServiceID],
-			Slot:           c.Labels[rollout.LabelServiceID] == serviceID && rollout.IsSlotName(name, serviceID),
+			Slot:           c.Labels[rollout.LabelServiceID] == serviceID && rollout.IsPlatformSlot(c.Labels, name),
 			ComposeProject: c.Labels[rollout.LabelComposeProject],
 		})
 	}
@@ -291,6 +291,42 @@ func newestContainer(ctx context.Context, dc *client.Client, serviceID, serviceN
 		}
 	}
 	return name
+}
+
+// LookAlikes names the local Docker daemon's look-alike containers
+// (lookAlikeNames), for the lookalike_container alert.
+func (o *LocalOrchestrator) LookAlikes(ctx context.Context) ([]string, error) {
+	return lookAlikeNames(ctx, o.dockerClient)
+}
+
+// LookAlikes names the remote server's look-alike containers
+// (lookAlikeNames), through the SSH Docker tunnel.
+func (o *RemoteOrchestrator) LookAlikes(ctx context.Context) ([]string, error) {
+	dc, err := o.host.DockerClient()
+	if err != nil {
+		return nil, fmt.Errorf("SSH Docker client: %w", err)
+	}
+	defer dc.Close()
+	return lookAlikeNames(ctx, dc)
+}
+
+// lookAlikeNames returns, sorted, the names of the containers, running or
+// not, that carry a service's label and a compose project
+// (rollout.IsLookAlike). The filter alone is not enough: a slot can carry
+// an empty compose project label, and a key-only filter matches it.
+func lookAlikeNames(ctx context.Context, dc *client.Client) ([]string, error) {
+	list, err := dc.ContainerList(ctx, container.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", rollout.LabelServiceID))})
+	if err != nil {
+		return nil, fmt.Errorf("ContainerList: %w", err)
+	}
+	names := make([]string, 0)
+	for _, c := range list {
+		if rollout.IsLookAlike(c.Labels) {
+			names = append(names, rollout.SummaryName(c))
+		}
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 // RoutedHosts are the hostnames the service's running containers on the
