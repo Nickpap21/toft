@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1347,24 +1346,25 @@ func (h *Handler) handleMoveToWorkspace(c *gin.Context) {
 // handleListWorkspace returns every service of the caller's workspace.
 func (h *Handler) handleListWorkspace(c *gin.Context) {
 	orgID := middleware.OrgIDFrom(c)
-	services, err := h.svc.ListWorkspace(c.Request.Context(), orgID)
-	if err != nil {
-		h.log.Error("failed to list workspace services", zap.Error(err), zap.String("org_id", orgID))
-		respond.Error(c, http.StatusInternalServerError, "failed to list services")
-		return
-	}
+	var projectIDs, serviceIDs []string // nil: no narrowing
 	// An agent connected to some projects sees their services alone, not
 	// the workspace's (D-100), whether through MCP or REST.
 	if a, ok := middleware.AgentFrom(c); ok && !a.AllProjects {
-		services = slices.DeleteFunc(services, func(s WorkspaceService) bool { return !slices.Contains(a.ProjectIDs, s.ProjectID) })
+		projectIDs = append([]string{}, a.ProjectIDs...) // never nil: no projects is none
 	}
 	// A project key, its project's services, or those it is limited to (K5;
 	// issue #11).
 	if keyProject, _, ok := middleware.APIKeyScopeFrom(c); ok {
-		limited := middleware.APIKeyServicesFrom(c)
-		services = slices.DeleteFunc(services, func(s WorkspaceService) bool {
-			return s.ProjectID != keyProject || len(limited) > 0 && !slices.Contains(limited, s.ID)
-		})
+		projectIDs = []string{keyProject}
+		if limited := middleware.APIKeyServicesFrom(c); len(limited) > 0 {
+			serviceIDs = limited
+		}
+	}
+	services, err := h.svc.ListWorkspace(c.Request.Context(), orgID, projectIDs, serviceIDs)
+	if err != nil {
+		h.log.Error("failed to list workspace services", zap.Error(err), zap.String("org_id", orgID))
+		respond.Error(c, http.StatusInternalServerError, "failed to list services")
+		return
 	}
 	respond.JSON(c, http.StatusOK, services)
 }
