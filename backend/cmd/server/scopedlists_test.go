@@ -72,15 +72,17 @@ func (l *listCallers) ValidateAgentToken(_ context.Context, raw string) (middlew
 // workspaceLists are what each caller sees of every list a scoped key or an
 // agent connected to some projects reaches that names no project or
 // service in its path: a key scoped to B, the same key limited to B1 (K5),
-// an agent connected to B (D-100) and an agent connected to every project.
+// an agent connected to B (D-100), an agent connected to every project and
+// one connected to none.
 var workspaceLists = map[string]map[string][]string{
 	"GET /api/v1/projects": {
 		"key": {listProjectB}, "service key": {listProjectB},
-		"agent": {listProjectB}, "every-project agent": {listProjectA, listProjectB},
+		"agent": {listProjectB}, "every-project agent": {listProjectA, listProjectB}, "no-project agent": {},
 	},
 	"GET /api/v1/workspace/services": {
 		"key": {listServiceB1, listServiceB2}, "service key": {listServiceB1},
 		"agent": {listServiceB1, listServiceB2}, "every-project agent": {listServiceA, listServiceB1, listServiceB2, listServiceW},
+		"no-project agent": {},
 	},
 }
 
@@ -112,9 +114,11 @@ func TestScopedCallersWorkspaceListsStayInTheirProjects(t *testing.T) {
 		agents: map[string]middleware.AgentIdentity{
 			"toft_oat_agent":     {ConnectionID: "c1", UserID: owner, OrgID: testOrg, ProjectIDs: []string{listProjectB}, Scopes: []string{apikey.AgentScopeRead}},
 			"toft_oat_all_agent": {ConnectionID: "c2", UserID: owner, OrgID: testOrg, AllProjects: true, Scopes: []string{apikey.AgentScopeRead}},
+			"toft_oat_no_agent":  {ConnectionID: "c3", UserID: owner, OrgID: testOrg, Scopes: []string{apikey.AgentScopeRead}},
 		},
 	}
-	tokens := map[string]string{"key": "paas_key", "service key": "paas_service_key", "agent": "toft_oat_agent", "every-project agent": "toft_oat_all_agent"}
+	tokens := map[string]string{"key": "paas_key", "service key": "paas_service_key", "agent": "toft_oat_agent", "every-project agent": "toft_oat_all_agent",
+		"no-project agent": "toft_oat_no_agent"}
 
 	projects := project.NewService(twoProjects{})
 	services := service.NewServiceManager(twoProjectsServices{}, log)
